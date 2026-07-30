@@ -141,6 +141,33 @@ public class ConversationAnalyzerTests(IntegrationTestWebAppFactory factory) : B
         Assert.False(all.Single(a => a.Id == first.Analysis!.Id).IsCurrent);
     }
 
+    // Ligar o áudio muda o que a IA enxerga: a leitura surda anterior não serve
+    // mais, mesmo com a conversa idêntica. O modo entra na chave do cache.
+    [Fact]
+    public async Task Analyze_WhenAudioIsTurnedOn_DoesNotReuseTheSilentReading()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        await AnalyzeAsync(Input());
+        var comAudio = await AnalyzeAsync(Input() with
+        {
+            Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10)],
+        });
+
+        Assert.Equal(AnalysisResultKind.Analyzed, comAudio.Kind);
+        Assert.Equal(2, FakeAi.CallCount);
+        Assert.True(comAudio.Analysis!.IncludedAudio);
+
+        // E com o áudio ligado de novo, aí sim reusa.
+        var repetido = await AnalyzeAsync(Input() with
+        {
+            Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10)],
+        });
+        Assert.Equal(AnalysisResultKind.Cached, repetido.Kind);
+        Assert.Equal(2, FakeAi.CallCount);
+    }
+
     // O botão de reanalisar da tela ignora o cache de propósito: mesma conversa,
     // sem mensagem nova, é lida de novo quando o usuário manda.
     [Fact]

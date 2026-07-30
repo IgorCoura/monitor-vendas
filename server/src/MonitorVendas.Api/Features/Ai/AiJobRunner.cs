@@ -12,7 +12,8 @@ public sealed record AiJobFilters(
     DateTime From,
     DateTime To,
     IReadOnlyList<Guid> SellerIds,
-    IReadOnlyList<Guid> ConversationIds);
+    IReadOnlyList<Guid> ConversationIds,
+    bool IncludeAudio = false);
 
 public interface IAiJobRunner
 {
@@ -196,7 +197,7 @@ public sealed class AiJobRunner(
 
         var (items, _) = await workset.LoadAsync(
             new ConversationAiFilter(filters.From, filters.To, filters.SellerIds,
-                exportOptions.Value.MaxConversationsPerExport, force),
+                exportOptions.Value.MaxConversationsPerExport, force, filters.IncludeAudio),
             ct);
 
         return (items, await workset.CatalogAsync(ct));

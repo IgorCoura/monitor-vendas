@@ -12,7 +12,8 @@ public sealed record ReportExportRequestBody(
     IReadOnlyList<string>? Metrics,
     IReadOnlyList<string>? Charts,
     bool? IncludeNumbers,
-    bool? IncludeAi);
+    bool? IncludeAi,
+    bool? IncludeAudio);
 
 public sealed record ReportExportDto(
     Guid Id,
@@ -137,7 +138,9 @@ public static class ReportExportEndpoints
             body.Metrics ?? [],
             body.Charts ?? [],
             body.IncludeNumbers ?? true,
-            body.IncludeAi ?? false);
+            body.IncludeAi ?? false,
+            // Áudio só com IA ligada: sozinho não teria para onde ir.
+            (body.IncludeAudio ?? false) && (body.IncludeAi ?? false));
     }
 
     private static IResult InvalidRange() =>

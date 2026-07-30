@@ -116,6 +116,7 @@ export function AiAnalysisPage() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
+  const [includeAudio, setIncludeAudio] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const filters: AiAnalysisFilters = useMemo(
@@ -149,7 +150,7 @@ export function AiAnalysisPage() {
     try {
       const created =
         kind === 'analyses'
-          ? await runAnalyses.mutateAsync({ filters, conversationIds: [] })
+          ? await runAnalyses.mutateAsync({ filters, conversationIds: [], includeAudio })
           : await runSyntheses.mutateAsync(filters)
       setJobId(created.id)
     } catch (err) {
@@ -170,13 +171,24 @@ export function AiAnalysisPage() {
             discordam.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={() => start('analyses')} disabled={running || total === 0}>
-            Analisar conversas
-          </Button>
-          <Button onClick={() => start('syntheses')} disabled={running}>
-            Refazer síntese
-          </Button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => start('analyses')} disabled={running}>
+              Analisar conversas
+            </Button>
+            <Button onClick={() => start('syntheses')} disabled={running}>
+              Refazer síntese
+            </Button>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-ink-muted">
+            <input
+              type="checkbox"
+              checked={includeAudio}
+              onChange={(e) => setIncludeAudio(e.target.checked)}
+              aria-label="Enviar áudios das conversas"
+            />
+            Enviar áudios (a voz do cliente vai para a IA)
+          </label>
         </div>
       </div>
 

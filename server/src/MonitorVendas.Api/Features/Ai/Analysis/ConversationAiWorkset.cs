@@ -6,6 +6,8 @@ using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Outcomes;
 using MonitorVendas.Api.Features.Sellers;
+using MonitorVendas.Api.Integrations.Ai;
+using MonitorVendas.Api.Integrations.Evolution;
 
 namespace MonitorVendas.Api.Features.Ai.Analysis;
 
@@ -22,18 +24,30 @@ public sealed record ConversationContext(
     DateTime StartedAt,
     DateTime LastMessageAt,
     string? RealOutcomeCode,
-    ConversationAnalysisInput Input);
+    ConversationAnalysisInput Input,
+    // Segundos de áudio que serão enviados. Zero quando o áudio está desligado —
+    // é o que a estimativa de custo soma antes de gastar.
+    double AudioSeconds = 0);
 
 public sealed record ConversationAiFilter(
     DateTime From,
     DateTime To,
     IReadOnlyList<Guid> SellerIds,
     int MaxConversations,
-    bool Force = false);
+    bool Force = false,
+    // Desligado por padrão: mandar áudio envia a voz do cliente para o provedor,
+    // e o mascaramento de nome e telefone não alcança isso.
+    bool IncludeAudio = false);
 
-public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries, IOptions<MetricsOptions> options)
+public sealed class ConversationAiWorkset(
+    AppDbContext db,
+    ReportQueries queries,
+    IOptions<MetricsOptions> options,
+    IOptions<Integrations.Ai.AiOptions> aiOptions,
+    EvolutionApiClient evolution,
+    ILogger<ConversationAiWorkset> logger)
 {
-    private sealed record NumberRow(Guid Id, string Phone, Guid SellerId, string SellerName);
+    private sealed record NumberRow(Guid Id, string Phone, string InstanceName, Guid SellerId, string SellerName);
 
     public async Task<(List<ConversationContext> Items, bool Truncated)> LoadAsync(
         ConversationAiFilter filter,
@@ -70,7 +84,7 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
         var messages = await db.Set<Message>().AsNoTracking()
             .Where(m => ids.Contains(m.ConversationId))
             .OrderBy(m => m.Timestamp)
-            .Select(m => new { m.ConversationId, m.Direction, m.Timestamp, m.Text, m.Type })
+            .Select(m => new { m.ConversationId, m.Direction, m.Timestamp, m.Text, m.Type, m.DurationSeconds, m.WaMessageId })
             .ToListAsync(ct);
 
         var byConversation = messages
@@ -82,7 +96,9 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
         var staleAfter = options.Value.FollowUpGapBusinessHours;
         var now = DateTime.UtcNow;
 
-        var items = conversations.Select(conversation =>
+        var items = new List<ConversationContext>(conversations.Count);
+
+        foreach (var conversation in conversations)
         {
             var rows = byConversation.TryGetValue(conversation.Id, out var list) ? list : [];
             var contact = contacts.GetValueOrDefault(conversation.ContactId);
@@ -91,14 +107,25 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
             var silence = calendar.BusinessTimeBetween(conversation.LastMessageAt, now).TotalHours;
 
             var transcript = TranscriptBuilder.Build(
-                [.. rows.Select(r => new TranscriptMessage(r.Direction, r.Timestamp, r.Text, r.Type))],
+                [.. rows.Select(r => new TranscriptMessage(r.Direction, r.Timestamp, r.Text, r.Type, r.DurationSeconds))],
                 contact?.PushName,
                 phone,
                 timeZone,
                 conversation.StartedByContact,
                 silence);
 
-            return new ConversationContext(
+            var attachments = new List<AiAttachment>();
+            var audioSeconds = 0d;
+
+            if (filter.IncludeAudio && number is not null)
+            {
+                (attachments, audioSeconds) = await FetchAudioAsync(
+                    number.InstanceName,
+                    rows.Select(r => (r.WaMessageId, r.DurationSeconds, r.Type)),
+                    ct);
+            }
+
+            items.Add(new ConversationContext(
                 conversation.Id,
                 number?.SellerId,
                 number?.SellerName ?? "—",
@@ -116,8 +143,10 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
                     // Conversa parada além do silêncio configurado não pode ser
                     // classificada como "em andamento": o relógio decide antes da IA.
                     silence <= staleAfter,
-                    filter.Force));
-        }).ToList();
+                    filter.Force,
+                    attachments.Count == 0 ? null : attachments),
+                audioSeconds));
+        }
 
         return (items, truncated);
     }
@@ -138,6 +167,38 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
         CancellationToken ct = default) =>
         [.. (await NumbersAsync(filter, ct)).Select(n => (n.Id, n.Phone, n.SellerId, n.SellerName))];
 
+    // Busca os áudios da conversa até o teto configurado. Falha na Evolution ou
+    // mídia expirada devolve menos anexos — a conversa continua sendo analisada
+    // pelo texto, com o marcador "[áudio de 45s]" no lugar.
+    private async Task<(List<AiAttachment> Attachments, double Seconds)> FetchAudioAsync(
+        string instanceName,
+        IEnumerable<(string WaMessageId, int? DurationSeconds, string Type)> media,
+        CancellationToken ct)
+    {
+        var cap = Math.Max(0, aiOptions.Value.MaxAudioSecondsPerConversation);
+        var attachments = new List<AiAttachment>();
+        var total = 0d;
+
+        foreach (var item in media.Where(m => m.Type is "audioMessage" or "pttMessage"))
+        {
+            var seconds = item.DurationSeconds ?? 0;
+            if (total + seconds > cap)
+                break;
+
+            var audio = await evolution.GetMediaAsync(instanceName, item.WaMessageId, ct);
+            if (audio is null)
+            {
+                logger.LogWarning("Áudio {WaMessageId} não pôde ser baixado; a conversa segue só com o texto.", item.WaMessageId);
+                continue;
+            }
+
+            attachments.Add(new AiAttachment(audio.MimeType, audio.Base64, seconds));
+            total += seconds;
+        }
+
+        return (attachments, total);
+    }
+
     private async Task<List<NumberRow>> NumbersAsync(ConversationAiFilter filter, CancellationToken ct)
     {
         var numbers = db.Set<WhatsappNumber>().AsNoTracking();
@@ -152,7 +213,7 @@ public sealed class ConversationAiWorkset(AppDbContext db, ReportQueries queries
 
         return await numbers
             .Join(db.Set<Seller>().AsNoTracking(), n => n.SellerId, s => s.Id,
-                (n, s) => new NumberRow(n.Id, n.Phone, s.Id, s.Name))
+                (n, s) => new NumberRow(n.Id, n.Phone, n.InstanceName, s.Id, s.Name))
             .ToListAsync(ct);
     }
 

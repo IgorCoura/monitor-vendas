@@ -283,7 +283,7 @@ public sealed class ReportExportRunner(
         var workset = scope.ServiceProvider.GetRequiredService<ConversationAiWorkset>();
 
         return await workset.LoadAsync(
-            new ConversationAiFilter(request.From, request.To, request.SellerIds, options.Value.MaxConversationsPerExport),
+            new ConversationAiFilter(request.From, request.To, request.SellerIds, options.Value.MaxConversationsPerExport, Force: false, IncludeAudio: request.IncludeAudio),
             ct);
     }
 
@@ -333,13 +333,14 @@ public sealed class ReportExportRunner(
 
         var done = await db.Set<ConversationAiAnalysis>().AsNoTracking()
             .Where(a => ids.Contains(a.ConversationId) && a.IsCurrent)
-            .Select(a => new { a.ConversationId, a.MessageCount, a.LastMessageAt })
+            .Select(a => new { a.ConversationId, a.MessageCount, a.LastMessageAt, a.IncludedAudio })
             .ToListAsync(ct);
 
         var cachedIds = conversations
             .Where(c => done.Any(a => a.ConversationId == c.ConversationId &&
                                       a.MessageCount == c.Input.MessageCount &&
-                                      a.LastMessageAt == c.LastMessageAt))
+                                      a.LastMessageAt == c.LastMessageAt &&
+                                      a.IncludedAudio == (c.Input.Attachments is { Count: > 0 })))
             .Select(c => c.ConversationId)
             .ToHashSet();
 
@@ -351,7 +352,8 @@ public sealed class ReportExportRunner(
         foreach (var conversation in conversations.Where(c => !cachedIds.Contains(c.ConversationId)))
         {
             var prompt = AiAnalysisSchema.SystemPrompt + conversation.Input.Transcript;
-            estimate += calculator.EstimateBrl(settings.Model, prompt, settings.MaxOutputTokens, budget.MarginPercent);
+            estimate += calculator.EstimateBrl(
+                settings.Model, prompt, settings.MaxOutputTokens, budget.MarginPercent, conversation.AudioSeconds);
         }
 
         // A síntese só custa quando o conjunto de leituras do vendedor muda.

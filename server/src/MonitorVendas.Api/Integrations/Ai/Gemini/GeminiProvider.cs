@@ -89,6 +89,22 @@ public sealed partial class GeminiProvider(HttpClient http, IOptions<AiOptions> 
         if (settings.ThinkingBudgetTokens >= 0)
             generationConfig["thinkingConfig"] = new JsonObject { ["thinkingBudget"] = settings.ThinkingBudgetTokens };
 
+        var parts = new JsonArray(new JsonObject { ["text"] = request.UserPrompt });
+
+        // Mídia vai como inline_data na mesma chamada: o modelo ouve o áudio no
+        // contexto da conversa, em vez de receber uma transcrição solta.
+        foreach (var attachment in request.Attachments ?? [])
+        {
+            parts.Add(new JsonObject
+            {
+                ["inline_data"] = new JsonObject
+                {
+                    ["mime_type"] = attachment.MimeType,
+                    ["data"] = attachment.Base64Data,
+                },
+            });
+        }
+
         return new JsonObject
         {
             ["systemInstruction"] = new JsonObject
@@ -98,7 +114,7 @@ public sealed partial class GeminiProvider(HttpClient http, IOptions<AiOptions> 
             ["contents"] = new JsonArray(new JsonObject
             {
                 ["role"] = "user",
-                ["parts"] = new JsonArray(new JsonObject { ["text"] = request.UserPrompt }),
+                ["parts"] = parts,
             }),
             ["generationConfig"] = generationConfig,
         };
@@ -113,15 +129,17 @@ public sealed partial class GeminiProvider(HttpClient http, IOptions<AiOptions> 
         // no meio e falharia no schema com uma mensagem que não ajuda ninguém.
         var input = 0;
         var output = 0;
+        var audio = 0;
         if (root.TryGetProperty("usageMetadata", out var usage))
         {
             input = ReadInt(usage, "promptTokenCount");
             // O raciocínio vem separado mas é cobrado como saída — e costuma ser a
             // maior parte da conta numa análise curta.
             output = ReadInt(usage, "candidatesTokenCount") + ReadInt(usage, "thoughtsTokenCount");
+            audio = AudioTokens(usage);
         }
 
-        var consumed = new AiUsageTokens(model, input, output);
+        var consumed = new AiUsageTokens(model, input, output, audio);
 
         if (FinishReason(root) is "MAX_TOKENS")
             throw new AiProviderException(
@@ -134,7 +152,7 @@ public sealed partial class GeminiProvider(HttpClient http, IOptions<AiOptions> 
             throw new AiProviderException($"Resposta do Gemini sem texto: {Truncate(payload)}", mayHaveBeenCharged: true)
             { Usage = consumed };
 
-        return new AiCompletion(text, model, input, output);
+        return new AiCompletion(text, model, input, output, audio);
     }
 
     private static string? ExtractText(JsonElement root)
@@ -155,6 +173,28 @@ public sealed partial class GeminiProvider(HttpClient http, IOptions<AiOptions> 
         }
 
         return null;
+    }
+
+    // `promptTokensDetails` quebra a entrada por modalidade
+    // ([{ "modality": "AUDIO", "tokenCount": 960 }]). Sem essa separação, áudio
+    // seria cobrado ao preço do texto.
+    private static int AudioTokens(JsonElement usage)
+    {
+        if (!usage.TryGetProperty("promptTokensDetails", out var details) || details.ValueKind != JsonValueKind.Array)
+            return 0;
+
+        var total = 0;
+        foreach (var detail in details.EnumerateArray())
+        {
+            if (detail.TryGetProperty("modality", out var modality) &&
+                modality.ValueKind == JsonValueKind.String &&
+                string.Equals(modality.GetString(), "AUDIO", StringComparison.OrdinalIgnoreCase))
+            {
+                total += ReadInt(detail, "tokenCount");
+            }
+        }
+
+        return total;
     }
 
     private static string? FinishReason(JsonElement root) =>

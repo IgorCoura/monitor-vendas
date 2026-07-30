@@ -53,6 +53,8 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         builder.UseSetting("Ai:MaxAttempts", "1");
         builder.UseSetting("Ai:Pricing:fake-model:InputUsdPerMillion", "1");
         builder.UseSetting("Ai:Pricing:fake-model:OutputUsdPerMillion", "1");
+        // Áudio a US$ 4,00 deixa a tarifa própria visível na conta do teste.
+        builder.UseSetting("Ai:Pricing:fake-model:AudioInputUsdPerMillion", "4");
         builder.UseSetting("AiBudget:Enabled", "true");
         builder.UseSetting("AiBudget:AmountPerWindow", "1.00");
         builder.UseSetting("AiBudget:WindowHours", "24");

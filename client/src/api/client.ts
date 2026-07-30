@@ -88,12 +88,13 @@ function analysisQuery(filters: AiAnalysisFilters): URLSearchParams {
   return params
 }
 
-function runBody(filters: AiAnalysisFilters, conversationIds: string[]) {
+function runBody(filters: AiAnalysisFilters, conversationIds: string[], includeAudio = false) {
   return {
     from: filters.from,
     to: filters.to,
     sellerIds: filters.sellerId ? [filters.sellerId] : [],
     conversationIds,
+    includeAudio,
   }
 }
 
@@ -148,8 +149,11 @@ export const api = {
       request<AiSynthesisDto[]>(`/ai/syntheses${sellerId ? `?sellerId=${sellerId}` : ''}`),
     // Os dois botões da tela: reler as conversas do filtro, ou refazer a síntese
     // a partir das leituras correntes.
-    runAnalyses: (filters: AiAnalysisFilters, conversationIds: string[]) =>
-      request<AiJobDto>('/ai/analyses/run', { method: 'POST', body: JSON.stringify(runBody(filters, conversationIds)) }),
+    runAnalyses: (filters: AiAnalysisFilters, conversationIds: string[], includeAudio = false) =>
+      request<AiJobDto>('/ai/analyses/run', {
+        method: 'POST',
+        body: JSON.stringify(runBody(filters, conversationIds, includeAudio)),
+      }),
     runSyntheses: (filters: AiAnalysisFilters) =>
       request<AiJobDto>('/ai/syntheses/run', { method: 'POST', body: JSON.stringify(runBody(filters, [])) }),
     job: (id: string) => request<AiJobDto>(`/ai/jobs/${id}`),

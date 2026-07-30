@@ -15,6 +15,10 @@ public class ConversationAiAnalysis
     // de opinião. Só a corrente alimenta planilha e tela (índice único parcial).
     public bool IsCurrent { get; set; } = true;
 
+    // Se os áudios foram enviados junto. Entra na chave do cache: ligar o áudio
+    // muda o que a IA enxerga, e a leitura surda anterior deixa de servir.
+    public bool IncludedAudio { get; set; }
+
     // Código do catálogo de desfechos, ou `Open` para conversa ainda viva.
     public string StatusCode { get; set; } = string.Empty;
     public double StatusConfidence { get; set; }

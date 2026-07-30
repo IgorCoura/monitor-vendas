@@ -93,7 +93,7 @@ public sealed class SellerSynthesizer(
         {
             var spent = 0m;
             if (ex.Usage is { } usage)
-                spent = await budget.SettleAsync(reservation.Id, usage.Model, usage.InputTokens, usage.OutputTokens, ct);
+                spent = await budget.SettleAsync(reservation.Id, usage.Model, usage.InputTokens, usage.OutputTokens, usage.InputAudioTokens, ct);
             else if (!ex.MayHaveBeenCharged)
                 await budget.ReleaseAsync(reservation.Id, ct);
 
@@ -101,7 +101,7 @@ public sealed class SellerSynthesizer(
             return Empty(input, ex.Message) with { CostBrl = spent };
         }
 
-        var cost = await budget.SettleAsync(reservation.Id, completion.Model, completion.InputTokens, completion.OutputTokens, ct);
+        var cost = await budget.SettleAsync(reservation.Id, completion.Model, completion.InputTokens, completion.OutputTokens, completion.InputAudioTokens, ct);
         var synthesis = Parse(input, completion.Text, cost);
 
         if (synthesis.Error is null)

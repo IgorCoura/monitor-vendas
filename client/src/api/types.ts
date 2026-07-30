@@ -275,6 +275,7 @@ export interface ReportExportFilters {
   charts: string[]
   includeNumbers: boolean
   includeAi: boolean
+  includeAudio: boolean
 }
 
 export interface ReportExportEstimate {

@@ -21,6 +21,9 @@ public class AiUsage
     public decimal EstimatedBrl { get; set; }
     public decimal? ActualBrl { get; set; }
     public int InputTokens { get; set; }
+    // Subconjunto de InputTokens cobrado à tarifa de áudio. Guardado para auditar
+    // a conta depois — a fatura do provedor separa por modalidade.
+    public int InputAudioTokens { get; set; }
     public int OutputTokens { get; set; }
     public DateTime WindowStart { get; set; }
     public DateTime CreatedAt { get; set; }

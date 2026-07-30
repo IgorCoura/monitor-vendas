@@ -4,7 +4,12 @@ using MonitorVendas.Api.Features.Conversations;
 
 namespace MonitorVendas.Api.Features.Ai.Analysis;
 
-public sealed record TranscriptMessage(MessageDirection Direction, DateTime TimestampUtc, string? Text, string Type);
+public sealed record TranscriptMessage(
+    MessageDirection Direction,
+    DateTime TimestampUtc,
+    string? Text,
+    string Type,
+    int? DurationSeconds = null);
 
 // Monta o texto que vai para a IA. Nome e telefone do cliente são substituídos
 // por marcadores: a análise não perde nada com isso e o dado pessoal não sai
@@ -47,7 +52,9 @@ public static partial class TranscriptBuilder
     {
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(message.TimestampUtc, DateTimeKind.Utc), timeZone);
         var who = message.Direction == MessageDirection.Inbound ? "Cliente" : "Vendedor";
-        var body = string.IsNullOrWhiteSpace(message.Text) ? MediaLabel(message.Type) : Mask(message.Text, name, phone);
+        var body = string.IsNullOrWhiteSpace(message.Text)
+            ? MediaLabel(message.Type, message.DurationSeconds)
+            : Mask(message.Text, name, phone);
 
         return $"{who} ({local:dd/MM HH:mm}): {body}";
     }
@@ -115,10 +122,22 @@ public static partial class TranscriptBuilder
             yield return digits[^8..];
     }
 
-    private static string MediaLabel(string type) => type switch
+    // A duração vai junto: um áudio de 3 segundos e um de 4 minutos dizem coisas
+    // muito diferentes, e sem isso o modelo trata os dois como o mesmo evento.
+    public static string MediaLabel(string type, int? durationSeconds = null)
+    {
+        var label = BaseMediaLabel(type);
+
+        return durationSeconds is > 0 && label is "[áudio]" or "[vídeo]"
+            ? $"{label[..^1]} de {durationSeconds}s]"
+            : label;
+    }
+
+    private static string BaseMediaLabel(string type) => type switch
     {
         "imageMessage" => "[imagem]",
         "audioMessage" => "[áudio]",
+        "pttMessage" => "[áudio]",
         "videoMessage" => "[vídeo]",
         "documentMessage" => "[documento]",
         "stickerMessage" => "[figurinha]",

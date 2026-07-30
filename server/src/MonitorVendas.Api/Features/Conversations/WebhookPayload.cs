@@ -46,6 +46,31 @@ public static class WebhookPayload
         remoteJid.EndsWith("@g.us", StringComparison.OrdinalIgnoreCase) ||
         remoteJid.Contains("@broadcast", StringComparison.OrdinalIgnoreCase);
 
+    // Duração do áudio/vídeo. Sem ela a transcrição diria só "[áudio]", e um de 3
+    // segundos e um de 4 minutos contam histórias diferentes sobre a conversa.
+    public static int? ExtractDurationSeconds(JsonElement data)
+    {
+        if (!data.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var media in new[] { "audioMessage", "videoMessage", "pttMessage" })
+        {
+            if (!message.TryGetProperty(media, out var element) || element.ValueKind != JsonValueKind.Object)
+                continue;
+
+            if (!element.TryGetProperty("seconds", out var seconds))
+                continue;
+
+            if (seconds.ValueKind == JsonValueKind.Number && seconds.TryGetInt32(out var value))
+                return value;
+
+            if (seconds.ValueKind == JsonValueKind.String && int.TryParse(seconds.GetString(), out var parsed))
+                return parsed;
+        }
+
+        return null;
+    }
+
     // Extrai o texto conforme o tipo: texto puro, texto estendido ou legenda de mídia.
     public static string? ExtractText(JsonElement data)
     {

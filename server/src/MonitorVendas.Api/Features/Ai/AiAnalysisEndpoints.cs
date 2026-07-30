@@ -76,7 +76,8 @@ public sealed record AiRunRequest(
     DateTime? From,
     DateTime? To,
     IReadOnlyList<Guid>? SellerIds,
-    IReadOnlyList<Guid>? ConversationIds);
+    IReadOnlyList<Guid>? ConversationIds,
+    bool? IncludeAudio);
 
 public static class AiAnalysisEndpoints
 {
@@ -274,7 +275,7 @@ public static class AiAnalysisEndpoints
             Kind = kind,
             // Filtros congelados: o que roda é o que estava na tela ao confirmar.
             FiltersJson = JsonSerializer.Serialize(new AiJobFilters(
-                fromUtc, toUtc, body.SellerIds ?? [], body.ConversationIds ?? [])),
+                fromUtc, toUtc, body.SellerIds ?? [], body.ConversationIds ?? [], body.IncludeAudio ?? false)),
             Status = AiJobStatus.Pending,
             CreatedAt = DateTime.UtcNow,
         };

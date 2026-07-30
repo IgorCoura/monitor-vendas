@@ -136,8 +136,11 @@ export function useAiLossReasons() {
 
 export function useRunAiAnalyses() {
   return useMutation({
-    mutationFn: ({ filters, conversationIds }: { filters: AiAnalysisFilters; conversationIds: string[] }) =>
-      api.ai.runAnalyses(filters, conversationIds),
+    mutationFn: ({ filters, conversationIds, includeAudio }: {
+      filters: AiAnalysisFilters
+      conversationIds: string[]
+      includeAudio?: boolean
+    }) => api.ai.runAnalyses(filters, conversationIds, includeAudio),
   })
 }
 

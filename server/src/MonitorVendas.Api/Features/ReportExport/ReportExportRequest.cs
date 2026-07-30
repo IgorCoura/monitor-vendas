@@ -12,7 +12,10 @@ public sealed record ReportExportRequest(
     IReadOnlyList<string> Metrics,
     IReadOnlyList<string> Charts,
     bool IncludeNumbers,
-    bool IncludeAi)
+    bool IncludeAi,
+    // Enviar o áudio manda a voz do cliente para o provedor, e o mascaramento de
+    // nome e telefone não alcança isso. Sempre escolha explícita do pedido.
+    bool IncludeAudio = false)
 {
     public static ReportExportRequest Empty(DateTime from, DateTime to) =>
         new(from, to, [], [], [], true, false);

@@ -13,7 +13,9 @@ public sealed record ConversationAnalysisInput(
     bool AllowOpen,
     // A tela de análises tem um botão que refaz a leitura mesmo sem a conversa
     // ter mudado — é o único caminho que ignora o cache de propósito.
-    bool Force = false);
+    bool Force = false,
+    // Áudios da conversa, quando o usuário pediu para enviá-los.
+    IReadOnlyList<AiAttachment>? Attachments = null);
 
 public enum AnalysisResultKind
 {
@@ -44,18 +46,24 @@ public sealed class ConversationAnalyzer(
         var existing = await db.Set<ConversationAiAnalysis>()
             .FirstOrDefaultAsync(a => a.ConversationId == input.ConversationId && a.IsCurrent, ct);
 
+        var withAudio = input.Attachments is { Count: > 0 };
+
         // Conversa que não recebeu mensagem nova desde a última leitura não é
         // reanalisada: é a economia que torna reexportar o mesmo período grátis.
+        // Mas ligar o áudio muda o que a IA enxerga, então a leitura surda não
+        // serve — o modo entra na chave do cache.
         if (!input.Force &&
             existing is not null &&
             existing.MessageCount == input.MessageCount &&
-            existing.LastMessageAt == input.LastMessageAt)
+            existing.LastMessageAt == input.LastMessageAt &&
+            existing.IncludedAudio == withAudio)
             return new AnalysisOutcome(AnalysisResultKind.Cached, existing, null);
 
         var settings = options.Value;
         var schema = AiAnalysisSchema.BuildSchema(outcomes, input.AllowOpen);
         var userPrompt = AiAnalysisSchema.BuildUserPrompt(outcomes, input.AllowOpen, input.Transcript);
-        var request = new AiRequest(AiAnalysisSchema.SystemPrompt, userPrompt, schema, settings.MaxOutputTokens);
+        var request = new AiRequest(
+            AiAnalysisSchema.SystemPrompt, userPrompt, schema, settings.MaxOutputTokens, input.Attachments);
 
         var cost = 0m;
         string? lastError = null;
@@ -66,7 +74,8 @@ public sealed class ConversationAnalyzer(
                 settings.Model,
                 AiAnalysisSchema.SystemPrompt + userPrompt,
                 settings.MaxOutputTokens,
-                budget.MarginPercent);
+                budget.MarginPercent,
+                input.Attachments?.Sum(a => a.Seconds ?? 0) ?? 0);
 
             var reservation = await budget.TryReserveAsync(Purpose, settings.Model, estimate, ct);
             if (reservation is null)
@@ -84,7 +93,7 @@ public sealed class ConversationAnalyzer(
                 return new AnalysisOutcome(AnalysisResultKind.Failed, null, ex.Message);
             }
 
-            cost += await budget.SettleAsync(reservation.Id, completion.Model, completion.InputTokens, completion.OutputTokens, ct);
+            cost += await budget.SettleAsync(reservation.Id, completion.Model, completion.InputTokens, completion.OutputTokens, completion.InputAudioTokens, ct);
 
             var parsed = AiAnalysisSchema.TryParse(completion.Text, outcomes, input.AllowOpen);
             if (parsed is null)
@@ -110,7 +119,7 @@ public sealed class ConversationAnalyzer(
     private async Task CloseReservationAsync(Guid reservationId, AiProviderException ex, CancellationToken ct)
     {
         if (ex.Usage is { } usage)
-            await budget.SettleAsync(reservationId, usage.Model, usage.InputTokens, usage.OutputTokens, ct);
+            await budget.SettleAsync(reservationId, usage.Model, usage.InputTokens, usage.OutputTokens, usage.InputAudioTokens, ct);
         else if (!ex.MayHaveBeenCharged)
             await budget.ReleaseAsync(reservationId, ct);
     }
@@ -136,6 +145,7 @@ public sealed class ConversationAnalyzer(
 
         analysis.MessageCount = input.MessageCount;
         analysis.LastMessageAt = input.LastMessageAt;
+        analysis.IncludedAudio = input.Attachments is { Count: > 0 };
         analysis.StatusCode = parsed.Status;
         analysis.StatusConfidence = parsed.Confidence;
         analysis.StatusEvidence = Trim(parsed.Evidence, 500);

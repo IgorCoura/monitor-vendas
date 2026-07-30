@@ -97,15 +97,23 @@ public sealed class AiBudget(
 
     // O débito definitivo sai dos tokens que o provedor mediu, com a margem por
     // cima. Sem lock: é uma linha só, e o real vem sempre abaixo da estimativa.
-    public async Task<decimal> SettleAsync(Guid reservationId, string model, int inputTokens, int outputTokens, CancellationToken ct = default)
+    public async Task<decimal> SettleAsync(
+        Guid reservationId,
+        string model,
+        int inputTokens,
+        int outputTokens,
+        int inputAudioTokens = 0,
+        CancellationToken ct = default)
     {
         var usage = await db.Set<AiUsage>().FirstAsync(u => u.Id == reservationId, ct);
-        var actual = calculator.WithMargin(calculator.RawCostBrl(model, inputTokens, outputTokens), options.Value.MarginPercent);
+        var raw = calculator.RawCostBrl(model, inputTokens, outputTokens, inputAudioTokens);
+        var actual = calculator.WithMargin(raw, options.Value.MarginPercent);
 
         usage.Status = AiUsageStatus.Settled;
         usage.Model = model;
         usage.ActualBrl = actual;
         usage.InputTokens = inputTokens;
+        usage.InputAudioTokens = inputAudioTokens;
         usage.OutputTokens = outputTokens;
         usage.SettledAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);

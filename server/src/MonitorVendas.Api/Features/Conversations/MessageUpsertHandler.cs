@@ -107,6 +107,7 @@ public sealed class MessageUpsertHandler(
             Direction = fromMe ? MessageDirection.Outbound : MessageDirection.Inbound,
             Type = WebhookPayload.GetString(data, "messageType") ?? "unknown",
             Text = WebhookPayload.ExtractText(data),
+            DurationSeconds = WebhookPayload.ExtractDurationSeconds(data),
             Timestamp = timestamp
         });
 

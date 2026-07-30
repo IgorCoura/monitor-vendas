@@ -231,8 +231,31 @@ em 2026-07-30.
 
 - **`TranscriptBuilder`** monta o texto enviado ao provedor: **mascara nome e
   telefone do cliente** (e qualquer número com 10+ dígitos), rotula mídia
-  (`[áudio]`), informa o silêncio **em horas úteis** e, em conversa longa, corta
-  o meio preservando o fim (é lá que mora o desfecho).
+  (`[áudio de 45s]`, com a duração vinda de `Message.DurationSeconds`), informa o
+  silêncio **em horas úteis** e, em conversa longa, corta o meio preservando o
+  fim (é lá que mora o desfecho).
+
+### Áudio na análise (multimodal)
+
+- **Desligado por padrão e escolhido em cada pedido** (`includeAudio` no corpo da
+  exportação e do job da tela), nunca por config global: enviar áudio manda a
+  **voz do cliente** para o provedor, e o mascaramento de nome e telefone não
+  alcança isso. A tela avisa em texto antes de marcar.
+- O áudio vai como `inline_data` na **mesma chamada** da análise
+  (`AiRequest.Attachments` → `AiAttachment`), buscado na Evolution por
+  `chat/getBase64FromMediaMessage`. Falha ao baixar **degrada para o marcador** e
+  a conversa continua sendo analisada pelo texto — áudio é enriquecimento, nunca
+  pode derrubar a leitura.
+- **Custo por modalidade**: o `usageMetadata.promptTokensDetails` quebra a entrada
+  em `TEXT`/`AUDIO` (formato confirmado contra a API real) e cada uma é cobrada à
+  sua tarifa. `AudioInputUsdPerMillion` ausente com áudio no pedido **explode** —
+  cobrar áudio a preço de texto subfaturaria o saldo em silêncio. A estimativa usa
+  `AudioTokensPerSecond` (32, taxa documentada do Gemini).
+- **Teto por conversa** (`Ai:MaxAudioSecondsPerConversation`, 300s): um áudio de
+  30 minutos valeria ~57 mil tokens sozinho. O que passa do teto fica só como
+  marcador.
+- **`IncludedAudio` entra na chave do cache**: ligar o áudio invalida a leitura
+  surda anterior, senão a tela serviria a análise que não ouviu nada.
 - **O status vem do catálogo de desfechos**, não de uma lista fixa: os tipos
   ativos + o embutido `open` ("Em andamento"). Conversa parada além de
   `Metrics:FollowUpGapBusinessHours` **perde o `open` do próprio schema** — onde

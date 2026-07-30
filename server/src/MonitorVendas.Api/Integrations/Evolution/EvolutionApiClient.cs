@@ -19,6 +19,37 @@ public sealed class EvolutionApiClient(HttpClient http)
         return doc.RootElement.TryGetProperty("key", out var key) ? GetString(key, "id") : null;
     }
 
+    // Baixa a mídia de uma mensagem (áudio, imagem) em base64. Devolve null em vez
+    // de estourar: mídia expirada ou instância fora do ar não pode derrubar a
+    // análise da conversa, que segue valendo pelo texto.
+    public async Task<Media?> GetMediaAsync(string instanceName, string waMessageId, CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.PostAsJsonAsync(
+                $"chat/getBase64FromMediaMessage/{instanceName}",
+                new { message = new { key = new { id = waMessageId } }, convertToMp4 = false },
+                cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var root = doc.RootElement;
+
+        var base64 = GetString(root, "base64");
+        if (base64 is null)
+            return null;
+
+        return new Media(base64, GetString(root, "mimetype") ?? "application/octet-stream");
+    }
+
     public async Task CreateInstanceAsync(string instanceName, string phone, CancellationToken cancellationToken = default)
     {
         var response = await http.PostAsJsonAsync(
@@ -106,6 +137,8 @@ public sealed class EvolutionApiClient(HttpClient http)
             : null;
 
     public sealed record QrCode(string? Code, string? Base64, string? PairingCode);
+
+    public sealed record Media(string Base64, string MimeType);
 
     public sealed record FoundMessage(string RawJson, string? KeyId, DateTime? Timestamp);
 }

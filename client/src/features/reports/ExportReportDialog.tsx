@@ -59,6 +59,7 @@ export function ExportReportDialog({
   const [sellerIds, setSellerIds] = useState<string[]>([])
   const [includeNumbers, setIncludeNumbers] = useState(true)
   const [includeAi, setIncludeAi] = useState(false)
+  const [includeAudio, setIncludeAudio] = useState(false)
   const [exportId, setExportId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -76,8 +77,9 @@ export function ExportReportDialog({
       charts,
       includeNumbers,
       includeAi,
+      includeAudio: includeAi && includeAudio,
     }),
-    [range.from, range.to, sellerIds, metrics, charts, includeNumbers, includeAi],
+    [range.from, range.to, sellerIds, metrics, charts, includeNumbers, includeAi, includeAudio],
   )
 
   // Só estima com IA ligada: sem ela não há gasto e a chamada seria ruído.
@@ -254,6 +256,26 @@ export function ExportReportDialog({
             />
             Incluir análise por IA
           </label>
+
+          {includeAi && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={includeAudio}
+                onChange={(e) => setIncludeAudio(e.target.checked)}
+                aria-label="Enviar áudios das conversas"
+              />
+              <span>
+                Enviar os áudios das conversas
+                <span className="block text-xs text-ink-muted">
+                  A IA passa a ouvir os áudios em vez de só saber que existiram. Atenção: a{' '}
+                  <strong>voz do cliente vai para o provedor de IA</strong> — o mascaramento de nome e
+                  telefone não alcança áudio. Custa bem mais que texto (cerca de 32 tokens por segundo).
+                </span>
+              </span>
+            </label>
+          )}
 
           {includeAi && (
             <div className="rounded-lg bg-surface p-3 text-xs" data-testid="ai-estimate">

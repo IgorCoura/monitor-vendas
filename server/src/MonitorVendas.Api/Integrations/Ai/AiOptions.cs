@@ -46,10 +46,23 @@ public sealed class AiOptions
     // na hora do acerto.
     public double CharsPerToken { get; set; } = 4;
     public double EstimateSafetyFactor { get; set; } = 1.15;
+
+    // Taxa documentada do Gemini para áudio. Serve só à estimativa; o real vem no
+    // usageMetadata.
+    public double AudioTokensPerSecond { get; set; } = 32;
+
+    // Teto de áudio por conversa. Um único áudio de 30 minutos valeria ~57 mil
+    // tokens e comeria o saldo do dia sozinho; o que passar do teto continua na
+    // transcrição como marcador.
+    public int MaxAudioSecondsPerConversation { get; set; } = 300;
 }
 
 public sealed class AiModelPricing
 {
     public decimal InputUsdPerMillion { get; set; }
     public decimal OutputUsdPerMillion { get; set; }
+
+    // Áudio tem tarifa própria. Nulo com áudio no pedido é erro alto: cobrar ao
+    // preço do texto subfaturaria o saldo sem ninguém perceber.
+    public decimal? AudioInputUsdPerMillion { get; set; }
 }

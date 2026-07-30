@@ -72,6 +72,28 @@ public class TranscriptBuilderTests
         Assert.Contains("[imagem]", transcript);
     }
 
+    // A duração entra no rótulo do áudio: sem ela, um recado de 3 segundos e um
+    // desabafo de 4 minutos chegam à IA como o mesmo evento.
+    [Fact]
+    public void Build_LabelsAudioWithItsDuration()
+    {
+        var transcript = TranscriptBuilder.Build(
+            [new TranscriptMessage(MessageDirection.Inbound, Start, null, "audioMessage", 45)],
+            null, null, SaoPaulo, true, 0);
+
+        Assert.Contains("[áudio de 45s]", transcript);
+    }
+
+    // Sem duração conhecida (mensagem antiga, payload sem o campo) o rótulo
+    // continua funcionando — nunca vira "[áudio de s]".
+    [Fact]
+    public void MediaLabel_WithoutDuration_StaysPlain()
+    {
+        Assert.Equal("[áudio]", TranscriptBuilder.MediaLabel("audioMessage"));
+        Assert.Equal("[áudio]", TranscriptBuilder.MediaLabel("audioMessage", 0));
+        Assert.Equal("[imagem]", TranscriptBuilder.MediaLabel("imageMessage", 45));
+    }
+
     // Conversa comprida é cortada no meio: o fim é onde mora o desfecho.
     [Fact]
     public void Build_WhenTooLong_KeepsTheEnding()

@@ -20,9 +20,11 @@ public class AiProviderTests
         MaxOutputTokens = 900,
         MaxAttempts = 1,
         RetryBackoffSeconds = 0,
+        AudioTokensPerSecond = 32,
         Pricing = new Dictionary<string, AiModelPricing>(StringComparer.OrdinalIgnoreCase)
         {
-            ["fake-model"] = new() { InputUsdPerMillion = 1m, OutputUsdPerMillion = 1m },
+            // Áudio a US$ 4,00 para a separação de tarifa ficar visível na conta.
+            ["fake-model"] = new() { InputUsdPerMillion = 1m, OutputUsdPerMillion = 1m, AudioInputUsdPerMillion = 4m },
         },
     };
 
@@ -49,6 +51,95 @@ public class AiProviderTests
         var calculator = new AiCostCalculator(Options.Create(Settings()));
 
         Assert.Equal(0.0072m, calculator.WithMargin(0.006m, 20m));
+    }
+
+    // Áudio sai da tarifa dele, não da de texto: 1.000 tokens de entrada dos quais
+    // 200 são áudio = 800 × US$1 + 200 × US$4 = US$ 0,0016; com 200 de saída a
+    // US$1, US$ 0,0018 × câmbio 5 = R$ 0,009.
+    [Fact]
+    public void RawCost_PricesAudioSeparately()
+    {
+        var calculator = new AiCostCalculator(Options.Create(Settings()));
+
+        Assert.Equal(0.009m, calculator.RawCostBrl("fake-model", 1000, 200, inputAudioTokens: 200));
+        // Sem áudio, a conta antiga não muda.
+        Assert.Equal(0.006m, calculator.RawCostBrl("fake-model", 1000, 200));
+    }
+
+    // Áudio sem tarifa cadastrada explode: cobrá-lo ao preço do texto
+    // subfaturaria o saldo em silêncio, que é pior que falhar alto.
+    [Fact]
+    public void RawCost_WhenAudioHasNoPrice_Throws()
+    {
+        var settings = Settings();
+        settings.Pricing["fake-model"].AudioInputUsdPerMillion = null;
+        var calculator = new AiCostCalculator(Options.Create(settings));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => calculator.RawCostBrl("fake-model", 1000, 200, inputAudioTokens: 200));
+
+        Assert.Contains("AudioInputUsdPerMillion", ex.Message);
+    }
+
+    // A estimativa soma o áudio pela taxa por segundo: 30s × 32 = 960 tokens.
+    [Fact]
+    public void Estimate_IncludesAudioSeconds()
+    {
+        var calculator = new AiCostCalculator(Options.Create(Settings()));
+        var prompt = new string('a', 400);
+
+        var semAudio = calculator.EstimateBrl("fake-model", prompt, 900, 0m);
+        var comAudio = calculator.EstimateBrl("fake-model", prompt, 900, 0m, audioSeconds: 30);
+
+        Assert.Equal(960, calculator.EstimateAudioTokens(30));
+        // 960 tokens a US$ 4,00/milhão × câmbio 5 = R$ 0,0192 a mais.
+        Assert.Equal(0.0192m, comAudio - semAudio);
+    }
+
+    // O provedor separa a entrada por modalidade em promptTokensDetails — é daí
+    // que sai a conta certa (formato confirmado contra a API real).
+    [Fact]
+    public async Task Complete_ReadsAudioTokensFromPromptDetails()
+    {
+        var (provider, fake) = Build();
+        fake.EnqueueStatus(HttpStatusCode.OK, JsonSerializer.Serialize(new
+        {
+            candidates = new[] { new { content = new { parts = new[] { new { text = "{}" } } } } },
+            usageMetadata = new
+            {
+                promptTokenCount = 1500,
+                candidatesTokenCount = 50,
+                promptTokensDetails = new object[]
+                {
+                    new { modality = "TEXT", tokenCount = 540 },
+                    new { modality = "AUDIO", tokenCount = 960 },
+                },
+            },
+        }));
+
+        var completion = await provider.CompleteAsync(new AiRequest("s", "u"));
+
+        Assert.Equal(1500, completion.InputTokens);
+        Assert.Equal(960, completion.InputAudioTokens);
+    }
+
+    // O anexo vai como inline_data na mesma chamada, com o mimetype declarado.
+    [Fact]
+    public async Task Complete_SendsAttachmentsAsInlineData()
+    {
+        var (provider, fake) = Build();
+        fake.Enqueue("{}");
+
+        await provider.CompleteAsync(new AiRequest("s", "u", Attachments:
+            [new AiAttachment("audio/ogg", "QUJD", 12)]));
+
+        using var doc = JsonDocument.Parse(Assert.Single(fake.Requests));
+        var parts = doc.RootElement.GetProperty("contents")[0].GetProperty("parts");
+        Assert.Equal(2, parts.GetArrayLength());
+
+        var inline = parts[1].GetProperty("inline_data");
+        Assert.Equal("audio/ogg", inline.GetProperty("mime_type").GetString());
+        Assert.Equal("QUJD", inline.GetProperty("data").GetString());
     }
 
     // Modelo sem preço cadastrado explode: cobrar zero seria gastar sem teto.
