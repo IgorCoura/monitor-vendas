@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 import { ApiError } from '../../api/client'
 import {
@@ -12,8 +12,19 @@ import {
   useSellers,
 } from '../../api/queries'
 import type { AiAnalysisFilters, AiAnalysisRowDto } from '../../api/types'
-import { Button, Card, EmptyState, ErrorState, Input, Spinner } from '../../components/ui'
+import {
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Select as SelectField,
+  Spinner,
+} from '../../components/ui'
+import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
 import { dayEndIso, dayStartIso, fmtDateTime, toDayInput } from '../../lib/format'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const PAGE_SIZE = 50
 
@@ -30,6 +41,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+// O <select> vem de components/ui: é lá que moram os 16px do celular (abaixo
+// disso o iOS dá zoom ao focar) e o alvo de toque de 44px.
 function Select({
   label,
   value,
@@ -43,15 +56,57 @@ function Select({
 }) {
   return (
     <Field label={label}>
-      <select
-        aria-label={label}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-edge bg-card px-3 py-1.5 text-sm text-ink focus:border-primary focus:outline-none"
-      >
+      <SelectField aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
         {children}
-      </select>
+      </SelectField>
     </Field>
+  )
+}
+
+// O conteúdo do detalhe é o mesmo nos dois layouts; só a moldura muda (linha da
+// tabela no desktop, bloco dentro do card no celular).
+function DetailBody({ row }: { row: AiAnalysisRowDto }) {
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      {row.evidence && (
+        <p>
+          <strong className="text-ink">Evidência:</strong> “{row.evidence}”
+        </p>
+      )}
+      {row.objections && (
+        <p>
+          <strong className="text-ink">Objeções:</strong> {row.objections}
+        </p>
+      )}
+      {row.interest && (
+        <p>
+          <strong className="text-ink">Interesse:</strong> {row.interest}
+        </p>
+      )}
+      <p>
+        <strong className="text-ink">Pediu a venda:</strong> {row.askedForSale ? 'sim' : 'não'} ·{' '}
+        <strong className="text-ink">Sinal ignorado:</strong> {row.ignoredBuyingSignal ? 'sim' : 'não'}
+      </p>
+      {row.shouldRecontact && row.recontactReason && (
+        <p>
+          <strong className="text-ink">Recontatar:</strong> {row.recontactReason}
+        </p>
+      )}
+      {row.suggestedMessage && (
+        <p>
+          <strong className="text-ink">Mensagem sugerida:</strong> {row.suggestedMessage}
+        </p>
+      )}
+      {row.conductAlert && (
+        <p className="text-danger">
+          <strong>Alerta de conduta:</strong> {row.conductAlert}
+        </p>
+      )}
+      <p>
+        Lido por {row.model} em {fmtDateTime(row.analyzedAt)}
+        {row.versions > 1 && ` · ${row.versions} versões`}
+      </p>
+    </div>
   )
 }
 
@@ -59,52 +114,14 @@ function Detail({ row }: { row: AiAnalysisRowDto }) {
   return (
     <tr className="border-b border-edge/60 bg-surface/60">
       <td colSpan={8} className="px-4 py-3 text-xs text-ink-muted">
-        <div className="grid gap-2 md:grid-cols-2">
-          {row.evidence && (
-            <p>
-              <strong className="text-ink">Evidência:</strong> “{row.evidence}”
-            </p>
-          )}
-          {row.objections && (
-            <p>
-              <strong className="text-ink">Objeções:</strong> {row.objections}
-            </p>
-          )}
-          {row.interest && (
-            <p>
-              <strong className="text-ink">Interesse:</strong> {row.interest}
-            </p>
-          )}
-          <p>
-            <strong className="text-ink">Pediu a venda:</strong> {row.askedForSale ? 'sim' : 'não'} ·{' '}
-            <strong className="text-ink">Sinal ignorado:</strong> {row.ignoredBuyingSignal ? 'sim' : 'não'}
-          </p>
-          {row.shouldRecontact && row.recontactReason && (
-            <p>
-              <strong className="text-ink">Recontatar:</strong> {row.recontactReason}
-            </p>
-          )}
-          {row.suggestedMessage && (
-            <p>
-              <strong className="text-ink">Mensagem sugerida:</strong> {row.suggestedMessage}
-            </p>
-          )}
-          {row.conductAlert && (
-            <p className="text-danger">
-              <strong>Alerta de conduta:</strong> {row.conductAlert}
-            </p>
-          )}
-          <p>
-            Lido por {row.model} em {fmtDateTime(row.analyzedAt)}
-            {row.versions > 1 && ` · ${row.versions} versões`}
-          </p>
-        </div>
+        <DetailBody row={row} />
       </td>
     </tr>
   )
 }
 
 export function AiAnalysisPage() {
+  const isMobile = useIsMobile()
   const now = useMemo(() => new Date(), [])
   const [from, setFrom] = useState(() => toDayInput(new Date(now.getTime() - 30 * 86_400_000)))
   const [to, setTo] = useState(() => toDayInput(now))
@@ -115,6 +132,7 @@ export function AiAnalysisPage() {
   const [recontact, setRecontact] = useState<AiAnalysisFilters['recontact']>('')
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [includeAudio, setIncludeAudio] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -160,6 +178,71 @@ export function AiAnalysisPage() {
 
   const total = data?.total ?? 0
 
+  // Datas sempre têm valor, então não contam: o número no botão "Filtros" é o
+  // dos recortes que o usuário realmente escolheu.
+  const activeFilterCount =
+    (sellerId ? 1 : 0) +
+    (status ? 1 : 0) +
+    (lossReason ? 1 : 0) +
+    (divergent ? 1 : 0) +
+    (recontact ? 1 : 0)
+
+  // Os mesmos campos nos dois layouts: no desktop dentro do card de sempre, no
+  // celular dentro da folha de filtros.
+  const filterFields = (
+    <>
+      <Field label="De">
+        <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="De" />
+      </Field>
+      <Field label="Até">
+        <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Até" />
+      </Field>
+      <Select label="Vendedor" value={sellerId} onChange={setSellerId}>
+        <option value="">Todos</option>
+        {(sellers ?? []).map((seller) => (
+          <option key={seller.id} value={seller.id}>
+            {seller.name}
+          </option>
+        ))}
+      </Select>
+      <Select label="Status da IA" value={status} onChange={setStatus}>
+        <option value="">Todos</option>
+        <option value="open">Em andamento</option>
+        {(types ?? []).map((type) => (
+          <option key={type.code} value={type.code}>
+            {type.name}
+          </option>
+        ))}
+      </Select>
+      <Select label="Motivo da perda" value={lossReason} onChange={setLossReason}>
+        <option value="">Todos</option>
+        {(lossReasons ?? []).map((reason) => (
+          <option key={reason.code} value={reason.code}>
+            {reason.label}
+          </option>
+        ))}
+      </Select>
+      <Select
+        label="Divergência"
+        value={divergent}
+        onChange={(value) => setDivergent(value as AiAnalysisFilters['divergent'])}
+      >
+        <option value="">Todas</option>
+        <option value="true">Só divergentes</option>
+        <option value="false">Só concordantes</option>
+      </Select>
+      <Select
+        label="Recontatar"
+        value={recontact}
+        onChange={(value) => setRecontact(value as AiAnalysisFilters['recontact'])}
+      >
+        <option value="">Todos</option>
+        <option value="true">Só a recontatar</option>
+        <option value="false">Sem recontato</option>
+      </Select>
+    </>
+  )
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -171,18 +254,27 @@ export function AiAnalysisPage() {
             discordam.
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
+        {/* No celular as ações ocupam a largura toda e o botão de filtros entra
+            aqui: sete campos de filtro na tela empurrariam a primeira análise
+            para fora dela. */}
+        <div className="flex w-full flex-col gap-2 md:w-auto md:items-end">
+          <div className="flex items-center gap-2 max-md:flex-col max-md:items-stretch">
             <Button variant="ghost" onClick={() => start('analyses')} disabled={running}>
               Analisar conversas
             </Button>
             <Button onClick={() => start('syntheses')} disabled={running}>
               Refazer síntese
             </Button>
+            {isMobile && (
+              <Button variant="ghost" onClick={() => setFiltersOpen(true)}>
+                Filtros{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+              </Button>
+            )}
           </div>
-          <label className="flex items-center gap-2 text-xs text-ink-muted">
+          <label className="flex min-h-11 items-center gap-2 text-xs text-ink-muted md:min-h-0">
             <input
               type="checkbox"
+              className="h-4 w-4 shrink-0"
               checked={includeAudio}
               onChange={(e) => setIncludeAudio(e.target.checked)}
               aria-label="Enviar áudios das conversas"
@@ -195,7 +287,10 @@ export function AiAnalysisPage() {
       {error && <ErrorState message={error} />}
 
       {job && (
-        <Card data-testid="ai-job" className="flex items-center gap-3 py-3">
+        <Card
+          data-testid="ai-job"
+          className="flex gap-3 py-3 max-md:flex-col max-md:items-start md:items-center"
+        >
           {running && <Spinner />}
           <div className="text-sm">
             {running && (
@@ -220,57 +315,17 @@ export function AiAnalysisPage() {
         </Card>
       )}
 
-      <Card className="flex flex-wrap items-end gap-4">
-        <Field label="De">
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="De" />
-        </Field>
-        <Field label="Até">
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Até" />
-        </Field>
-        <Select label="Vendedor" value={sellerId} onChange={setSellerId}>
-          <option value="">Todos</option>
-          {(sellers ?? []).map((seller) => (
-            <option key={seller.id} value={seller.id}>
-              {seller.name}
-            </option>
-          ))}
-        </Select>
-        <Select label="Status da IA" value={status} onChange={setStatus}>
-          <option value="">Todos</option>
-          <option value="open">Em andamento</option>
-          {(types ?? []).map((type) => (
-            <option key={type.code} value={type.code}>
-              {type.name}
-            </option>
-          ))}
-        </Select>
-        <Select label="Motivo da perda" value={lossReason} onChange={setLossReason}>
-          <option value="">Todos</option>
-          {(lossReasons ?? []).map((reason) => (
-            <option key={reason.code} value={reason.code}>
-              {reason.label}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Divergência"
-          value={divergent}
-          onChange={(value) => setDivergent(value as AiAnalysisFilters['divergent'])}
-        >
-          <option value="">Todas</option>
-          <option value="true">Só divergentes</option>
-          <option value="false">Só concordantes</option>
-        </Select>
-        <Select
-          label="Recontatar"
-          value={recontact}
-          onChange={(value) => setRecontact(value as AiAnalysisFilters['recontact'])}
-        >
-          <option value="">Todos</option>
-          <option value="true">Só a recontatar</option>
-          <option value="false">Sem recontato</option>
-        </Select>
-      </Card>
+      {isMobile ? (
+        <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filtros">
+          <div data-testid="ai-filters" className="flex flex-col gap-3">
+            {filterFields}
+          </div>
+        </Dialog>
+      ) : (
+        <Card data-testid="ai-filters" className="flex flex-wrap items-end gap-4">
+          {filterFields}
+        </Card>
+      )}
 
       {(syntheses ?? []).length > 0 && (
         <div className="grid gap-4 md:grid-cols-2" data-testid="ai-syntheses">
@@ -319,7 +374,73 @@ export function AiAnalysisPage() {
         <EmptyState message="Nenhuma conversa analisada com esses filtros. Use “Analisar conversas” para ler as do período." />
       )}
 
-      {data && data.items.length > 0 && (
+      {/* Oito colunas mais a linha de detalhe não cabem em 360px: no celular
+          cada conversa vira um card, e o detalhe (evidência, objeções,
+          mensagem sugerida) é o conteúdo expandido dele. */}
+      {isMobile && data && data.items.length > 0 && (
+        <div data-testid="analyses-cards" className="space-y-3">
+          {data.items.map((row) => (
+            <ExpandableMetricCard
+              key={row.analysisId}
+              data-testid={`analysis-card-${row.analysisId}`}
+              // O resumo é uma frase inteira: como subtítulo ele fica alinhado
+              // à esquerda e legível, em vez de virar um valor de quatro linhas
+              // encostado na margem direita.
+              title={
+                <div>
+                  {row.contactName}
+                  {row.summary && (
+                    <p className="mt-0.5 text-sm font-normal text-ink-muted">{row.summary}</p>
+                  )}
+                </div>
+              }
+              moreLabel="ver o que a IA leu"
+              previewCount={6}
+              items={
+                [
+                  { key: 'seller', label: 'Vendedor', value: row.sellerName },
+                  { key: 'last', label: 'Última mensagem', value: fmtDateTime(row.lastMessageAt) },
+                  { key: 'real', label: 'Etiqueta', value: row.realOutcome ?? '—' },
+                  {
+                    key: 'ai',
+                    label: 'Status (IA)',
+                    value: (
+                      <>
+                        {row.aiStatus}
+                        {row.confidence < 0.5 && (
+                          <span className="ml-1 text-xs text-ink-muted">(confiança baixa)</span>
+                        )}
+                      </>
+                    ),
+                  },
+                  {
+                    key: 'divergent',
+                    label: 'Divergência',
+                    value: (
+                      <span
+                        className={clsx(
+                          'rounded-full px-2 py-0.5 text-xs font-medium',
+                          row.divergent ? 'bg-danger-soft text-ink' : 'text-ink-muted',
+                        )}
+                      >
+                        {row.divergent ? 'Sim' : 'Não'}
+                      </span>
+                    ),
+                  },
+                  { key: 'loss', label: 'Motivo', value: row.lossReason ?? '—' },
+                ] satisfies MetricItem[]
+              }
+              details={
+                <div className="mt-2 border-t border-edge pt-2 text-xs text-ink-muted">
+                  <DetailBody row={row} />
+                </div>
+              }
+            />
+          ))}
+        </div>
+      )}
+
+      {!isMobile && data && data.items.length > 0 && (
         <Card className="overflow-x-auto p-0">
           <table data-testid="analyses-table" className="w-full text-sm">
             <thead>
@@ -336,9 +457,10 @@ export function AiAnalysisPage() {
             </thead>
             <tbody>
               {data.items.map((row) => (
-                <>
+                // Fragment com key: `<>…</>` não aceita key e o React reclama
+                // de item de lista sem ela.
+                <Fragment key={row.analysisId}>
                   <tr
-                    key={row.analysisId}
                     onClick={() => setExpanded(expanded === row.analysisId ? null : row.analysisId)}
                     className="cursor-pointer border-b border-edge/60 last:border-0 hover:bg-surface"
                   >
@@ -365,8 +487,8 @@ export function AiAnalysisPage() {
                     <td className="px-4 py-3 text-ink-muted">{row.lossReason ?? '—'}</td>
                     <td className="px-4 py-3 text-ink-muted">{row.summary ?? '—'}</td>
                   </tr>
-                  {expanded === row.analysisId && <Detail key={`${row.analysisId}-detail`} row={row} />}
-                </>
+                  {expanded === row.analysisId && <Detail row={row} />}
+                </Fragment>
               ))}
             </tbody>
           </table>

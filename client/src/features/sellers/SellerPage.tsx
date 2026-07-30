@@ -19,9 +19,12 @@ import { metricHelp } from '../../lib/metrics'
 import { usePeriodRange } from '../../lib/usePeriodRange'
 import { usePollMs } from '../../lib/polling'
 import { UpdateControls } from '../../components/UpdateControls'
+import { MobilePeriodBar } from '../../components/mobile/PeriodBar'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 export function SellerPage() {
   const { id = '' } = useParams()
+  const isMobile = useIsMobile()
   const [pollMs, setPollMs] = usePollMs()
   const { period, setPeriod, range, refreshNow } = usePeriodRange(pollMs)
   const freshRef = useRef(false)
@@ -52,33 +55,51 @@ export function SellerPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Link to="/" className="text-xs text-ink-muted hover:underline">
-            ← Dashboard
-          </Link>
-          <h2 className="text-xl font-bold">{report?.name ?? 'Vendedor'}</h2>
+      {isMobile ? (
+        <MobilePeriodBar
+          title={report?.name ?? 'Vendedor'}
+          above={
+            <Link to="/" className="text-xs text-ink-muted hover:underline">
+              ← Dashboard
+            </Link>
+          }
+          period={period}
+          onPeriodChange={setPeriod}
+          lastUpdatedAt={dataUpdatedAt}
+          isFetching={isFetching}
+          onRefresh={refreshManually}
+          pollMs={pollMs}
+          onPollChange={setPollMs}
+        />
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <Link to="/" className="text-xs text-ink-muted hover:underline">
+              ← Dashboard
+            </Link>
+            <h2 className="text-xl font-bold">{report?.name ?? 'Vendedor'}</h2>
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            <UpdateControls
+              lastUpdatedAt={dataUpdatedAt}
+              isFetching={isFetching}
+              pollMs={pollMs}
+              onPollChange={setPollMs}
+              onRefresh={refreshManually}
+            />
+            {periodOptions.map((p) => (
+              <Button
+                key={p.value}
+                variant={p.value === period ? 'primary' : 'ghost'}
+                aria-pressed={p.value === period}
+                onClick={() => setPeriod(p.value)}
+              >
+                {p.label}
+              </Button>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1">
-          <UpdateControls
-            lastUpdatedAt={dataUpdatedAt}
-            isFetching={isFetching}
-            pollMs={pollMs}
-            onPollChange={setPollMs}
-            onRefresh={refreshManually}
-          />
-          {periodOptions.map((p) => (
-            <Button
-              key={p.value}
-              variant={p.value === period ? 'primary' : 'ghost'}
-              aria-pressed={p.value === period}
-              onClick={() => setPeriod(p.value)}
-            >
-              {p.label}
-            </Button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {isLoading && <Spinner />}
       {isError && <ErrorState message="Não foi possível carregar o relatório do vendedor." />}
@@ -116,19 +137,25 @@ export function SellerPage() {
               <EmptyState message="Este vendedor ainda não tem números cadastrados." />
             ) : (
               <ResponsiveContainer width="100%" height={Math.max(140, chartData.length * 56)}>
-                <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 24 }}>
+                <BarChart
+                  data={chartData}
+                  layout="vertical"
+                  margin={isMobile ? { left: 0, right: 12 } : { left: 8, right: 24 }}
+                >
                   <CartesianGrid horizontal={false} stroke={chartInk.grid} />
                   <XAxis
                     type="number"
-                    tick={{ fill: chartInk.axis, fontSize: 12 }}
+                    tick={{ fill: chartInk.axis, fontSize: isMobile ? 10 : 12 }}
                     axisLine={false}
                     tickLine={false}
                   />
+                  {/* 130px de eixo num gráfico de ~300px é quase metade da
+                      largura: no celular o número do vendedor encolhe. */}
                   <YAxis
                     type="category"
                     dataKey="name"
-                    width={130}
-                    tick={{ fill: chartInk.axis, fontSize: 12 }}
+                    width={isMobile ? 92 : 130}
+                    tick={{ fill: chartInk.axis, fontSize: isMobile ? 10 : 12 }}
                     axisLine={false}
                     tickLine={false}
                   />

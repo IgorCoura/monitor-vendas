@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DashboardPage } from './DashboardPage'
-import { renderWithProviders } from '../../test/render'
+import { renderMobile, renderWithProviders } from '../../test/render'
 import { http, HttpResponse, mswServer, rankingEntry } from '../../test/msw'
 
 describe('DashboardPage', () => {
@@ -270,5 +270,86 @@ describe('DashboardPage', () => {
 
     const tips = screen.getAllByRole('img', { name: /conversas|vendas|etiqueta|horas úteis/i })
     expect(tips.length).toBeGreaterThan(3)
+  })
+
+  describe('no celular', () => {
+    // A tabela de até 20 colunas dá lugar a um card por vendedor com os mesmos índices.
+    it('troca a tabela de índices por cards', async () => {
+      mswServer.use(
+        http.get('/api/v1/reports/ranking', () =>
+          HttpResponse.json([rankingEntry('Ana', { conversationsStarted: 10, sales: 4 })]),
+        ),
+      )
+
+      renderMobile(<DashboardPage />)
+
+      const cards = await screen.findByTestId('ranking-cards')
+      expect(screen.queryByTestId('ranking-table')).not.toBeInTheDocument()
+      expect(within(cards).getByText('Ana')).toBeInTheDocument()
+      expect(within(cards).getByText('Conversas')).toBeInTheDocument()
+      expect(within(cards).getByText('10')).toBeInTheDocument()
+    })
+
+    // Os índices que não cabem na prévia do card ficam atrás de "ver mais".
+    it('revela os demais índices ao expandir o card', async () => {
+      mswServer.use(
+        http.get('/api/v1/reports/ranking', () =>
+          HttpResponse.json([rankingEntry('Ana', { banCount: 3 })]),
+        ),
+      )
+
+      renderMobile(<DashboardPage />)
+      const user = userEvent.setup()
+      await screen.findByTestId('ranking-cards')
+
+      expect(screen.queryByText('Bans')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /ver mais índices/ }))
+      expect(screen.getByText('Bans')).toBeInTheDocument()
+    })
+
+    // A métrica do gráfico vira <select>: um botão por métrica são 15+ botões no card.
+    it('escolhe a métrica do gráfico por select', async () => {
+      mswServer.use(
+        http.get('/api/v1/reports/ranking', () => HttpResponse.json([rankingEntry('Ana')])),
+      )
+
+      renderMobile(<DashboardPage />)
+      const user = userEvent.setup()
+      await screen.findByText('Ranking de vendedores — Conversão')
+
+      const select = screen.getByLabelText('Métrica do gráfico 1')
+      await user.selectOptions(select, 'sales')
+      expect(screen.getByText('Ranking de vendedores — Vendas')).toBeInTheDocument()
+    })
+
+    // Personalizar/Exportar/Organização saem do cabeçalho e vão para a folha de ações.
+    it('reúne as ações do cabeçalho numa folha', async () => {
+      renderMobile(<DashboardPage />)
+      const user = userEvent.setup()
+      await screen.findByTestId('ranking-cards')
+
+      expect(screen.queryByRole('button', { name: 'Exportar Excel' })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Ações' }))
+      const sheet = screen.getByTestId('dashboard-actions')
+      expect(within(sheet).getByRole('button', { name: 'Exportar Excel' })).toBeInTheDocument()
+      expect(within(sheet).getByRole('button', { name: 'Personalizar colunas' })).toBeInTheDocument()
+    })
+
+    // Sem hover no toque, a ajuda da métrica precisa abrir (e fechar) no clique.
+    it('abre a explicação da métrica no toque', async () => {
+      renderMobile(<DashboardPage />)
+      const user = userEvent.setup()
+      await screen.findByTestId('ranking-cards')
+
+      const tip = screen.getAllByRole('img', { name: /conversas/i })[0]
+      const help = tip.getAttribute('aria-label')!
+
+      await user.click(tip)
+      expect(screen.getByRole('tooltip')).toHaveTextContent(help)
+
+      await user.click(tip)
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    })
   })
 })

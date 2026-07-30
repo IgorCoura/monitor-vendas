@@ -18,9 +18,41 @@
   --color-warn-soft: #f7ecd8;
   --color-danger: #b3453e;
   --color-danger-soft: #f8e4e2;
+
+  /* Altura da barra de navegação inferior do mobile (h-bottom-nav / pb-nav). */
+  --spacing-bottom-nav: 3.5rem;
 }
 
 body {
   @apply bg-surface text-ink antialiased;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Tudo daqui para baixo vale só no celular: as regras estão dentro do media
+   query para o desktop continuar exatamente como era. */
+@media (max-width: 767px) {
+  /* Abaixo de 16px o Safari do iOS dá zoom na página ao focar um campo — e a
+     página fica deslocada, com o layout aparentemente quebrado. 767px é a borda
+     do `md` do Tailwind, a mesma usada por useIsMobile. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Rodapé de dialog: mantém o py-3 e soma a faixa do gesto do iPhone. */
+  .pb-safe {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Barra inferior: só a faixa do gesto, sem folga extra. */
+  .pb-inset {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Espaço que o conteúdo da página reserva para não terminar embaixo da barra
+     de navegação inferior. */
+  .pb-nav {
+    padding-bottom: calc(var(--spacing-bottom-nav) + env(safe-area-inset-bottom, 0px) + 1rem);
+  }
 }

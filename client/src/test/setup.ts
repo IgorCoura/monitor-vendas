@@ -2,6 +2,10 @@ import '@testing-library/jest-dom/vitest'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { mswServer } from './msw'
+import { installMatchMedia, resetViewport } from './viewport'
+
+// useIsMobile precisa de matchMedia, que o jsdom não tem. Default: desktop.
+installMatchMedia()
 
 // jsdom não tem ResizeObserver; o ResponsiveContainer do Recharts precisa dele.
 class ResizeObserverStub {
@@ -47,5 +51,7 @@ afterEach(() => {
   cleanup()
   // Preferências persistidas (visibilidade de métricas, layout) não podem vazar entre testes.
   globalThis.localStorage.clear()
+  // Um teste mobile não pode deixar o próximo rodando em mobile sem pedir.
+  resetViewport()
 })
 afterAll(() => mswServer.close())

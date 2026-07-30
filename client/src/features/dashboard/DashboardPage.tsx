@@ -12,7 +12,10 @@ import {
 import { useRanking } from '../../api/queries'
 import type { RankingEntryDto } from '../../api/types'
 import { KpiCard } from '../../components/KpiCard'
-import { Button, Card, Dialog, EmptyState, ErrorState, InfoTip, Spinner } from '../../components/ui'
+import { Button, Card, Dialog, EmptyState, ErrorState, InfoTip, Select, Spinner } from '../../components/ui'
+import { MobilePeriodBar } from '../../components/mobile/PeriodBar'
+import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { fmtDateTime, fmtMinutes, fmtPercent, fmtPerHour, periodOptions } from '../../lib/format'
 import { chartInk, chartSeries } from '../../lib/palette'
 import {
@@ -94,12 +97,14 @@ function VisibilityChecklist({
   onToggle: (key: string) => void
 }) {
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    // Uma coluna no celular: duas colunas de checkbox em 328px deixam o alvo de
+    // toque menor que o dedo e cortam rótulos como "Média rec./h".
+    <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
       {items.map((item) => (
-        <label key={item.key} className="flex items-center gap-2 text-sm">
+        <label key={item.key} className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
           <input
             type="checkbox"
-            className="accent-primary"
+            className="h-4 w-4 accent-primary"
             checked={!hidden.includes(item.key)}
             onChange={() => onToggle(item.key)}
           />
@@ -116,6 +121,7 @@ function RankingChartCard({
   ranking,
   availableMetrics,
   canRemove,
+  isMobile,
   onSelect,
   onRemove,
 }: {
@@ -124,6 +130,7 @@ function RankingChartCard({
   ranking: RankingEntryDto[]
   availableMetrics: typeof chartMetrics
   canRemove: boolean
+  isMobile: boolean
   onSelect: (key: string) => void
   onRemove: () => void
 }) {
@@ -136,33 +143,72 @@ function RankingChartCard({
     <Card data-testid={`chart-${index}`}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold">Ranking de vendedores — {def.label}</h3>
-        <div className="flex flex-wrap items-center gap-1">
-          {availableMetrics.map((m) => (
-            <Button
-              key={m.key}
-              variant={m.key === metricKey ? 'primary' : 'ghost'}
-              onClick={() => onSelect(m.key)}
+        {/* No celular a escolha da métrica não pode ser um botão por métrica:
+            com os tipos de desfecho são 15+ botões dentro do card. Vira um
+            <select> nativo, que o telefone abre como roda de rolagem. */}
+        {isMobile ? (
+          <div className="flex w-full items-center gap-2">
+            <Select
+              aria-label={`Métrica do gráfico ${index + 1}`}
+              value={metricKey}
+              onChange={(e) => onSelect(e.target.value)}
+              className="min-w-0 flex-1"
             >
-              {m.label}
-            </Button>
-          ))}
-          {canRemove && (
-            <Button variant="ghost" aria-label={`Remover gráfico ${index + 1}`} onClick={onRemove}>
-              ✕
-            </Button>
-          )}
-        </div>
+              {availableMetrics.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.label}
+                </option>
+              ))}
+            </Select>
+            {canRemove && (
+              <Button
+                variant="ghost"
+                aria-label={`Remover gráfico ${index + 1}`}
+                onClick={onRemove}
+                className="shrink-0"
+              >
+                ✕
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1">
+            {availableMetrics.map((m) => (
+              <Button
+                key={m.key}
+                variant={m.key === metricKey ? 'primary' : 'ghost'}
+                onClick={() => onSelect(m.key)}
+              >
+                {m.label}
+              </Button>
+            ))}
+            {canRemove && (
+              <Button variant="ghost" aria-label={`Remover gráfico ${index + 1}`} onClick={onRemove}>
+                ✕
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {data.length === 0 ? (
         <EmptyState message="Nenhum vendedor com dados no período." />
       ) : (
-        <ResponsiveContainer width="100%" height={Math.max(120, data.length * 44)}>
-          <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24 }}>
+        // O eixo de nomes ocupava 140px fixos — quase metade da largura útil de
+        // um celular. Abaixo de `md` ele encolhe e as barras voltam a ter espaço.
+        <ResponsiveContainer
+          width="100%"
+          height={Math.max(120, data.length * (isMobile ? 38 : 44))}
+        >
+          <BarChart
+            data={data}
+            layout="vertical"
+            margin={isMobile ? { left: 0, right: 12 } : { left: 8, right: 24 }}
+          >
             <CartesianGrid horizontal={false} stroke={chartInk.grid} />
             <XAxis
               type="number"
-              tick={{ fill: chartInk.axis, fontSize: 12 }}
+              tick={{ fill: chartInk.axis, fontSize: isMobile ? 10 : 12 }}
               tickFormatter={(v: number) => (def.percent ? `${v.toFixed(0)}%` : String(v))}
               axisLine={false}
               tickLine={false}
@@ -170,8 +216,8 @@ function RankingChartCard({
             <YAxis
               type="category"
               dataKey="name"
-              width={140}
-              tick={{ fill: chartInk.axis, fontSize: 12 }}
+              width={isMobile ? 88 : 140}
+              tick={{ fill: chartInk.axis, fontSize: isMobile ? 10 : 12 }}
               axisLine={false}
               tickLine={false}
             />
@@ -179,7 +225,12 @@ function RankingChartCard({
               formatter={(v) => formatChartValue(def, Number(v))}
               contentStyle={{ background: chartInk.tooltipBg, borderRadius: 8 }}
             />
-            <Bar dataKey="value" fill={chartSeries.primary} barSize={16} radius={[0, 4, 4, 0]} />
+            <Bar
+              dataKey="value"
+              fill={chartSeries.primary}
+              barSize={isMobile ? 14 : 16}
+              radius={[0, 4, 4, 0]}
+            />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -199,6 +250,7 @@ function Th({ label, help }: { label: string; help?: string }) {
 }
 
 export function DashboardPage() {
+  const isMobile = useIsMobile()
   const [pollMs, setPollMs] = usePollMs()
   const { period, setPeriod, range, refreshNow } = usePeriodRange(pollMs)
   const [charts, setCharts] = usePersistedState<string[]>(
@@ -206,6 +258,7 @@ export function DashboardPage() {
     ['conversion'],
     (value) => sanitizeChartKeys(value, chartMetrics),
   )
+  const [actionsOpen, setActionsOpen] = useState(false)
   const [kpisDialogOpen, setKpisDialogOpen] = useState(false)
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
   const [layoutDialogOpen, setLayoutDialogOpen] = useState(false)
@@ -351,36 +404,63 @@ export function DashboardPage() {
     setCharts((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev))
   }
 
+  // As ações que no desktop são botões soltos no cabeçalho: no celular elas
+  // viram uma folha, senão o topo da tela é uma parede de botões.
+  const mobileActions: { label: string; onClick: () => void }[] = [
+    { label: 'Exportar Excel', onClick: () => setExportOpen(true) },
+    { label: 'Personalizar métricas', onClick: () => setKpisDialogOpen(true) },
+    { label: 'Personalizar colunas', onClick: () => setColumnsDialogOpen(true) },
+    { label: 'Organização dos gráficos', onClick: () => setLayoutDialogOpen(true) },
+  ]
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-bold">Dashboard</h2>
-        <div className="flex flex-wrap items-center gap-1">
-          <UpdateControls
-            lastUpdatedAt={dataUpdatedAt}
-            isFetching={isFetching}
-            pollMs={pollMs}
-            onPollChange={setPollMs}
-            onRefresh={refreshManually}
-          />
-          {periodOptions.map((p) => (
-            <Button
-              key={p.value}
-              variant={p.value === period ? 'primary' : 'ghost'}
-              aria-pressed={p.value === period}
-              onClick={() => setPeriod(p.value)}
-            >
-              {p.label}
+      {isMobile ? (
+        <MobilePeriodBar
+          title="Dashboard"
+          period={period}
+          onPeriodChange={setPeriod}
+          lastUpdatedAt={dataUpdatedAt}
+          isFetching={isFetching}
+          onRefresh={refreshManually}
+          pollMs={pollMs}
+          onPollChange={setPollMs}
+          actions={
+            <Button variant="ghost" aria-label="Ações" onClick={() => setActionsOpen(true)}>
+              ⋯
             </Button>
-          ))}
-          <Button variant="ghost" onClick={() => setKpisDialogOpen(true)}>
-            Personalizar
-          </Button>
-          <Button variant="ghost" onClick={() => setExportOpen(true)}>
-            Exportar Excel
-          </Button>
+          }
+        />
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-bold">Dashboard</h2>
+          <div className="flex flex-wrap items-center gap-1">
+            <UpdateControls
+              lastUpdatedAt={dataUpdatedAt}
+              isFetching={isFetching}
+              pollMs={pollMs}
+              onPollChange={setPollMs}
+              onRefresh={refreshManually}
+            />
+            {periodOptions.map((p) => (
+              <Button
+                key={p.value}
+                variant={p.value === period ? 'primary' : 'ghost'}
+                aria-pressed={p.value === period}
+                onClick={() => setPeriod(p.value)}
+              >
+                {p.label}
+              </Button>
+            ))}
+            <Button variant="ghost" onClick={() => setKpisDialogOpen(true)}>
+              Personalizar
+            </Button>
+            <Button variant="ghost" onClick={() => setExportOpen(true)}>
+              Exportar Excel
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {isLoading && <Spinner />}
       {isError && <ErrorState message="Não foi possível carregar o ranking. A API está de pé?" />}
@@ -402,7 +482,7 @@ export function DashboardPage() {
             </div>
           )}
 
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-ink-muted">Gráficos</h3>
             <div className="flex items-center gap-1">
               <Button
@@ -412,16 +492,21 @@ export function DashboardPage() {
               >
                 + Adicionar gráfico
               </Button>
-              <Button
-                variant="ghost"
-                aria-label="Organização dos gráficos"
-                title="Organização dos gráficos"
-                onClick={() => setLayoutDialogOpen(true)}
-                className="inline-flex items-center gap-1.5"
-              >
-                <GridIcon />
-                Organização
-              </Button>
+              {/* A organização em grade só muda alguma coisa a partir de `md`
+                  (no celular é sempre uma coluna), então o botão sai daqui e
+                  fica na folha de ações. */}
+              {!isMobile && (
+                <Button
+                  variant="ghost"
+                  aria-label="Organização dos gráficos"
+                  title="Organização dos gráficos"
+                  onClick={() => setLayoutDialogOpen(true)}
+                  className="inline-flex items-center gap-1.5"
+                >
+                  <GridIcon />
+                  Organização
+                </Button>
+              )}
             </div>
           </div>
 
@@ -434,12 +519,47 @@ export function DashboardPage() {
                 ranking={ranking}
                 availableMetrics={availableMetrics}
                 canRemove={charts.length > 1}
+                isMobile={isMobile}
                 onSelect={(key) => selectMetric(index, key)}
                 onRemove={() => removeChart(index)}
               />
             ))}
           </div>
 
+          {/* Uma tabela de até 20 colunas em 360px só existe atrás de rolagem
+              lateral. No celular cada vendedor vira um card com os índices em
+              lista — exatamente as mesmas `visibleColumns` da tabela. */}
+          {isMobile ? (
+            <div data-testid="ranking-cards" className="space-y-3">
+              <h3 className="text-sm font-semibold">Todos os índices</h3>
+              {ranking.length === 0 ? (
+                <EmptyState message="Nenhum vendedor com dados no período." />
+              ) : (
+                ranking.map((entry) => (
+                  <ExpandableMetricCard
+                    key={entry.sellerId}
+                    data-testid={`ranking-card-${entry.sellerId}`}
+                    title={
+                      <Link
+                        to={`/sellers/${entry.sellerId}`}
+                        className="text-primary-strong hover:underline"
+                      >
+                        {entry.name}
+                      </Link>
+                    }
+                    items={visibleColumns.map(
+                      (c): MetricItem => ({
+                        key: c.key,
+                        label: c.label,
+                        help: c.help,
+                        value: c.render(entry),
+                      }),
+                    )}
+                  />
+                ))
+              )}
+            </div>
+          ) : (
           <Card data-testid="ranking-table">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold">Todos os índices</h3>
@@ -479,11 +599,30 @@ export function DashboardPage() {
               </table>
             </div>
           </Card>
+          )}
         </>
       )}
 
+      <Dialog open={actionsOpen} onClose={() => setActionsOpen(false)} title="Ações">
+        <div data-testid="dashboard-actions" className="flex flex-col gap-2">
+          {mobileActions.map((action) => (
+            <Button
+              key={action.label}
+              variant="ghost"
+              className="w-full justify-start"
+              onClick={() => {
+                setActionsOpen(false)
+                action.onClick()
+              }}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      </Dialog>
+
       <Dialog open={kpisDialogOpen} onClose={() => setKpisDialogOpen(false)} title="Métricas globais">
-        <div data-testid="customize-kpis" className="max-h-[65vh] overflow-y-auto pr-1">
+        <div data-testid="customize-kpis" className="max-h-[55dvh] overflow-y-auto pr-1 md:max-h-[65vh]">
           <VisibilityChecklist
             items={allKpis}
             hidden={hiddenKpis}
@@ -497,7 +636,7 @@ export function DashboardPage() {
         onClose={() => setColumnsDialogOpen(false)}
         title="Colunas da lista de funcionários"
       >
-        <div data-testid="customize-columns" className="max-h-[65vh] overflow-y-auto pr-1">
+        <div data-testid="customize-columns" className="max-h-[55dvh] overflow-y-auto pr-1 md:max-h-[65vh]">
           <VisibilityChecklist
             items={allColumns}
             hidden={hiddenColumns}

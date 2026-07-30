@@ -3,7 +3,7 @@ import { Button } from './ui'
 import { fmtDateTime } from '../lib/format'
 import { pollOptions, type PollMs } from '../lib/polling'
 
-function RefreshIcon({ spinning }: { spinning: boolean }) {
+export function RefreshIcon({ spinning }: { spinning: boolean }) {
   return (
     <svg
       viewBox="0 0 16 16"

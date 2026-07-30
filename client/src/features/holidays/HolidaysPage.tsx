@@ -35,7 +35,7 @@ export function HolidaysPage() {
       </div>
 
       <Card>
-        <form className="flex flex-wrap gap-2" onSubmit={handleSubmit}>
+        <form className="flex flex-col gap-2 md:flex-row md:flex-wrap" onSubmit={handleSubmit}>
           <Input
             type="date"
             value={date}
@@ -66,8 +66,8 @@ export function HolidaysPage() {
         <Card>
           <ul className="divide-y divide-edge">
             {holidays.map((holiday) => (
-              <li key={holiday.id} className="flex items-center justify-between py-2">
-                <div>
+              <li key={holiday.id} className="flex items-center justify-between gap-2 py-2">
+                <div className="min-w-0">
                   <span className="font-medium">{fmtDate(holiday.date)}</span>
                   <span className="ml-3 text-sm text-ink-muted">{holiday.name}</span>
                 </div>

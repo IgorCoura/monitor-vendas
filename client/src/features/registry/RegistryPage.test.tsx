@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RegistryPage } from './RegistryPage'
-import { renderWithProviders } from '../../test/render'
+import { renderMobile, renderWithProviders } from '../../test/render'
 import { http, HttpResponse, mswServer, seller } from '../../test/msw'
 
 describe('RegistryPage', () => {
@@ -57,5 +57,39 @@ describe('RegistryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Adicionar número' }))
 
     expect(await screen.findByText('Este telefone já está cadastrado.')).toBeInTheDocument()
+  })
+
+  // Quem abre o painel pelo celular não tem uma segunda câmera para ler o QR da
+  // própria tela: o código de pareamento aparece com botão de copiar.
+  it('mostra o código de pareamento junto do QR', async () => {
+    const ana = seller('Ana')
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.post('/api/v1/sellers/:id/numbers', () =>
+        HttpResponse.json(
+          {
+            number: {
+              id: crypto.randomUUID(),
+              sellerId: ana.id,
+              phone: '5511999999999',
+              instanceName: 'mv-5511999999999',
+              status: 'Disconnected',
+              createdAt: new Date().toISOString(),
+            },
+            qr: { code: 'QRDATA', base64: 'data:image/png;base64,abc123', pairingCode: 'WXYZ-1234' },
+          },
+          { status: 201 },
+        ),
+      ),
+    )
+
+    renderMobile(<RegistryPage />)
+    const user = userEvent.setup()
+
+    await user.type(await screen.findByLabelText('Novo número para Ana'), '5511999999999')
+    await user.click(screen.getByRole('button', { name: 'Adicionar número' }))
+
+    expect(await screen.findByTestId('pairing-code')).toHaveTextContent('WXYZ-1234')
+    expect(screen.getByRole('button', { name: 'Copiar' })).toBeInTheDocument()
   })
 })

@@ -76,6 +76,7 @@ Três regras dão o tom do produto:
 | **Saldo de IA em reais** | Teto de gasto por janela, com reserva antes da chamada e acerto pelo consumo real. Estimativa de custo aparece na tela antes de confirmar |
 | **Feriados e horário comercial** | Cadastro de feriados que zeram o dia no relógio útil e disparam o reprocessamento automático |
 | **Atualização sem refresh** | Polling configurável (1/5/10 min ou desligado) com indicador de última busca e botão de atualização manual |
+| **Celular** | Apresentação própria abaixo de 768px — navegação por barra inferior, tabelas em cards, diálogos como folha inferior e alvos de toque. Mesmas telas e funcionalidades; a versão de PC não muda |
 
 ## Arquitetura
 
@@ -318,7 +319,7 @@ uma ação no sistema**.
 | Tecnologia | Papel |
 |---|---|
 | **React 19 + Vite + TypeScript** (strict) | SPA |
-| **Tailwind CSS v4** | tema próprio via `@theme`, sem shadcn/CLI — componentes em `components/ui.tsx` |
+| **Tailwind CSS v4** | tema próprio via `@theme`, sem shadcn/CLI — componentes em `components/ui.tsx`; breakpoint `md` (768px) separa a apresentação de celular da de desktop |
 | **TanStack Query** | cache, polling e invalidação por mutação |
 | **React Router** | Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados (a exportação do relatório é dialog, não rota) |
 | **Recharts** | gráficos, com paleta de ordem fixa validada para contraste |

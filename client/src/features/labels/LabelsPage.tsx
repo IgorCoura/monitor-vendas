@@ -9,7 +9,8 @@ import {
 } from '../../api/queries'
 import { ApiError } from '../../api/client'
 import type { OutcomeTypeDto } from '../../api/types'
-import { Button, Card, EmptyState, ErrorState, Input, Spinner } from '../../components/ui'
+import { Button, Card, EmptyState, ErrorState, Input, Select, Spinner } from '../../components/ui'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 function TypeCard({
   type,
@@ -63,13 +64,14 @@ function TypeCard({
           {type.terms.map((t) => (
             <li
               key={t.id}
-              className="flex items-center gap-1.5 rounded-full bg-primary-soft px-2.5 py-1 text-xs text-primary-strong"
+              // A pilha cresce no celular só para o "✕" ter alvo de dedo.
+              className="flex min-h-9 items-center gap-1 rounded-full bg-primary-soft py-1 pl-2.5 text-xs text-primary-strong md:min-h-0 md:gap-1.5 md:pr-2.5"
             >
               {t.term}
               <button
                 type="button"
                 aria-label={`Remover etiqueta ${t.term}`}
-                className="cursor-pointer font-bold"
+                className="flex h-7 w-7 cursor-pointer items-center justify-center font-bold md:h-auto md:w-auto"
                 onClick={() => removeTerm.mutate({ code: type.code, termId: t.id })}
               >
                 ✕
@@ -79,7 +81,7 @@ function TypeCard({
         </ul>
       )}
 
-      <form className="mt-3 flex gap-2" onSubmit={handleAdd}>
+      <form className="mt-3 flex flex-col gap-2 md:flex-row" onSubmit={handleAdd}>
         <Input
           value={term}
           onChange={(e) => setTerm(e.target.value)}
@@ -96,6 +98,7 @@ function TypeCard({
 }
 
 export function LabelsPage() {
+  const isMobile = useIsMobile()
   const { data: types, isLoading, isError } = useOutcomeTypes()
   const { data: suggestions } = useLabelSuggestions()
   const createType = useCreateOutcomeType()
@@ -105,6 +108,15 @@ export function LabelsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const unmapped = (suggestions ?? []).filter((s) => s.mappedToTypeCode === null)
+
+  async function assignTerm(code: string, term: string) {
+    setError(null)
+    try {
+      await addTerm.mutateAsync({ code, term })
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Falha ao atribuir a etiqueta.')
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -135,7 +147,7 @@ export function LabelsPage() {
       <Card>
         <h3 className="mb-3 text-sm font-semibold">Novo tipo</h3>
         <form
-          className="flex gap-2"
+          className="flex flex-col gap-2 md:flex-row"
           onSubmit={async (e) => {
             e.preventDefault()
             setError(null)
@@ -181,24 +193,37 @@ export function LabelsPage() {
                     {s.conversations} {s.conversations === 1 ? 'conversa' : 'conversas'}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  {(types ?? []).map((type) => (
-                    <Button
-                      key={type.code}
-                      variant="ghost"
-                      onClick={async () => {
-                        setError(null)
-                        try {
-                          await addTerm.mutateAsync({ code: type.code, term: s.name })
-                        } catch (err) {
-                          setError(err instanceof ApiError ? err.message : 'Falha ao atribuir a etiqueta.')
-                        }
-                      }}
-                    >
-                      → {type.name}
-                    </Button>
-                  ))}
-                </div>
+                {/* Um botão por tipo vira uma parede no celular (são tantos
+                    quanto o catálogo tiver): lá a escolha é um <select>. */}
+                {isMobile ? (
+                  <Select
+                    aria-label={`Atribuir a etiqueta ${s.name} a um tipo`}
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) void assignTerm(e.target.value, s.name)
+                    }}
+                    className="w-full"
+                  >
+                    <option value="">Atribuir a…</option>
+                    {(types ?? []).map((type) => (
+                      <option key={type.code} value={type.code}>
+                        {type.name}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    {(types ?? []).map((type) => (
+                      <Button
+                        key={type.code}
+                        variant="ghost"
+                        onClick={() => void assignTerm(type.code, s.name)}
+                      >
+                        → {type.name}
+                      </Button>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
