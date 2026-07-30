@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MonitorVendas.Api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MonitorVendas.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260730172951_AiUsage")]
+    partial class AiUsage
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -71,90 +74,6 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasIndex("WindowStart", "Status");
 
                     b.ToTable("ai_usages", (string)null);
-                });
-
-            modelBuilder.Entity("MonitorVendas.Api.Features.Ai.Analysis.ConversationAiAnalysis", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("AnalyzedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("AskedForSale")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("ConductAlert")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
-
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal>("CostBrl")
-                        .HasPrecision(18, 6)
-                        .HasColumnType("numeric(18,6)");
-
-                    b.Property<bool>("IgnoredBuyingSignal")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Interest")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<DateTime>("LastMessageAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LossReason")
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)");
-
-                    b.Property<int>("MessageCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<string>("Objections")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<string>("RecontactReason")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
-
-                    b.Property<bool>("ShouldRecontact")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("StatusCode")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)");
-
-                    b.Property<double>("StatusConfidence")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("StatusEvidence")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<string>("SuggestedMessage")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<string>("Summary")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConversationId")
-                        .IsUnique();
-
-                    b.ToTable("conversation_ai_analyses", (string)null);
                 });
 
             modelBuilder.Entity("MonitorVendas.Api.Features.Contacts.ContactShare", b =>
@@ -736,74 +655,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         });
                 });
 
-            modelBuilder.Entity("MonitorVendas.Api.Features.ReportExport.ReportExport", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AnalyzedConversations")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("CachedConversations")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("CostBrl")
-                        .HasPrecision(18, 6)
-                        .HasColumnType("numeric(18,6)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Error")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<byte[]>("File")
-                        .HasColumnType("bytea");
-
-                    b.Property<string>("FileName")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("FiltersJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("From")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Phase")
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)");
-
-                    b.Property<int>("SkippedConversations")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(12)
-                        .HasColumnType("character varying(12)");
-
-                    b.Property<DateTime>("To")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("TotalConversations")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Status", "CreatedAt");
-
-                    b.ToTable("report_exports", (string)null);
-                });
-
             modelBuilder.Entity("MonitorVendas.Api.Features.Sellers.Seller", b =>
                 {
                     b.Property<Guid>("Id")
@@ -874,15 +725,6 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasIndex("ProcessedAt");
 
                     b.ToTable("webhook_events", (string)null);
-                });
-
-            modelBuilder.Entity("MonitorVendas.Api.Features.Ai.Analysis.ConversationAiAnalysis", b =>
-                {
-                    b.HasOne("MonitorVendas.Api.Features.Conversations.Conversation", null)
-                        .WithMany()
-                        .HasForeignKey("ConversationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("MonitorVendas.Api.Features.Contacts.ContactShare", b =>

@@ -4,11 +4,17 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Sem isto o host não lê o secrets.json: é este id que liga o projeto ao
+         cofre em %APPDATA%\Microsoft\UserSecrets. Guarda a Ai:ApiKey. -->
+    <UserSecretsId>f86bba19-61cf-4d4b-bbc2-91c47268c628</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Asp.Versioning.Http" Version="10.0.0" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <!-- ClosedXML não cria gráficos: o .xlsx pronto é reaberto e o chart é
+         injetado por aqui (mesmo pacote que o ClosedXML já usa por baixo). -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

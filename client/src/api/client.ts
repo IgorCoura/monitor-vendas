@@ -1,4 +1,5 @@
 import type {
+  AiBudgetStatus,
   ContactFilters,
   ContactPageDto,
   ContactShareDto,
@@ -11,6 +12,10 @@ import type {
   OutcomeTypeDto,
   QrCodeDto,
   RankingEntryDto,
+  ReportExportDto,
+  ReportExportEstimate,
+  ReportExportFilters,
+  ReportMetricOption,
   SellerReportDto,
   SellerResponse,
 } from './types'
@@ -93,6 +98,21 @@ export const api = {
       request<SellerReportDto>(`/reports/sellers/${id}?from=${range.from}&to=${range.to}`, { fresh }),
     ranking: (range: DateRange, fresh = false) =>
       request<RankingEntryDto[]>(`/reports/ranking?from=${range.from}&to=${range.to}`, { fresh }),
+    exportMetrics: () => request<ReportMetricOption[]>('/reports/export/metrics'),
+    estimateExport: (filters: ReportExportFilters) =>
+      request<ReportExportEstimate>('/reports/export/estimate', {
+        method: 'POST',
+        body: JSON.stringify(filters),
+      }),
+    createExport: (filters: ReportExportFilters) =>
+      request<ReportExportDto>('/reports/export', { method: 'POST', body: JSON.stringify(filters) }),
+    exportStatus: (id: string) => request<ReportExportDto>(`/reports/export/${id}`),
+    // Igual à exportação de contatos: o navegador baixa e o nome do arquivo vem
+    // do Content-Disposition.
+    exportFileUrl: (id: string) => `${BASE}/reports/export/${id}/file`,
+  },
+  ai: {
+    budget: () => request<AiBudgetStatus>('/ai/budget'),
   },
   outcomeTypes: {
     list: () => request<OutcomeTypeDto[]>('/outcome-types'),

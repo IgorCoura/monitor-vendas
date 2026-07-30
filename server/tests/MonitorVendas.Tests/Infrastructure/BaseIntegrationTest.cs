@@ -9,6 +9,7 @@ public abstract class BaseIntegrationTest(IntegrationTestWebAppFactory factory) 
     protected IntegrationTestWebAppFactory Factory { get; } = factory;
     protected HttpClient Client { get; private set; } = null!;
     protected FakeEvolutionHandler FakeEvolution => Factory.FakeEvolution;
+    protected FakeAiHandler FakeAi => Factory.FakeAi;
 
     public async Task InitializeAsync()
     {
@@ -16,6 +17,7 @@ public abstract class BaseIntegrationTest(IntegrationTestWebAppFactory factory) 
         Client = Factory.CreateClient();
         await Factory.ResetDatabaseAsync();
         FakeEvolution.Reset();
+        FakeAi.Reset();
     }
 
     public Task DisposeAsync() => Task.CompletedTask;

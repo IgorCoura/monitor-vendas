@@ -13,8 +13,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   pedido).
 - **Versionamento de API** obrigatório em toda rota: `/api/v1/...`
   (Asp.Versioning.Http, versão no segmento da URL).
-- **ClosedXML** — geração do `.xlsx` da exportação de contatos (única
-  dependência de arquivo do projeto).
+- **ClosedXML + DocumentFormat.OpenXml** — geração dos `.xlsx` (contatos e
+  relatório). ClosedXML **não cria gráficos**: o arquivo pronto é reaberto e o
+  chart é injetado por OpenXML cru (`ChartInjector`).
+- **LLM plugável** — `IAiProvider` em `Integrations/Ai/`, hoje com
+  `GeminiProvider`. Trocar de IA = classe nova + `Ai:Provider`; nada do dialeto
+  do provedor escapa desse namespace. Gasto controlado por saldo em reais
+  (`AiBudget`).
 - **docker-compose** para o stack local (client + API + Postgres).
 - **Front-end**: `../client` (React 19 + Vite + Tailwind v4 + Recharts, tema
   rosa talco) — tem `CLAUDE.md` próprio. Serviço `client` no compose (nginx
@@ -173,6 +178,120 @@ Mesma lista da tela de contatos, mandada por WhatsApp como texto
   `MaxAttempts`. Nos testes o serviço fica desligado e o delay é 0 —
   `IContactShareSender.ProcessPendingAsync()` é chamado direto.
 
+## Relatório em Excel com análise por IA (`Features/ReportExport` + `Features/Ai`)
+
+As métricas do painel em planilha, com abas de leitura feita por LLM. Implementado
+em 2026-07-30.
+
+- **Nenhuma métrica é recalculada**: o writer consome `ReportQueries.GetRankingAsync`
+  / `GetSellerReportAsync`, o mesmo caminho da tela (cache, agregado, horário
+  comercial). Cálculo próprio aqui divergiria da tela sem ninguém perceber.
+- **A etiqueta é a verdade; a IA é auditoria.** Conversão, vendas e ranking nunca
+  olham para a IA. A leitura do modelo vive nas abas `IA — Conversas` e
+  `IA — Vendedores`, com a coluna **Divergência** (IA ≠ etiqueta) destacada —
+  é ela que expõe etiquetagem esquecida.
+- **Abas**: `Resumo` (totais do time por `TeamTotals`, mesmas regras do
+  DashboardPage: contagens somam, taxas recalculadas das somas, espera ponderada
+  por `ResponseSamplesCount`; o que não é reconstruível — mediana, leitura,
+  follow-up, tempo até fechar — sai como `—`, nunca zero), `Ranking`,
+  `Gráficos`, `Por número` e as duas de IA.
+- **`ChartInjector`**: gráficos **nativos**, ligados às células da aba `Ranking`
+  (barra e linha), com a paleta do painel na ordem fixa e legenda só a partir de
+  2 séries. O `<drawing>` tem lugar no schema da aba (depois de `pageSetup`,
+  antes de `tableParts`) — fora de ordem o Excel recusa o arquivo. Há teste com
+  `OpenXmlValidator`: **se ele quebrar, o .xlsx está corrompido**, não é
+  frescura de schema.
+- **`GET /reports/export/metrics`** alimenta os filtros da tela — tipo de
+  desfecho novo vira coluna e opção de gráfico sem código no front.
+- **Job em background** no molde do `ContactShare`: `POST /reports/export` grava
+  os filtros **congelados** em `report_exports` e responde 202; o
+  `ReportExportRunner` (gated `ReportExport:Enabled`) monta a planilha e guarda
+  os bytes na própria linha (apagados por `RetentionHours` — planilha é
+  descartável, não merece volume no compose).
+- **Saldo estourado não invalida o arquivo**: a planilha sai com o que deu e as
+  conversas restantes aparecem com "Saldo de IA insuficiente" na coluna
+  Observação. Meia planilha aqui é melhor que nenhuma (ao contrário do
+  `ContactShare`, onde meia lista é pior).
+- **A fase de IA tem prazo** (`ReportExport:AiDeadlineSeconds`, 120s). Esperar a
+  cota do provedor liberar pode levar minutos por vendedor; passado o prazo, o
+  que faltou sai marcado e a planilha é entregue. O relatório em si já está
+  pronto — ninguém deve esperar por um extra.
+- **`ReportExport.Phase`** ("Analisando conversas" / "Sintetizando vendedores")
+  existe para a tela não parecer travada durante essas esperas. Sem isso o
+  usuário desiste achando que quebrou — foi o que aconteceu no primeiro teste.
+- **A fila é paralela** (`MaxConcurrentExports`, 3). Era serial e uma exportação
+  com IA presa em cota segurava as outras: medido em 30/07/2026, a planilha
+  **sem IA leva 0,2 s** para ser montada, mas ficou **64 s na fila** atrás de um
+  job de 202 s. O custo do relatório é a IA, nunca o Excel.
+- `Ai:MaxTotalRetryWaitSeconds` limita a espera **somada** de uma chamada. Sem
+  ele, 3 tentativas de ~60 s faziam uma única análise estourar sozinha o prazo da
+  exportação (120 s viraram 202 s).
+
+### Análise por conversa (`Features/Ai/Analysis`)
+
+- **`TranscriptBuilder`** monta o texto enviado ao provedor: **mascara nome e
+  telefone do cliente** (e qualquer número com 10+ dígitos), rotula mídia
+  (`[áudio]`), informa o silêncio **em horas úteis** e, em conversa longa, corta
+  o meio preservando o fim (é lá que mora o desfecho).
+- **O status vem do catálogo de desfechos**, não de uma lista fixa: os tipos
+  ativos + o embutido `open` ("Em andamento"). Conversa parada além de
+  `Metrics:FollowUpGapBusinessHours` **perde o `open` do próprio schema** — onde
+  o relógio decide, ele decide antes da IA.
+- **Injeção de prompt**: a transcrição vai delimitada e marcada como dado, e o
+  `enum` fechado do schema recusa status inventado (`TryParse` → null → 1 nova
+  tentativa → linha marcada "não analisada"). O pior caso é uma linha de
+  auditoria errada, nunca uma ação no sistema.
+- **Cache por conversa** (`conversation_ai_analyses`, único por `ConversationId`):
+  a chave é `MessageCount` + `LastMessageAt`. Conversa que não andou não é
+  reanalisada — reexportar o mesmo período custa (quase) zero. É a maior
+  economia da feature.
+- **`SellerSynthesizer`** roda sobre os resumos, não sobre as conversas cruas:
+  uma chamada por vendedor.
+
+### Saldo de IA em reais (`Features/Ai`)
+
+- **O saldo é derivado, nunca guardado**: `ai_usages` registra os gastos e o saldo
+  é `AmountPerWindow − gastos da janela corrente`. Não acumula por construção e
+  não precisa de job de recarga — se a API cair na virada, na volta já está certo.
+- **Janela** ancorada na meia-noite do `Metrics:TimeZone`, a cada `WindowHours`
+  (máx. 24; a meia-noite sempre corta, então o horário de recarga é previsível).
+- **Reserva antes, acerto depois**: estimativa local (caracteres ÷ 4 × fator de
+  segurança + teto de saída) reserva o valor e **bloqueia antes de gastar**; o
+  débito definitivo usa os tokens do `usageMetadata`, com `MarginPercent` por
+  cima. `pg_advisory_xact_lock` serializa as reservas — duas exportações
+  simultâneas não furam o teto.
+- **Destino da reserva em caso de erro**: falha que impediu a geração (4xx,
+  conexão recusada) **libera**; timeout depois do envio **mantém o débito**,
+  porque provavelmente houve cobrança do outro lado. É o `MayHaveBeenCharged` do
+  `AiProviderException` que decide.
+- `AiBudget:Enabled=false` não bloqueia nada, mas **continua registrando** o
+  gasto — desligar o freio não pode cegar o histórico.
+- Modelo sem preço em `Ai:Pricing` **explode** em vez de cobrar zero: gasto sem
+  teto é pior que erro alto.
+- Falha que traz o consumo junto (resposta truncada) **liquida pelo custo real**
+  em vez de deixar a reserva de pé — é o `Usage` do `AiProviderException`.
+
+### Lições da primeira rodada contra a API real (30/07/2026)
+
+Tudo aqui quebrou em produção e virou teste de regressão:
+
+- **`gemini-2.5-flash` responde 404 para chaves novas** ("no longer available to
+  new users"). O default virou `gemini-3.6-flash`. **O preço dele no appsettings
+  é herdado do 2.5-flash e precisa ser conferido no painel do Google.**
+- **Modelos 3.x recusam `thinkingConfig.thinkingBudget` com 400.** Por isso
+  `ThinkingBudgetTokens` é negativo por default = não envia nada.
+- **O raciocínio sai do mesmo teto de `MaxOutputTokens` e domina a conta**: numa
+  conversa curta foram 430 tokens de pensamento para 37 de resposta, e a saída
+  medida (6.949) ficou acima da entrada (4.456). Teto baixo trunca o JSON —
+  `finishReason: MAX_TOKENS` vira erro explícito pedindo para aumentar o teto.
+- **Free tier = 5 requisições por minuto por modelo.** O 429 traz `retryDelay`
+  (~56s) e obedecê-lo é o que faz a exportação terminar; `MaxConcurrency` caiu
+  para 2. Mesmo assim sínteses podem falhar por quota — saem como "Sem síntese"
+  na aba, com o motivo.
+- Custo conferido de ponta a ponta: 4.456 entrada + 6.949 saída → US$ 0,018709 ×
+  5,40 × 1,15 = **R$ 0,116185**, contra R$ 0,116184 debitados. A leitura do
+  `usageMetadata` está correta.
+
 ## Arquitetura de leitura das métricas (3 camadas)
 
 Otimizado em 2026-07-30 (benchmark com 28.800 mensagens, 10 vendedores × 2
@@ -228,7 +347,9 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `GET/POST/PUT/DELETE /outcome-types` (+ `/{code}/terms`),
 `GET /outcome-labels/suggestions`, `GET /contacts`, `GET /contacts/export`,
 `POST /contacts/share` + `GET /contacts/share/{id}`,
-`POST /reports/rebuild`,
+`POST /reports/rebuild`, `GET /ai/budget`,
+`GET /reports/export/metrics`, `POST /reports/export/estimate`,
+`POST /reports/export` + `GET /reports/export/{id}` + `/file`,
 `GET /reports/sellers/{id}?from&to`, `GET /reports/ranking?from&to`,
 `GET /health`, `GET /api/v1/ping`.
 
@@ -257,6 +378,11 @@ server/
 │   ├── Program.cs                         # composição DI + MigrateAsync no startup
 │   ├── Dockerfile                         # multi-stage, contexto = raiz do server/
 │   ├── Features/
+│   │   ├── Ai/                            #   AiUsage + AiBudget (janela/reserva/acerto) + AiBudgetEndpoints,
+│   │   │   └── Analysis/                  #   ConversationAiAnalysis (cache), TranscriptBuilder (mascaramento),
+│   │   │                                  #   AiAnalysisSchema (prompt + schema fechado), ConversationAnalyzer, SellerSynthesizer
+│   │   ├── ReportExport/                  #   ReportExport (job) + Runner + Endpoints, ReportWorkbookWriter,
+│   │   │                                  #   AiSheetsWriter, ChartInjector (gráfico nativo), ReportMetricCatalog, TeamTotals
 │   │   ├── Sellers/                       #   Seller + CRUD endpoints
 │   │   ├── Numbers/                       #   WhatsappNumber, NumberStatusEvent, ConnectionUpdateHandler, endpoints (create/connect/ban-permanent)
 │   │   ├── Webhooks/                      #   WebhookEvent (fila bruta), endpoint de recepção, WebhookProcessor + IWebhookEventHandler, WebhookOptions
@@ -270,10 +396,11 @@ server/
 │   │                                      #   ReportCache + ReportCacheVersion, Holiday + HolidaysEndpoints,
 │   │                                      #   DailyNumberMetrics / DirtyMetricsDay / FirstResponseBuckets,
 │   │                                      #   MetricsSnapshot (forma somável), DailyMetricsBuilder (+background), DirtyDayTracker
-│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (5) + DesignTimeDbContextFactory
+│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (8) + DesignTimeDbContextFactory
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
+│   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler), 138 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 201 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -285,7 +412,16 @@ server/
   Nova migração: `dotnet ef migrations add <Nome> --project src/MonitorVendas.Api
   --startup-project src/MonitorVendas.Api -o Data/Migrations` (dotnet-ef é
   local tool; sem `--startup-project` o CLI tenta buildar o dcproj e falha).
-- Config via appsettings/env: bloco `ContactShare` (ver seção do envio);
+- **`Ai:ApiKey` em dev vem do user-secrets** (`UserSecretsId` no csproj do Api —
+  sem essa propriedade o host ignora o `secrets.json` em silêncio). Em Docker/produção
+  o cofre não existe: use env (`Ai__ApiKey`).
+- Config via appsettings/env: blocos `Ai` (`Provider`, `BaseUrl`, `ApiKey`,
+  `Model`, `MaxOutputTokens`, `ThinkingBudgetTokens`, `MaxConcurrency`,
+  `MaxAttempts`, `RetryBackoffSeconds`, `UsdBrlRate` e a tabela `Pricing` por
+  modelo em USD/1M tokens), `AiBudget` (`Enabled`, `AmountPerWindow`,
+  `WindowHours`, `MarginPercent`) e `ReportExport` (`Enabled`,
+  `IntervalSeconds`, `RetentionHours`, `MaxConversationsPerExport`);
+  bloco `ContactShare` (ver seção do envio);
   `Evolution:BaseUrl` (barra final!) e `ApiKey`;
   `Webhook:Secret`/`PublicBaseUrl`/`ProcessorEnabled`/`ProcessorIntervalSeconds`;
   `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`; bloco `Metrics`
@@ -297,13 +433,19 @@ server/
 - Todo `DateTime` persistido é UTC (Npgsql timestamptz); horário comercial é
   convertido para `Metrics:TimeZone` só dentro do `BusinessHoursCalendar`.
 - Testes de integração: `IntegrationTestWebAppFactory` desliga os background
-  services (webhook, reconciliação, agregação) **e o cache** (`CacheSeconds=0`,
+  services (webhook, reconciliação, agregação, envio de contatos, exportação)
+  **e o cache** (`CacheSeconds=0`,
   senão resultado vazaria entre testes) e substitui a Evolution por
   `FakeEvolutionHandler`; o pipeline é dirigido deterministicamente via
   `IWebhookProcessor.ProcessPendingAsync()`, `IReconciliationService.RunOnceAsync()`,
-  `DailyMetricsBuilder.ProcessDirtyDaysAsync()` e
-  `IContactShareSender.ProcessPendingAsync()`. Para testar com config
+  `DailyMetricsBuilder.ProcessDirtyDaysAsync()`,
+  `IContactShareSender.ProcessPendingAsync()` e
+  `IReportExportRunner.ProcessPendingAsync()`. Para testar com config
   diferente sem recriar o Postgres: `Factory.WithWebHostBuilder(b => b.UseSetting(...))`.
+  A IA é substituída pelo `FakeAiHandler` (`Enqueue`/`Always`/`EnqueueStatus`/
+  `EnqueueTimeout`), com preço redondo na factory: US$ 1,00/1M tokens e câmbio
+  5,00, saldo de R$ 1,00 por janela e 20% de margem — a conta de custo do teste
+  cabe na cabeça de quem lê.
 - **Ao mexer nas métricas, o teste que não pode falhar é
   `DailyAggregateTests.AggregatedRead_MatchesLiveCalculation`**: ele garante que
   o caminho agregado e o ao vivo dão os mesmos números.

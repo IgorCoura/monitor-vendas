@@ -171,3 +171,57 @@ export interface HolidayResponse {
   date: string
   name: string
 }
+
+export interface AiBudgetStatus {
+  enabled: boolean
+  limit: number
+  committed: number
+  available: number
+  windowStart: string
+  windowEnd: string
+}
+
+export interface ReportMetricOption {
+  key: string
+  label: string
+}
+
+export interface ReportExportFilters {
+  from: string
+  to: string
+  sellerIds: string[]
+  metrics: string[]
+  charts: string[]
+  includeNumbers: boolean
+  includeAi: boolean
+}
+
+export interface ReportExportEstimate {
+  conversations: number
+  cached: number
+  toAnalyze: number
+  estimatedBrl: number
+  available: number
+  affordable: boolean
+  truncated: boolean
+}
+
+export type ReportExportStatus = 'Pending' | 'Running' | 'Completed' | 'Failed'
+
+export interface ReportExportDto {
+  id: string
+  from: string
+  to: string
+  status: ReportExportStatus
+  totalConversations: number
+  analyzedConversations: number
+  cachedConversations: number
+  skippedConversations: number
+  costBrl: number
+  phase: string | null
+  error: string | null
+  fileName: string | null
+  fileAvailable: boolean
+  createdAt: string
+  completedAt: string | null
+}

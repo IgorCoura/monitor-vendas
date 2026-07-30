@@ -66,15 +66,22 @@ export function StatusBadge({ status }: { status: NumberStatus }) {
   )
 }
 
+// O conteúdo pode crescer muito (o dialog de exportação tem dezenas de chips):
+// a altura é limitada à viewport e só o corpo rola. Sem isso o dialog cresce
+// além da tela e leva os botões de ação junto, para fora do alcance.
 export function Dialog({
   open,
   onClose,
   title,
+  size = 'md',
+  footer,
   children,
 }: {
   open: boolean
   onClose: () => void
   title: string
+  size?: 'md' | 'lg'
+  footer?: ReactNode
   children: ReactNode
 }) {
   if (!open) return null
@@ -87,16 +94,28 @@ export function Dialog({
       <div
         role="dialog"
         aria-label={title}
-        className="w-full max-w-md rounded-xl border border-edge bg-card p-6 shadow-lg"
+        className={clsx(
+          'flex max-h-[85vh] w-full flex-col rounded-xl border border-edge bg-card shadow-lg',
+          size === 'lg' ? 'max-w-2xl' : 'max-w-md',
+        )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4">
           <h2 className="text-base font-semibold">{title}</h2>
           <Button variant="ghost" onClick={onClose} aria-label="Fechar">
             ✕
           </Button>
         </div>
-        {children}
+        <div data-testid="dialog-body" className="flex-1 overflow-y-auto px-6 pb-6">
+          {children}
+        </div>
+        {/* Fora da área rolável de propósito: dentro dela o rodapé grudado cobre
+            o último campo do formulário e rouba o clique dele. */}
+        {footer && (
+          <div data-testid="dialog-footer" className="border-t border-edge px-6 py-3">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   )

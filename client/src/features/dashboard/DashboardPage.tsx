@@ -29,6 +29,7 @@ import { usePersistedState } from '../../lib/usePersistedState'
 import { usePeriodRange } from '../../lib/usePeriodRange'
 import { usePollMs } from '../../lib/polling'
 import { UpdateControls } from '../../components/UpdateControls'
+import { ExportReportDialog } from '../reports/ExportReportDialog'
 
 type ChartLayout = 'list' | 'grid2' | 'grid3'
 
@@ -337,6 +338,8 @@ export function DashboardPage() {
     })
   }
 
+  const [exportOpen, setExportOpen] = useState(false)
+
   function addChart() {
     setCharts((prev) => {
       const unused = availableMetrics.find((m) => !prev.includes(m.key))
@@ -372,6 +375,9 @@ export function DashboardPage() {
           ))}
           <Button variant="ghost" onClick={() => setKpisDialogOpen(true)}>
             Personalizar
+          </Button>
+          <Button variant="ghost" onClick={() => setExportOpen(true)}>
+            Exportar Excel
           </Button>
         </div>
       </div>
@@ -520,6 +526,8 @@ export function DashboardPage() {
           ))}
         </div>
       </Dialog>
+
+      <ExportReportDialog open={exportOpen} onClose={() => setExportOpen(false)} range={range} />
     </div>
   )
 }

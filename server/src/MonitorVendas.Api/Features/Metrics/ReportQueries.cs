@@ -68,17 +68,19 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
     // O calendário é montado por relatório: os feriados vêm do banco e o
     // sábado/timezone vêm da config — nada disso pode ficar congelado em singleton.
-    public async Task<MetricsCalculator> BuildCalculatorAsync(CancellationToken ct)
+    public async Task<BusinessHoursCalendar> BuildCalendarAsync(CancellationToken ct)
     {
         var opts = options.Value;
         var holidays = await db.Set<Holiday>().AsNoTracking().Select(h => h.Date).ToListAsync(ct);
-        var calendar = new BusinessHoursCalendar(
+        return new BusinessHoursCalendar(
             TimeZoneInfo.FindSystemTimeZoneById(opts.TimeZone),
             opts.BusinessDayStartHour, opts.BusinessDayEndHour,
             opts.SaturdayEnabled, opts.SaturdayStartHour, opts.SaturdayEndHour,
             holidays.ToHashSet());
-        return new MetricsCalculator(calendar, opts);
     }
+
+    public async Task<MetricsCalculator> BuildCalculatorAsync(CancellationToken ct) =>
+        new(await BuildCalendarAsync(ct), options.Value);
 
     public async Task<SellerReportDto?> GetSellerReportAsync(Guid sellerId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
     {

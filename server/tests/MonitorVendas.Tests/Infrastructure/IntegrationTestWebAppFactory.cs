@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using MonitorVendas.Api.Features.Outcomes;
+using MonitorVendas.Api.Integrations.Ai.Gemini;
 using MonitorVendas.Api.Integrations.Evolution;
 using Npgsql;
 using Respawn;
@@ -17,6 +18,8 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
     private Respawner? _respawner;
 
     public FakeEvolutionHandler FakeEvolution { get; } = new();
+
+    public FakeAiHandler FakeAi { get; } = new();
 
     public const string WebhookSecret = "test-secret";
 
@@ -41,6 +44,22 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         builder.UseSetting("Evolution:BaseUrl", "http://evolution.fake/");
         builder.UseSetting("Evolution:ApiKey", "test-key");
 
+        // Preço redondo de propósito: R$ 5,00/dólar e US$ 1,00 por milhão de
+        // tokens fazem a conta de custo caber na cabeça de quem lê o teste.
+        builder.UseSetting("Ai:BaseUrl", "http://ai.fake/");
+        builder.UseSetting("Ai:ApiKey", "test-key");
+        builder.UseSetting("Ai:Model", "fake-model");
+        builder.UseSetting("Ai:UsdBrlRate", "5");
+        builder.UseSetting("Ai:MaxAttempts", "1");
+        builder.UseSetting("Ai:Pricing:fake-model:InputUsdPerMillion", "1");
+        builder.UseSetting("Ai:Pricing:fake-model:OutputUsdPerMillion", "1");
+        builder.UseSetting("AiBudget:Enabled", "true");
+        builder.UseSetting("AiBudget:AmountPerWindow", "1.00");
+        builder.UseSetting("AiBudget:WindowHours", "24");
+        builder.UseSetting("AiBudget:MarginPercent", "20");
+        // Exportação também é dirigida pelos testes (IReportExportRunner.ProcessPendingAsync).
+        builder.UseSetting("ReportExport:Enabled", "false");
+
         builder.ConfigureTestServices(services =>
         {
             services.AddHttpClient<EvolutionApiClient>((_, http) =>
@@ -48,6 +67,11 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
                 http.BaseAddress = new Uri("http://evolution.fake/");
                 http.DefaultRequestHeaders.Add("apikey", "test-key");
             }).ConfigurePrimaryHttpMessageHandler(() => FakeEvolution);
+
+            services.AddHttpClient<GeminiProvider>((_, http) =>
+            {
+                http.BaseAddress = new Uri("http://ai.fake/");
+            }).ConfigurePrimaryHttpMessageHandler(() => FakeAi);
         });
     }
 

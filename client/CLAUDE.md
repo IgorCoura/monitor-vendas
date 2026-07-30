@@ -11,6 +11,7 @@ Front-end do monitor de desempenho de vendedores. Consome a API REST em
   `src/index.css`) — sem shadcn/CLI; componentes próprios em `src/components/ui.tsx`.
 - **Recharts** para gráficos; **TanStack Query** para dados; **React Router**
   para as rotas (Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados).
+  A exportação do relatório é dialog no Dashboard ("Exportar Excel"), não rota.
 
 ## Atualização dos dados (sem refresh do navegador)
 
@@ -88,6 +89,13 @@ client/src/
 │   │               #   ShareDialog: envia a mesma lista por WhatsApp ("Nome - número");
 │   │               #   escolhe o número remetente entre os ATIVOS (useAllNumbers) e
 │   │               #   acompanha o progresso por polling enquanto o status é Pending.
+│   ├── reports/    # ExportReportDialog: exportação do relatório em .xlsx. Métricas e
+│   │               #   gráficos vêm de `GET /reports/export/metrics` (nunca hardcoded —
+│   │               #   tipo de desfecho novo aparece sozinho); nada marcado = tudo.
+│   │               #   Com "Incluir análise por IA" ligado, chama /estimate e mostra
+│   │               #   custo estimado + saldo, bloqueando o botão se não couber.
+│   │               #   O job é acompanhado por polling e o download é um <a> para
+│   │               #   `api.reports.exportFileUrl(id)`.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
 │   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp

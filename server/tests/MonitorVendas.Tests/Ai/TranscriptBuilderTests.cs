@@ -1,0 +1,90 @@
+using MonitorVendas.Api.Features.Ai.Analysis;
+using MonitorVendas.Api.Features.Conversations;
+
+namespace MonitorVendas.Tests.Ai;
+
+public class TranscriptBuilderTests
+{
+    private static readonly TimeZoneInfo SaoPaulo = TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo");
+    private static readonly DateTime Start = new(2026, 7, 1, 13, 0, 0, DateTimeKind.Utc);
+
+    private static TranscriptMessage In(string? text, int minutes = 0, string type = "conversation") =>
+        new(MessageDirection.Inbound, Start.AddMinutes(minutes), text, type);
+
+    private static TranscriptMessage Out(string? text, int minutes = 0, string type = "conversation") =>
+        new(MessageDirection.Outbound, Start.AddMinutes(minutes), text, type);
+
+    private static string Build(params TranscriptMessage[] messages) =>
+        TranscriptBuilder.Build(messages, "Maria Silva", "5511988887777", SaoPaulo, true, 2.5);
+
+    // Cada lado é identificado e o horário sai convertido para o fuso do relatório.
+    [Fact]
+    public void Build_LabelsBothSidesInLocalTime()
+    {
+        var transcript = Build(In("bom dia"), Out("bom dia, tudo bem?", 10));
+
+        Assert.Contains("Cliente (01/07 10:00): bom dia", transcript);
+        Assert.Contains("Vendedor (01/07 10:10): bom dia, tudo bem?", transcript);
+    }
+
+    // O silêncio em horas úteis vai no cabeçalho: sem ele a IA chuta se a conversa
+    // ainda está viva.
+    [Fact]
+    public void Build_AnnouncesSilenceInBusinessHours()
+    {
+        Assert.Contains("Silêncio desde a última mensagem: 2,5 horas úteis.", Build(In("oi")));
+    }
+
+    // Nome e telefone do cliente não saem daqui: viram marcadores antes do envio.
+    [Fact]
+    public void Build_MasksContactNameAndPhone()
+    {
+        var transcript = Build(In("aqui é a Maria Silva, meu zap é 5511988887777"));
+
+        Assert.DoesNotContain("Maria Silva", transcript);
+        Assert.DoesNotContain("5511988887777", transcript);
+        Assert.Contains("[CLIENTE]", transcript);
+        Assert.Contains("[TELEFONE]", transcript);
+    }
+
+    // Telefone de terceiro escrito no meio da conversa também sai — o cliente
+    // costuma mandar o contato de outra pessoa.
+    [Fact]
+    public void Mask_RemovesAnyPhoneLikeNumber()
+    {
+        Assert.Equal("fala com o [TELEFONE]", TranscriptBuilder.Mask("fala com o (11) 97777-6666", null, null));
+    }
+
+    // Valor não é telefone: mascarar preço cegaria a análise de objeção.
+    [Fact]
+    public void Mask_KeepsPrices()
+    {
+        Assert.Equal("fica 1.200,00 à vista", TranscriptBuilder.Mask("fica 1.200,00 à vista", null, null));
+    }
+
+    // Mensagem sem texto (áudio, imagem) entra como rótulo, não como linha vazia.
+    [Fact]
+    public void Build_LabelsMediaMessages()
+    {
+        var transcript = Build(In(null, 0, "audioMessage"), Out(null, 5, "imageMessage"));
+
+        Assert.Contains("[áudio]", transcript);
+        Assert.Contains("[imagem]", transcript);
+    }
+
+    // Conversa comprida é cortada no meio: o fim é onde mora o desfecho.
+    [Fact]
+    public void Build_WhenTooLong_KeepsTheEnding()
+    {
+        var messages = Enumerable.Range(0, 200)
+            .Select(i => In(new string('x', 200) + i, i))
+            .Append(In("fechado, pode mandar o link", 300))
+            .ToArray();
+
+        var transcript = TranscriptBuilder.Build(messages, null, null, SaoPaulo, true, 0, maxChars: 3_000);
+
+        Assert.Contains("mensagens omitidas", transcript);
+        Assert.Contains("fechado, pode mandar o link", transcript);
+        Assert.True(transcript.Length <= 3_000);
+    }
+}

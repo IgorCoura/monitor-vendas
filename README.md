@@ -4,13 +4,15 @@ Painel de acompanhamento de desempenho de vendedores que atendem clientes pelo
 WhatsApp. O sistema lê as conversas em tempo real pela [Evolution API](https://doc.evolution-api.com/),
 transforma cada mensagem em métrica de atendimento (tempo de resposta,
 follow-up, conversão) e entrega o resultado em um dashboard com ranking do time,
-relatório por vendedor e exportação da carteira de clientes.
+relatório por vendedor, exportação da carteira de clientes e um relatório em
+Excel com leitura das conversas feita por LLM.
 
 <p>
   <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white">
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
   <img alt="PostgreSQL 17" src="https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white">
+  <img alt="LLM plugável" src="https://img.shields.io/badge/LLM-plug%C3%A1vel-8E75B2?logo=googlegemini&logoColor=white">
   <img alt="Docker" src="https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker&logoColor=white">
 </p>
 
@@ -23,6 +25,7 @@ relatório por vendedor e exportação da carteira de clientes.
 - [Arquitetura](#arquitetura)
 - [Pipeline de dados](#pipeline-de-dados)
 - [Como as métricas são calculadas](#como-as-métricas-são-calculadas)
+- [Relatório em Excel com análise por IA](#relatório-em-excel-com-análise-por-ia)
 - [Tecnologias](#tecnologias)
 - [Como rodar](#como-rodar)
 - [Configuração](#configuração)
@@ -68,6 +71,9 @@ Três regras dão o tom do produto:
 | **Retroatividade** | Toda associação etiqueta↔conversa é registrada; mudar o catálogo reavalia o histórico e refaz os dias afetados |
 | **Carteira de clientes** | Lista com uma linha por contato (não por conversa), filtros por período/vendedor/desfecho/banimento e exportação `.xlsx` |
 | **Envio da lista por WhatsApp** | A mesma lista mandada como mensagem (`Nome - 5511999998888`), quebrada em blocos numerados e enviada com intervalo entre mensagens |
+| **Relatório em Excel** | As métricas do painel em planilha, com **gráficos nativos** ligados às células (não imagem) e escolha de quais métricas entram |
+| **Análise por IA** | Um LLM lê as conversas e classifica o desfecho, expondo a coluna **Divergência** (IA ≠ etiqueta) — é ela que revela etiquetagem esquecida |
+| **Saldo de IA em reais** | Teto de gasto por janela, com reserva antes da chamada e acerto pelo consumo real. Estimativa de custo aparece na tela antes de confirmar |
 | **Feriados e horário comercial** | Cadastro de feriados que zeram o dia no relógio útil e disparam o reprocessamento automático |
 | **Atualização sem refresh** | Polling configurável (1/5/10 min ou desligado) com indicador de última busca e botão de atualização manual |
 
@@ -89,6 +95,7 @@ flowchart LR
 
     UI -- "/api/v1/*" --> API["MonitorVendas.Api<br/>.NET 10 Minimal API<br/>:8080"]
     API <--> PG[("PostgreSQL 17<br/>:5432")]
+    API -- "IAiProvider<br/>(análise das conversas)" --> LLM["LLM<br/>Gemini por padrão"]
 ```
 
 O servidor é **um projeto único organizado por feature** (vertical slices), não
@@ -106,9 +113,11 @@ flowchart TB
       N["Numbers<br/>instâncias e status"]
       K["Contacts<br/>carteira, .xlsx e envio"]
       R["Reconciliation<br/>safety-net"]
+      X["ReportExport<br/>planilha + gráficos nativos"]
+      Z["Ai<br/>análise, cache e saldo"]
     end
     Features --> D["Data<br/>AppDbContext + Migrations"]
-    Features --> I["Integrations/Evolution<br/>HTTP client"]
+    Features --> I["Integrations<br/>Evolution · Ai (IAiProvider)"]
 ```
 
 Não há controllers, mediator nem camada de aplicação: um endpoint é um
@@ -203,6 +212,93 @@ de leitura · **follow-up** (silêncios resgatados ÷ silêncios — conta cada
 silêncio, não a conversa) · vendas e demais desfechos por tipo · conversão ·
 tempo até fechar · última mensagem enviada · uptime % e contagem de bans.
 
+## Relatório em Excel com análise por IA
+
+As métricas do painel viram uma planilha, e um LLM lê as conversas para dizer o
+que ele acha que aconteceu em cada uma. O dialog "Exportar Excel" no dashboard
+dispara o job; o arquivo fica pronto em background.
+
+| Aba | Conteúdo |
+|---|---|
+| `Resumo` | totais do time, pelas mesmas regras da tela |
+| `Ranking` | uma linha por vendedor, com as métricas escolhidas |
+| `Gráficos` | gráficos **nativos** do Excel, ligados às células da aba `Ranking` |
+| `Por número` | abertura por número de WhatsApp |
+| `IA — Conversas` | classificação do modelo por conversa + coluna **Divergência** |
+| `IA — Vendedores` | síntese por vendedor, feita sobre os resumos |
+
+Três decisões sustentam a feature:
+
+- **Nenhuma métrica é recalculada aqui.** O writer consome o mesmo
+  `ReportQueries` da tela — cache, agregado e horário comercial inclusos. Um
+  cálculo próprio divergiria da tela sem ninguém perceber.
+- **A etiqueta é a verdade; a IA é auditoria.** Conversão, vendas e ranking nunca
+  olham para o modelo. A leitura dele fica confinada às duas abas de IA, e a
+  coluna **Divergência** (IA ≠ etiqueta) é o produto de verdade: ela mostra onde
+  o vendedor esqueceu de etiquetar.
+- **Saldo estourado não invalida o arquivo.** A planilha sai com o que deu, e as
+  conversas restantes aparecem com "Saldo de IA insuficiente" na coluna
+  Observação. Aqui meia planilha é melhor que nenhuma — ao contrário do envio de
+  contatos, onde meia lista é pior.
+
+### Gráficos nativos
+
+ClosedXML não cria gráficos. O `.xlsx` pronto é reaberto e o chart é injetado por
+OpenXML cru (`ChartInjector`), ligado às células — quem abrir o arquivo pode
+mexer nos dados e ver o gráfico responder. O `<drawing>` tem posição fixa no
+schema da aba (depois de `pageSetup`, antes de `tableParts`); fora de ordem o
+Excel recusa o arquivo inteiro. Existe um teste com `OpenXmlValidator` para
+isso: **se ele quebrar, o arquivo está corrompido**, não é rigor de schema.
+
+### O que vai para o modelo
+
+O `TranscriptBuilder` monta o texto enviado ao provedor e **mascara nome e
+telefone do cliente** (e qualquer número com 10+ dígitos). Mídia vira rótulo
+(`[áudio]`), o silêncio é informado **em horas úteis**, e conversa longa é
+cortada no meio preservando o fim — é lá que mora o desfecho.
+
+O status possível vem do **catálogo de desfechos**, não de uma lista fixa: os
+tipos ativos mais o embutido `open` ("Em andamento"). Conversa parada além do gap
+de follow-up **perde o `open` do próprio schema** — onde o relógio decide, ele
+decide antes da IA.
+
+Contra injeção de prompt, a transcrição vai delimitada e marcada como dado, e o
+`enum` fechado do schema recusa status inventado (nova tentativa, depois linha
+marcada "não analisada"). O pior caso é uma linha de auditoria errada — **nunca
+uma ação no sistema**.
+
+### Custo sob controle
+
+- **O saldo é derivado, nunca guardado.** `ai_usages` registra os gastos e o
+  saldo é `AmountPerWindow − gastos da janela corrente`. Não acumula por
+  construção e não precisa de job de recarga: se a API cair na virada, na volta
+  já está certo.
+- **Reserva antes, acerto depois.** Uma estimativa local reserva o valor e
+  bloqueia **antes** de gastar; o débito definitivo usa os tokens que o provedor
+  reportou. Um `pg_advisory_xact_lock` serializa as reservas — duas exportações
+  simultâneas não furam o teto.
+- **Erro que impediu a geração libera a reserva; timeout depois do envio mantém
+  o débito**, porque provavelmente houve cobrança do outro lado.
+- **Cache por conversa** (chaveado por contagem de mensagens + última mensagem):
+  conversa que não andou não é reanalisada. Reexportar o mesmo período custa
+  quase zero — é a maior economia da feature.
+- Modelo sem preço configurado **explode** em vez de cobrar zero: gasto sem teto
+  é pior que erro alto.
+
+### Trocar de LLM
+
+`IAiProvider` é a fronteira. Um provedor novo é uma classe nova mais
+`Ai:Provider` na config — nada do dialeto do fornecedor escapa de
+`Integrations/Ai/`. Hoje há `GeminiProvider`.
+
+> **Notas de campo do Gemini (30/07/2026):** `gemini-2.5-flash` responde 404 para
+> chaves novas, então o default é `gemini-3.6-flash` — **confira o preço dele no
+> painel do Google**, o valor no `appsettings` foi herdado do 2.5. Modelos 3.x
+> recusam `thinkingConfig.thinkingBudget` com 400. O raciocínio sai do mesmo teto
+> de `MaxOutputTokens` e domina a conta (430 tokens de pensamento para 37 de
+> resposta, num caso medido). Free tier são 5 requisições por minuto por modelo —
+> o 429 traz `retryDelay` e obedecê-lo é o que faz a exportação terminar.
+
 ## Tecnologias
 
 ### Back-end (`server/`)
@@ -212,8 +308,9 @@ tempo até fechar · última mensagem enviada · uptime % e contagem de bans.
 | **.NET 10 — Minimal API** | endpoints sem controllers, um projeto único por feature |
 | **PostgreSQL 17 + EF Core 10 (Npgsql)** | persistência; schema por migrações, aplicadas no startup |
 | **Asp.Versioning.Http** | versionamento obrigatório no segmento da URL (`/api/v1`) |
-| **ClosedXML** | geração do `.xlsx` da exportação de contatos |
-| **BackgroundService** | processador de webhooks, agregação diária, reconciliação e envio de contatos |
+| **ClosedXML + DocumentFormat.OpenXml** | geração dos `.xlsx`; o OpenXML cru entra só para injetar os gráficos nativos |
+| **`IAiProvider`** (Gemini) | análise das conversas por LLM, atrás de uma interface própria |
+| **BackgroundService** | webhooks, agregação diária, reconciliação, envio de contatos e exportação do relatório |
 | **xUnit + Testcontainers + Respawn** | testes de integração contra um PostgreSQL real |
 
 ### Front-end (`client/`)
@@ -223,7 +320,7 @@ tempo até fechar · última mensagem enviada · uptime % e contagem de bans.
 | **React 19 + Vite + TypeScript** (strict) | SPA |
 | **Tailwind CSS v4** | tema próprio via `@theme`, sem shadcn/CLI — componentes em `components/ui.tsx` |
 | **TanStack Query** | cache, polling e invalidação por mutação |
-| **React Router** | Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados |
+| **React Router** | Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados (a exportação do relatório é dialog, não rota) |
 | **Recharts** | gráficos, com paleta de ordem fixa validada para contraste |
 | **Vitest + Testing Library + MSW** | testes de página com HTTP mockado (`onUnhandledRequest: 'error'`) |
 
@@ -298,6 +395,9 @@ alcança a API para entregar os webhooks.
    nos WhatsApps conectados e ainda não estão mapeadas.
 4. **Feriados** → cadastrar os feriados do ano (zeram o dia no relógio útil).
 5. Conversar. As métricas aparecem no dashboard conforme os webhooks chegam.
+6. **Dashboard → "Exportar Excel"** para levar o relatório para fora. Com a
+   `Ai:ApiKey` configurada, a opção "Incluir análise por IA" mostra o custo
+   estimado e o saldo antes de você confirmar.
 
 > Não há backfill: o monitoramento vale **daqui para frente**.
 
@@ -334,7 +434,27 @@ Tudo por `appsettings.json` ou variáveis de ambiente (`Secao__Chave`).
 | `Metrics` | `TimeZone`, horas úteis seg–sex, `SaturdayEnabled`/`SaturdayStartHour`/`SaturdayEndHour`, `NewConversationWindowDays` (15), `AnswerWindowBusinessHours`, `FollowUpGapBusinessHours`, `CacheSeconds`, `AggregationEnabled`, `AggregationIntervalSeconds`, `UseDailyAggregates`, `LiveCalculationMaxDays` (7) |
 | `Reconciliation` | `Enabled` (desligado por padrão), `IntervalMinutes`, `LookbackHours` |
 | `ContactShare` | `Enabled`, `IntervalSeconds`, `DelayBetweenMessagesSeconds`, `MaxCharsPerMessage`, `MaxMessagesPerShare`, `MaxAttempts` |
+| `Ai` | `Provider`, `BaseUrl`, `ApiKey`, `Model`, `MaxOutputTokens`, `ThinkingBudgetTokens`, `MaxConcurrency`, `MaxAttempts`, `RetryBackoffSeconds`, `UsdBrlRate` e a tabela `Pricing` por modelo (USD por 1M tokens) |
+| `AiBudget` | `Enabled`, `AmountPerWindow` (R$), `WindowHours` (máx. 24), `MarginPercent` |
+| `ReportExport` | `Enabled`, `IntervalSeconds`, `RetentionHours`, `MaxConversationsPerExport` |
 | `Cors:AllowedOrigins` | lista de origens; vazia em Development libera qualquer origem |
+
+### Chave da IA
+
+Em desenvolvimento, `Ai:ApiKey` vem do **user-secrets** — nunca do
+`appsettings.json`:
+
+```bash
+cd server/src/MonitorVendas.Api
+dotnet user-secrets set "Ai:ApiKey" "sua-chave"
+```
+
+Em Docker ou produção o cofre não existe: use a variável de ambiente
+`Ai__ApiKey`.
+
+> A janela do saldo é ancorada na meia-noite do `Metrics:TimeZone`, então o
+> horário de recarga é previsível. `AiBudget:Enabled=false` não bloqueia nada mas
+> **continua registrando** o gasto — desligar o freio não pode cegar o histórico.
 
 Todo `DateTime` persistido é **UTC** (`timestamptz`). A conversão para
 `Metrics:TimeZone` acontece só dentro do `BusinessHoursCalendar` e na saída de
@@ -358,6 +478,8 @@ produto (ver [Decisões de projeto](#decisões-de-projeto)).
 | Contatos | `GET /contacts` (prévia paginada) · `GET /contacts/export` (`.xlsx`) · `POST /contacts/share` · `GET /contacts/share/{id}` |
 | Feriados | `POST`/`GET`/`DELETE` `/holidays` |
 | Relatórios | `GET /reports/sellers/{id}?from&to` · `GET /reports/ranking?from&to` · `POST /reports/rebuild?from&to` |
+| Exportação do relatório | `GET /reports/export/metrics` (métricas e gráficos disponíveis) · `POST /reports/export/estimate` (custo de IA) · `POST /reports/export` (202) · `GET /reports/export/{id}` · `GET /reports/export/{id}/file` |
+| IA | `GET /ai/budget` (saldo da janela corrente) |
 | Saúde | `GET /health` · `GET /api/v1/ping` |
 
 ### Carteira de clientes
@@ -384,6 +506,20 @@ destinatário é o que foi confirmado na tela. Uma falha registra a tentativa e
 **para o envio inteiro** (metade da lista é pior que nada); a passada seguinte
 retoma de onde parou.
 
+### Exportação do relatório
+
+Mesmo molde: `POST /reports/export` grava os filtros **congelados** e responde
+**202**; o job monta a planilha em background e guarda os bytes na própria linha,
+apagados depois de `RetentionHours` (planilha é descartável, não merece volume no
+compose). A tela acompanha por polling e baixa em `/file`.
+
+Como a etapa de IA é longa, o job publica em que **fase** está ("Analisando
+conversas", "Sintetizando vendedores") — sem isso a exportação parece travada
+justamente quando está fazendo o trabalho mais caro.
+
+`GET /reports/export/metrics` alimenta os filtros — **tipo de desfecho novo vira
+coluna e opção de gráfico sem uma linha de código no front**.
+
 ## Estrutura do repositório
 
 ```
@@ -397,6 +533,7 @@ monitor-vendas/
 │   │   │   ├── sellers/                    #   relatório do vendedor + comparativo por número
 │   │   │   ├── registry/                   #   CRUD de vendedores e números (QR, ban)
 │   │   │   ├── contacts/                   #   carteira, exportação e ShareDialog
+│   │   │   ├── reports/                    #   ExportReportDialog: filtros, custo de IA e polling do job
 │   │   │   ├── labels/                     #   tipos de desfecho, termos e sugestões
 │   │   │   └── holidays/                   #   cadastro de feriados
 │   │   ├── lib/                            # format, palette, polling, usePersistedState, metrics
@@ -416,10 +553,14 @@ monitor-vendas/
     │   │   ├── Conversations/               #   Contact, Conversation, Message, labels, parsing
     │   │   ├── Outcomes/                    #   catálogo, normalizador, resolver, reconciler
     │   │   ├── Contacts/                    #   queries, endpoints, .xlsx e envio por WhatsApp
+    │   │   ├── ReportExport/                #   job, writer, AiSheetsWriter, ChartInjector, TeamTotals
+    │   │   ├── Ai/                          #   saldo em reais (AiUsage/AiBudget) e endpoint
+    │   │   │   └── Analysis/                #     transcrição mascarada, schema fechado, cache, síntese
     │   │   ├── Reconciliation/              #   safety-net contra webhook perdido
     │   │   └── Metrics/                     #   calculador, agregado diário, cache, feriados
     │   ├── Data/                            # AppDbContext, Configurations, Migrations
     │   ├── Integrations/Evolution/          # HTTP client da Evolution API
+    │   ├── Integrations/Ai/                 # IAiProvider, custo, opções; Gemini/
     │   └── Common/                          # versionamento de API, datas UTC
     ├── tests/MonitorVendas.Tests/           # xUnit + Testcontainers + Respawn
     └── CLAUDE.md                            # domínio, decisões e convenções do back
@@ -439,9 +580,11 @@ cd client && npm test                          # componentes e páginas
 Os testes de back-end são **de integração de verdade**: `Testcontainers` sobe um
 PostgreSQL 17 real e `Respawn` limpa o banco entre os casos. A
 `IntegrationTestWebAppFactory` desliga os background services e o cache, troca a
-Evolution por um handler falso, e o pipeline é dirigido deterministicamente
+Evolution e a IA por handlers falsos, e o pipeline é dirigido deterministicamente
 (`ProcessPendingAsync()`, `RunOnceAsync()`, `ProcessDirtyDaysAsync()`) — nada de
-`Thread.Sleep` esperando job.
+`Thread.Sleep` esperando job. O `FakeAiHandler` roda com preço redondo
+(US$ 1,00/1M tokens, câmbio 5,00, saldo de R$ 1,00 por janela): a conta de custo
+do teste cabe na cabeça de quem lê.
 
 Convenções da suíte:
 
@@ -453,6 +596,8 @@ Convenções da suíte:
 - O teste que não pode falhar ao mexer em métricas é
   `DailyAggregateTests.AggregatedRead_MatchesLiveCalculation`: ele garante que o
   caminho agregado e o ao vivo produzem os mesmos números.
+- O teste do `ChartInjector` valida a planilha com `OpenXmlValidator` — quebrou
+  ali, o `.xlsx` não abre no Excel.
 
 ## Decisões de projeto
 
@@ -473,6 +618,12 @@ Escolhas deliberadas, registradas aqui para não serem "corrigidas" por engano:
   vendedor.** O envio da lista de contatos volta pelo webhook como `fromMe`; o
   `key.id` é guardado no pedido e o handler descarta esse upsert.
 - **A janela de conversa nova é de 15 dias** de silêncio no par (número, contato).
+- **A IA nunca alimenta métrica.** Ela audita e aponta divergência; quem decide
+  venda é a etiqueta. Nenhuma saída do modelo vira ação no sistema.
+- **O saldo de IA é derivado dos gastos registrados**, não um contador que se
+  incrementa. Nada de job de recarga para dessincronizar.
+- **Trocar de LLM é escrever um `IAiProvider`.** Nada do dialeto do fornecedor
+  pode escapar de `Integrations/Ai/`.
 - **Código em inglês, conversa e documentação em português.**
 
 ---

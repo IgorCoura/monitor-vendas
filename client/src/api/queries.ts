@@ -1,7 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type DateRange } from './client'
-import type { ContactFilters } from './types'
+import type { ContactFilters, ReportExportFilters } from './types'
 
 export function useSellers() {
   return useQuery({ queryKey: ['sellers'], queryFn: api.sellers.list })
@@ -81,6 +81,40 @@ export function useContactShareStatus(id: string | null) {
     queryFn: () => api.contacts.shareStatus(id!),
     enabled: !!id,
     refetchInterval: (query) => (query.state.data?.status === 'Pending' ? 2000 : false),
+  })
+}
+
+export function useExportMetrics() {
+  return useQuery({ queryKey: ['export-metrics'], queryFn: api.reports.exportMetrics })
+}
+
+export function useAiBudget(enabled = true) {
+  return useQuery({ queryKey: ['ai-budget'], queryFn: api.ai.budget, enabled })
+}
+
+export function useEstimateExport() {
+  return useMutation({ mutationFn: (filters: ReportExportFilters) => api.reports.estimateExport(filters) })
+}
+
+export function useCreateExport() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (filters: ReportExportFilters) => api.reports.createExport(filters),
+    // A exportação consome saldo de IA: o valor exibido precisa acompanhar.
+    onSuccess: () => client.invalidateQueries({ queryKey: ['ai-budget'] }),
+  })
+}
+
+// Acompanha o job até terminar; concluído ou falho, o polling para.
+export function useExportStatus(id: string | null) {
+  return useQuery({
+    queryKey: ['export-status', id],
+    queryFn: () => api.reports.exportStatus(id!),
+    enabled: !!id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'Pending' || status === 'Running' ? 2000 : false
+    },
   })
 }
 

@@ -81,6 +81,23 @@ export const mswServer = setupServer(
     ]),
   ),
   http.get('/api/v1/outcome-labels/suggestions', () => HttpResponse.json([])),
+  http.get('/api/v1/reports/export/metrics', () =>
+    HttpResponse.json([
+      { key: 'conversationsStarted', label: 'Conversas iniciadas' },
+      { key: 'sales', label: 'Vendas' },
+      { key: 'responseRate', label: 'Taxa de resposta' },
+    ]),
+  ),
+  http.get('/api/v1/ai/budget', () =>
+    HttpResponse.json({
+      enabled: true,
+      limit: 20,
+      committed: 0,
+      available: 20,
+      windowStart: '2026-07-30T03:00:00Z',
+      windowEnd: '2026-07-31T03:00:00Z',
+    }),
+  ),
 )
 
 export { http, HttpResponse }

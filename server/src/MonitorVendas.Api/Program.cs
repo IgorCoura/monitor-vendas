@@ -1,14 +1,18 @@
 using Microsoft.EntityFrameworkCore;
 using MonitorVendas.Api.Common;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Ai;
+using MonitorVendas.Api.Features.Ai.Analysis;
 using MonitorVendas.Api.Features.Contacts;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Outcomes;
 using MonitorVendas.Api.Features.Reconciliation;
+using MonitorVendas.Api.Features.ReportExport;
 using MonitorVendas.Api.Features.Sellers;
 using MonitorVendas.Api.Features.Webhooks;
+using MonitorVendas.Api.Integrations.Ai;
 using MonitorVendas.Api.Integrations.Evolution;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,6 +31,15 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
         policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
 }));
 builder.Services.AddEvolutionApi(builder.Configuration);
+builder.Services.AddAiProvider(builder.Configuration);
+builder.Services.Configure<AiBudgetOptions>(builder.Configuration.GetSection(AiBudgetOptions.Section));
+builder.Services.AddScoped<AiBudget>();
+builder.Services.AddScoped<ConversationAnalyzer>();
+builder.Services.AddScoped<SellerSynthesizer>();
+builder.Services.Configure<ReportExportOptions>(builder.Configuration.GetSection(ReportExportOptions.Section));
+builder.Services.AddSingleton<IReportExportRunner, ReportExportRunner>();
+if (builder.Configuration.GetValue("ReportExport:Enabled", true))
+    builder.Services.AddHostedService<ReportExportBackgroundService>();
 builder.Services.Configure<WebhookOptions>(builder.Configuration.GetSection(WebhookOptions.Section));
 builder.Services.Configure<MetricsOptions>(builder.Configuration.GetSection(MetricsOptions.Section));
 builder.Services.AddSingleton<IWebhookProcessor, WebhookProcessor>();
@@ -80,6 +93,8 @@ v1.MapHolidaysEndpoints();
 v1.MapOutcomeTypesEndpoints();
 v1.MapContactsEndpoints();
 v1.MapContactShareEndpoints();
+v1.MapAiBudgetEndpoints();
+v1.MapReportExportEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {
