@@ -40,7 +40,8 @@ public class ReportWorkbookWriterTests
     private static XLWorkbook Open(byte[] bytes) => new(new MemoryStream(bytes));
 
     private static AiConversationRow AiRow(string? realOutcome, string? aiStatus, bool divergent, double? confidence = 0.9) =>
-        new("Ana", "5511900001111", "Maria", "5511977776666", From, To,
+        new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), From,
+            "Ana", "5511900001111", "Maria", "5511977776666", From, To,
             realOutcome, aiStatus, confidence, divergent, "vou pagar amanhã", "preco",
             true, false, "achou caro", true, "prometeu e sumiu", "oi!", "kit", "resumo", null, null);
 

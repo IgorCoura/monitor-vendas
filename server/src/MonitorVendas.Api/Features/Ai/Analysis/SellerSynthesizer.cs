@@ -1,16 +1,21 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using MonitorVendas.Api.Data;
 using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Ai.Analysis;
+
+public sealed record AnalysisRef(Guid AnalysisId, DateTime AnalyzedAt);
 
 public sealed record SellerSynthesisInput(
     Guid SellerId,
     string SellerName,
     string MetricsSummary,
-    IReadOnlyList<string> ConversationLines);
+    IReadOnlyList<string> ConversationLines,
+    IReadOnlyList<AnalysisRef> Analyses);
 
 public sealed record SellerSynthesis(
     Guid SellerId,
@@ -21,11 +26,14 @@ public sealed record SellerSynthesis(
     string? DominantLossPattern,
     string? TrainingSuggestion,
     decimal CostBrl,
-    string? Error);
+    string? Error,
+    bool FromCache = false,
+    DateTime? CreatedAt = null);
 
 // Roda sobre os resumos das conversas, nunca sobre as conversas cruas: uma
 // chamada por vendedor, custo desprezível perto da análise individual.
 public sealed class SellerSynthesizer(
+    AppDbContext db,
     IAiProvider provider,
     AiBudget budget,
     AiCostCalculator calculator,
@@ -50,8 +58,24 @@ public sealed class SellerSynthesizer(
         """;
 
 
-    public async Task<SellerSynthesis> SynthesizeAsync(SellerSynthesisInput input, CancellationToken ct = default)
+    public async Task<SellerSynthesis> SynthesizeAsync(
+        SellerSynthesisInput input,
+        bool force = false,
+        CancellationToken ct = default)
     {
+        var hash = SellerAiSynthesis.HashOf(input.Analyses.Select(a => a.AnalysisId));
+
+        // Mesmo vendedor com o mesmo conjunto de leituras ⇒ mesma síntese. Era o
+        // único custo que sobrava numa reexportação do mesmo período.
+        if (!force)
+        {
+            var cached = await db.Set<SellerAiSynthesis>().AsNoTracking()
+                .FirstOrDefaultAsync(s => s.SellerId == input.SellerId && s.InputsHash == hash, ct);
+
+            if (cached is not null)
+                return FromCache(cached);
+        }
+
         var settings = options.Value;
         var prompt = BuildPrompt(input);
         var estimate = calculator.EstimateBrl(settings.Model, SystemPrompt + prompt, settings.MaxOutputTokens, budget.MarginPercent);
@@ -78,9 +102,63 @@ public sealed class SellerSynthesizer(
         }
 
         var cost = await budget.SettleAsync(reservation.Id, completion.Model, completion.InputTokens, completion.OutputTokens, ct);
+        var synthesis = Parse(input, completion.Text, cost);
 
-        return Parse(input, completion.Text, cost);
+        if (synthesis.Error is null)
+            await PersistAsync(input, synthesis, hash, completion.Model, ct);
+
+        return synthesis;
     }
+
+    private async Task PersistAsync(
+        SellerSynthesisInput input,
+        SellerSynthesis synthesis,
+        string hash,
+        string model,
+        CancellationToken ct)
+    {
+        var row = await db.Set<SellerAiSynthesis>()
+            .FirstOrDefaultAsync(s => s.SellerId == input.SellerId && s.InputsHash == hash, ct);
+
+        // Refazer com o mesmo conjunto substitui a linha: o histórico que importa
+        // é o das leituras por conversa, não o de cada tentativa de síntese.
+        row ??= new SellerAiSynthesis
+        {
+            Id = Guid.NewGuid(),
+            SellerId = input.SellerId,
+            InputsHash = hash,
+        };
+
+        row.SellerName = input.SellerName;
+        row.Overview = synthesis.Overview;
+        row.Strengths = SellerAiSynthesis.Join(synthesis.Strengths);
+        row.Improvements = SellerAiSynthesis.Join(synthesis.Improvements);
+        row.DominantLossPattern = synthesis.DominantLossPattern;
+        row.TrainingSuggestion = synthesis.TrainingSuggestion;
+        row.Model = model;
+        row.CostBrl = synthesis.CostBrl;
+        row.ConversationsCount = input.Analyses.Count;
+        row.CreatedAt = DateTime.UtcNow;
+
+        if (db.Entry(row).State == EntityState.Detached)
+            db.Add(row);
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static SellerSynthesis FromCache(SellerAiSynthesis cached) =>
+        new(cached.SellerId,
+            cached.SellerName,
+            cached.Overview,
+            SellerAiSynthesis.Split(cached.Strengths),
+            SellerAiSynthesis.Split(cached.Improvements),
+            cached.DominantLossPattern,
+            cached.TrainingSuggestion,
+            // Custo zero: reusar não paga nada. O valor original fica na tabela.
+            0m,
+            null,
+            FromCache: true,
+            CreatedAt: cached.CreatedAt);
 
     private static string BuildPrompt(SellerSynthesisInput input)
     {

@@ -4,6 +4,7 @@ using MonitorVendas.Api.Features.Ai;
 using MonitorVendas.Api.Features.Ai.Analysis;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.ReportExport;
+using MonitorVendas.Api.Features.Sellers;
 
 namespace MonitorVendas.Api.Data.Configurations;
 
@@ -43,8 +44,45 @@ public class ConversationAiAnalysisConfiguration : IEntityTypeConfiguration<Conv
         builder.Property(a => a.Model).HasMaxLength(80).IsRequired();
         builder.Property(a => a.CostBrl).HasPrecision(18, 6);
         builder.HasOne<Conversation>().WithMany().HasForeignKey(a => a.ConversationId).OnDelete(DeleteBehavior.Cascade);
-        // Uma análise por conversa: a nova substitui a anterior quando a conversa anda.
-        builder.HasIndex(a => a.ConversationId).IsUnique();
+        // Só existe UMA leitura corrente por conversa; as anteriores ficam como
+        // histórico. O índice parcial garante isso sem impedir as versões.
+        builder.HasIndex(a => a.ConversationId)
+            .IsUnique()
+            .HasFilter("\"IsCurrent\"");
+        builder.HasIndex(a => new { a.ConversationId, a.AnalyzedAt });
+    }
+}
+
+public class SellerAiSynthesisConfiguration : IEntityTypeConfiguration<SellerAiSynthesis>
+{
+    public void Configure(EntityTypeBuilder<SellerAiSynthesis> builder)
+    {
+        builder.ToTable("seller_ai_syntheses");
+        builder.HasKey(s => s.Id);
+        builder.Property(s => s.SellerName).HasMaxLength(120).IsRequired();
+        builder.Property(s => s.InputsHash).HasMaxLength(64).IsRequired();
+        builder.Property(s => s.DominantLossPattern).HasMaxLength(300);
+        builder.Property(s => s.TrainingSuggestion).HasMaxLength(500);
+        builder.Property(s => s.Model).HasMaxLength(80).IsRequired();
+        builder.Property(s => s.CostBrl).HasPrecision(18, 6);
+        builder.HasOne<Seller>().WithMany().HasForeignKey(s => s.SellerId).OnDelete(DeleteBehavior.Cascade);
+        // A chave do cache: vendedor + conjunto de análises que alimentou.
+        builder.HasIndex(s => new { s.SellerId, s.InputsHash }).IsUnique();
+    }
+}
+
+public class AiJobConfiguration : IEntityTypeConfiguration<AiJob>
+{
+    public void Configure(EntityTypeBuilder<AiJob> builder)
+    {
+        builder.ToTable("ai_jobs");
+        builder.HasKey(j => j.Id);
+        builder.Property(j => j.Kind).HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(j => j.Status).HasConversion<string>().HasMaxLength(12).IsRequired();
+        builder.Property(j => j.FiltersJson).IsRequired();
+        builder.Property(j => j.Error).HasMaxLength(500);
+        builder.Property(j => j.CostBrl).HasPrecision(18, 6);
+        builder.HasIndex(j => new { j.Status, j.CreatedAt });
     }
 }
 

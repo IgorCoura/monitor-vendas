@@ -10,7 +10,10 @@ public sealed record ConversationAnalysisInput(
     int MessageCount,
     DateTime LastMessageAt,
     string Transcript,
-    bool AllowOpen);
+    bool AllowOpen,
+    // A tela de análises tem um botão que refaz a leitura mesmo sem a conversa
+    // ter mudado — é o único caminho que ignora o cache de propósito.
+    bool Force = false);
 
 public enum AnalysisResultKind
 {
@@ -39,11 +42,12 @@ public sealed class ConversationAnalyzer(
         CancellationToken ct = default)
     {
         var existing = await db.Set<ConversationAiAnalysis>()
-            .FirstOrDefaultAsync(a => a.ConversationId == input.ConversationId, ct);
+            .FirstOrDefaultAsync(a => a.ConversationId == input.ConversationId && a.IsCurrent, ct);
 
         // Conversa que não recebeu mensagem nova desde a última leitura não é
         // reanalisada: é a economia que torna reexportar o mesmo período grátis.
-        if (existing is not null &&
+        if (!input.Force &&
+            existing is not null &&
             existing.MessageCount == input.MessageCount &&
             existing.LastMessageAt == input.LastMessageAt)
             return new AnalysisOutcome(AnalysisResultKind.Cached, existing, null);
@@ -118,10 +122,16 @@ public sealed class ConversationAnalyzer(
         string model,
         decimal cost)
     {
-        var analysis = existing ?? new ConversationAiAnalysis
+        // A leitura anterior deixa de ser a corrente, mas continua no banco: é o
+        // histórico que permite comparar o que a IA achava antes.
+        if (existing is not null)
+            existing.IsCurrent = false;
+
+        var analysis = new ConversationAiAnalysis
         {
             Id = Guid.NewGuid(),
             ConversationId = input.ConversationId,
+            IsCurrent = true,
         };
 
         analysis.MessageCount = input.MessageCount;
@@ -143,8 +153,7 @@ public sealed class ConversationAnalyzer(
         analysis.CostBrl = cost;
         analysis.AnalyzedAt = DateTime.UtcNow;
 
-        if (existing is null)
-            db.Add(analysis);
+        db.Add(analysis);
 
         return analysis;
     }

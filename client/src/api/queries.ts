@@ -1,7 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type DateRange } from './client'
-import type { ContactFilters, ReportExportFilters } from './types'
+import type { AiAnalysisFilters, ContactFilters, ReportExportFilters } from './types'
 
 export function useSellers() {
   return useQuery({ queryKey: ['sellers'], queryFn: api.sellers.list })
@@ -110,6 +110,56 @@ export function useExportStatus(id: string | null) {
   return useQuery({
     queryKey: ['export-status', id],
     queryFn: () => api.reports.exportStatus(id!),
+    enabled: !!id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'Pending' || status === 'Running' ? 2000 : false
+    },
+  })
+}
+
+export function useAiAnalyses(filters: AiAnalysisFilters, page: number, pageSize = 50) {
+  return useQuery({
+    queryKey: ['ai-analyses', filters, page, pageSize],
+    queryFn: () => api.ai.analyses(filters, page, pageSize),
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useAiSyntheses(sellerId: string) {
+  return useQuery({ queryKey: ['ai-syntheses', sellerId], queryFn: () => api.ai.syntheses(sellerId) })
+}
+
+export function useAiLossReasons() {
+  return useQuery({ queryKey: ['ai-loss-reasons'], queryFn: api.ai.lossReasons })
+}
+
+export function useRunAiAnalyses() {
+  return useMutation({
+    mutationFn: ({ filters, conversationIds }: { filters: AiAnalysisFilters; conversationIds: string[] }) =>
+      api.ai.runAnalyses(filters, conversationIds),
+  })
+}
+
+export function useRunAiSyntheses() {
+  return useMutation({ mutationFn: (filters: AiAnalysisFilters) => api.ai.runSyntheses(filters) })
+}
+
+// Terminado o job, as listas são invalidadas: a tela precisa mostrar o resultado
+// sem o usuário ter que recarregar.
+export function useAiJob(id: string | null) {
+  const client = useQueryClient()
+  return useQuery({
+    queryKey: ['ai-job', id],
+    queryFn: async () => {
+      const job = await api.ai.job(id!)
+      if (job.status === 'Completed' || job.status === 'Failed') {
+        void client.invalidateQueries({ queryKey: ['ai-analyses'] })
+        void client.invalidateQueries({ queryKey: ['ai-syntheses'] })
+        void client.invalidateQueries({ queryKey: ['ai-budget'] })
+      }
+      return job
+    },
     enabled: !!id,
     refetchInterval: (query) => {
       const status = query.state.data?.status

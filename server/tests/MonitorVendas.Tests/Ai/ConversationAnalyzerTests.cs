@@ -120,20 +120,41 @@ public class ConversationAnalyzerTests(IntegrationTestWebAppFactory factory) : B
         Assert.Equal(1, await InDbAsync(db => db.Set<AiUsage>().CountAsync()));
     }
 
-    // Chegou mensagem nova, a leitura anterior perdeu a validade — e a análise é
-    // substituída, não duplicada.
+    // Chegou mensagem nova: a conversa é reanalisada e a leitura vira uma versão
+    // nova. A anterior fica no banco como histórico, mas deixa de ser a corrente —
+    // só a corrente alimenta planilha e tela.
     [Fact]
-    public async Task Analyze_WhenConversationMoved_AnalyzesAgain()
+    public async Task Analyze_WhenConversationMoved_KeepsThePreviousReadingAsHistory()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        var first = await AnalyzeAsync(Input());
+        var second = await AnalyzeAsync(Input(messageCount: 6, lastMessageAt: new DateTime(2026, 7, 21, 12, 0, 0, DateTimeKind.Utc)));
+
+        Assert.Equal(AnalysisResultKind.Analyzed, second.Kind);
+        Assert.Equal(2, FakeAi.CallCount);
+
+        var all = await InDbAsync(db => db.Set<ConversationAiAnalysis>().OrderBy(a => a.AnalyzedAt).ToListAsync());
+        Assert.Equal(2, all.Count);
+        Assert.Equal(second.Analysis!.Id, Assert.Single(all, a => a.IsCurrent).Id);
+        Assert.False(all.Single(a => a.Id == first.Analysis!.Id).IsCurrent);
+    }
+
+    // O botão de reanalisar da tela ignora o cache de propósito: mesma conversa,
+    // sem mensagem nova, é lida de novo quando o usuário manda.
+    [Fact]
+    public async Task Analyze_WhenForced_IgnoresTheCache()
     {
         await SeedConversationAsync();
         FakeAi.Always(GoodAnswer);
 
         await AnalyzeAsync(Input());
-        var second = await AnalyzeAsync(Input(messageCount: 6, lastMessageAt: new DateTime(2026, 7, 21, 12, 0, 0, DateTimeKind.Utc)));
+        var forced = await AnalyzeAsync(Input() with { Force = true });
 
-        Assert.Equal(AnalysisResultKind.Analyzed, second.Kind);
+        Assert.Equal(AnalysisResultKind.Analyzed, forced.Kind);
         Assert.Equal(2, FakeAi.CallCount);
-        Assert.Equal(1, await InDbAsync(db => db.Set<ConversationAiAnalysis>().CountAsync()));
+        Assert.Equal(1, await InDbAsync(db => db.Set<ConversationAiAnalysis>().CountAsync(a => a.IsCurrent)));
     }
 
     // Sem saldo na janela, nem o prompt é enviado — o bloqueio acontece antes do gasto.

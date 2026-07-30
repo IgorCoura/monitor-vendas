@@ -5,6 +5,7 @@ const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/registry', label: 'Cadastros' },
   { to: '/contacts', label: 'Contatos' },
+  { to: '/ai', label: 'Análises IA' },
   { to: '/labels', label: 'Etiquetas' },
   { to: '/holidays', label: 'Feriados' },
 ]

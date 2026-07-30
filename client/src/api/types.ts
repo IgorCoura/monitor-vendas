@@ -172,6 +172,87 @@ export interface HolidayResponse {
   name: string
 }
 
+export interface AiAnalysisRowDto {
+  conversationId: string
+  analysisId: string
+  sellerId: string | null
+  sellerName: string
+  contactName: string
+  contactPhone: string
+  startedAt: string
+  lastMessageAt: string
+  realOutcome: string | null
+  aiStatus: string | null
+  aiStatusCode: string | null
+  confidence: number
+  divergent: boolean
+  evidence: string | null
+  lossReason: string | null
+  askedForSale: boolean
+  ignoredBuyingSignal: boolean
+  objections: string | null
+  shouldRecontact: boolean
+  recontactReason: string | null
+  suggestedMessage: string | null
+  interest: string | null
+  summary: string | null
+  conductAlert: string | null
+  model: string
+  analyzedAt: string
+  versions: number
+}
+
+export interface AiAnalysisPageDto {
+  items: AiAnalysisRowDto[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface AiSynthesisDto {
+  sellerId: string
+  sellerName: string
+  overview: string | null
+  strengths: string[]
+  improvements: string[]
+  dominantLossPattern: string | null
+  trainingSuggestion: string | null
+  conversationsCount: number
+  model: string
+  createdAt: string
+  stale: boolean
+}
+
+export type AiJobStatus = 'Pending' | 'Running' | 'Completed' | 'Failed'
+
+export interface AiJobDto {
+  id: string
+  kind: 'Analyze' | 'Synthesize'
+  status: AiJobStatus
+  total: number
+  processed: number
+  skipped: number
+  costBrl: number
+  error: string | null
+  createdAt: string
+  completedAt: string | null
+}
+
+export interface AiLossReason {
+  code: string
+  label: string
+}
+
+export interface AiAnalysisFilters {
+  from: string
+  to: string
+  sellerId: string
+  status: string
+  lossReason: string
+  divergent: '' | 'true' | 'false'
+  recontact: '' | 'true' | 'false'
+}
+
 export interface AiBudgetStatus {
   enabled: boolean
   limit: number

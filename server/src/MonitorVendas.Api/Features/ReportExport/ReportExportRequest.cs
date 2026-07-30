@@ -21,6 +21,11 @@ public sealed record ReportExportRequest(
 // Uma linha da aba "IA — Conversas". `Divergent` é a coluna que justifica a
 // feature: IA e etiqueta discordando é etiquetagem esquecida ou errada.
 public sealed record AiConversationRow(
+    Guid ConversationId,
+    Guid? SellerId,
+    // Identidade da leitura: alimenta o hash do cache da síntese e a tela de análises.
+    Guid? AnalysisId,
+    DateTime? AnalyzedAt,
     string SellerName,
     string SellerNumber,
     string ContactName,

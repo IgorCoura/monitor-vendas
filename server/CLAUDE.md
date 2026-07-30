@@ -245,8 +245,34 @@ em 2026-07-30.
   a chave é `MessageCount` + `LastMessageAt`. Conversa que não andou não é
   reanalisada — reexportar o mesmo período custa (quase) zero. É a maior
   economia da feature.
+- **Histórico**: reanalisar **não sobrescreve**. Entra uma linha nova e a anterior
+  perde o `IsCurrent` (índice único **parcial** garante uma corrente por conversa).
+  Tela, planilha e síntese leem só a corrente. **Migração que adiciona `IsCurrent`
+  precisa do backfill para `TRUE`** — sem ele o histórico engole o presente e as
+  análises existentes somem.
 - **`SellerSynthesizer`** roda sobre os resumos, não sobre as conversas cruas:
-  uma chamada por vendedor.
+  uma chamada por vendedor, **com cache** em `seller_ai_syntheses`.
+- **Cache da síntese**: a chave é `SellerId` + hash do **conjunto de ids das
+  análises** que a alimentaram — não o período. O painel manda `to = agora`, que
+  muda a cada minuto, então período como chave nunca acertaria. Só os ids entram
+  no hash: cada reanálise gera id novo, e data seria armadilha porque o
+  `timestamptz` trunca em microssegundos e o valor em memória nunca casaria com o
+  relido. Reexportar o mesmo período agora custa **zero chamadas**.
+- **`ConversationAiWorkset`** carrega conversa + transcrição + contexto para quem
+  precisar (exportação e tela de análises). `AiRowMapper` tem a regra da
+  divergência em um lugar só.
+
+### Tela de análises (`Features/Ai`, rota `/ai` no front)
+
+- `GET /ai/analyses` (paginado, filtros de período, vendedor, status, motivo,
+  divergência e recontato), `GET /ai/syntheses`, `GET /ai/loss-reasons`.
+- **Dois botões, dois jobs** (`ai_jobs`, `AiJobRunner`): `POST /ai/analyses/run`
+  relê as conversas do filtro **ignorando o cache** (`ConversationAnalysisInput.Force`)
+  e `POST /ai/syntheses/run` refaz só a síntese. Separados porque refazer a
+  síntese é barato e não deveria obrigar a repagar a leitura das conversas.
+- A síntese vem marcada **`Stale`** quando o conjunto de leituras correntes do
+  vendedor já não é o que a gerou — parecer descrevendo dado velho, sem aviso, é
+  pior que não ter parecer.
 
 ### Saldo de IA em reais (`Features/Ai`)
 

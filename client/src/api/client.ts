@@ -1,5 +1,10 @@
 import type {
+  AiAnalysisFilters,
+  AiAnalysisPageDto,
   AiBudgetStatus,
+  AiJobDto,
+  AiLossReason,
+  AiSynthesisDto,
   ContactFilters,
   ContactPageDto,
   ContactShareDto,
@@ -73,6 +78,25 @@ function contactQuery(filters: ContactFilters): URLSearchParams {
   return params
 }
 
+function analysisQuery(filters: AiAnalysisFilters): URLSearchParams {
+  const params = new URLSearchParams({ from: filters.from, to: filters.to })
+  if (filters.sellerId) params.set('sellerId', filters.sellerId)
+  if (filters.status) params.set('status', filters.status)
+  if (filters.lossReason) params.set('lossReason', filters.lossReason)
+  if (filters.divergent) params.set('divergent', filters.divergent)
+  if (filters.recontact) params.set('recontact', filters.recontact)
+  return params
+}
+
+function runBody(filters: AiAnalysisFilters, conversationIds: string[]) {
+  return {
+    from: filters.from,
+    to: filters.to,
+    sellerIds: filters.sellerId ? [filters.sellerId] : [],
+    conversationIds,
+  }
+}
+
 export const api = {
   sellers: {
     list: () => request<SellerResponse[]>('/sellers'),
@@ -113,6 +137,22 @@ export const api = {
   },
   ai: {
     budget: () => request<AiBudgetStatus>('/ai/budget'),
+    lossReasons: () => request<AiLossReason[]>('/ai/loss-reasons'),
+    analyses: (filters: AiAnalysisFilters, page: number, pageSize: number) => {
+      const params = analysisQuery(filters)
+      params.set('page', String(page))
+      params.set('pageSize', String(pageSize))
+      return request<AiAnalysisPageDto>(`/ai/analyses?${params}`)
+    },
+    syntheses: (sellerId: string) =>
+      request<AiSynthesisDto[]>(`/ai/syntheses${sellerId ? `?sellerId=${sellerId}` : ''}`),
+    // Os dois botões da tela: reler as conversas do filtro, ou refazer a síntese
+    // a partir das leituras correntes.
+    runAnalyses: (filters: AiAnalysisFilters, conversationIds: string[]) =>
+      request<AiJobDto>('/ai/analyses/run', { method: 'POST', body: JSON.stringify(runBody(filters, conversationIds)) }),
+    runSyntheses: (filters: AiAnalysisFilters) =>
+      request<AiJobDto>('/ai/syntheses/run', { method: 'POST', body: JSON.stringify(runBody(filters, [])) }),
+    job: (id: string) => request<AiJobDto>(`/ai/jobs/${id}`),
   },
   outcomeTypes: {
     list: () => request<OutcomeTypeDto[]>('/outcome-types'),

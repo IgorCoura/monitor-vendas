@@ -34,9 +34,13 @@ builder.Services.AddEvolutionApi(builder.Configuration);
 builder.Services.AddAiProvider(builder.Configuration);
 builder.Services.Configure<AiBudgetOptions>(builder.Configuration.GetSection(AiBudgetOptions.Section));
 builder.Services.AddScoped<AiBudget>();
+builder.Services.AddScoped<ConversationAiWorkset>();
 builder.Services.AddScoped<ConversationAnalyzer>();
 builder.Services.AddScoped<SellerSynthesizer>();
+builder.Services.AddSingleton<IAiJobRunner, AiJobRunner>();
 builder.Services.Configure<ReportExportOptions>(builder.Configuration.GetSection(ReportExportOptions.Section));
+if (builder.Configuration.GetValue("ReportExport:Enabled", true))
+    builder.Services.AddHostedService<AiJobBackgroundService>();
 builder.Services.AddSingleton<IReportExportRunner, ReportExportRunner>();
 if (builder.Configuration.GetValue("ReportExport:Enabled", true))
     builder.Services.AddHostedService<ReportExportBackgroundService>();
@@ -95,6 +99,7 @@ v1.MapContactsEndpoints();
 v1.MapContactShareEndpoints();
 v1.MapAiBudgetEndpoints();
 v1.MapReportExportEndpoints();
+v1.MapAiAnalysisEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

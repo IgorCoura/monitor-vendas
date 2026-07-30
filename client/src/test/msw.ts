@@ -88,6 +88,16 @@ export const mswServer = setupServer(
       { key: 'responseRate', label: 'Taxa de resposta' },
     ]),
   ),
+  http.get('/api/v1/ai/analyses', () =>
+    HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
+  ),
+  http.get('/api/v1/ai/syntheses', () => HttpResponse.json([])),
+  http.get('/api/v1/ai/loss-reasons', () =>
+    HttpResponse.json([
+      { code: 'preco', label: 'Preço' },
+      { code: 'sumiu', label: 'Cliente sumiu' },
+    ]),
+  ),
   http.get('/api/v1/ai/budget', () =>
     HttpResponse.json({
       enabled: true,

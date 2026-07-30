@@ -11,6 +11,10 @@ public class ConversationAiAnalysis
     public int MessageCount { get; set; }
     public DateTime LastMessageAt { get; set; }
 
+    // Leitura anterior não é apagada: vira histórico e permite ver a IA mudando
+    // de opinião. Só a corrente alimenta planilha e tela (índice único parcial).
+    public bool IsCurrent { get; set; } = true;
+
     // Código do catálogo de desfechos, ou `Open` para conversa ainda viva.
     public string StatusCode { get; set; } = string.Empty;
     public double StatusConfidence { get; set; }

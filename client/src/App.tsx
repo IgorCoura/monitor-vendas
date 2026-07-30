@@ -6,6 +6,7 @@ import { RegistryPage } from './features/registry/RegistryPage'
 import { HolidaysPage } from './features/holidays/HolidaysPage'
 import { LabelsPage } from './features/labels/LabelsPage'
 import { ContactsPage } from './features/contacts/ContactsPage'
+import { AiAnalysisPage } from './features/ai/AiAnalysisPage'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/sellers/:id" element={<SellerPage />} />
         <Route path="/registry" element={<RegistryPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
+        <Route path="/ai" element={<AiAnalysisPage />} />
         <Route path="/labels" element={<LabelsPage />} />
         <Route path="/holidays" element={<HolidaysPage />} />
       </Route>

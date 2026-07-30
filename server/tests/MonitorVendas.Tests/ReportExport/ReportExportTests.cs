@@ -387,8 +387,9 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
         Assert.NotNull(created);
     }
 
-    // Reexportar o mesmo período não paga a IA de novo: o cache cobre tudo e o
-    // gasto da janela fica igual.
+    // Reexportar o mesmo período não paga a IA de novo — nem as conversas nem a
+    // síntese. A síntese é chaveada pelo conjunto de análises que a alimentou, e
+    // não pelo período: o painel manda `to` = agora, que muda a cada minuto.
     [Fact]
     public async Task Export_TwiceInARow_DoesNotPayTwice()
     {
@@ -402,8 +403,53 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
         await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
         await RunAsync();
 
-        // A segunda passada só gasta com a síntese por vendedor, nunca com as conversas.
-        Assert.Equal(callsAfterFirst + 1, FakeAi.CallCount);
+        // Zero chamadas novas: nada mudou, então nada é recalculado nem cobrado.
+        Assert.Equal(callsAfterFirst, FakeAi.CallCount);
         Assert.Equal(2, await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.ConversationAiAnalysis>().CountAsync()));
+        Assert.Equal(1, await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>().CountAsync()));
+    }
+
+    // Reanalisar uma conversa muda o conjunto que alimenta a síntese, e ela é
+    // refeita sozinha — sem isso a síntese ficaria descrevendo leituras velhas.
+    [Fact]
+    public async Task Synthesis_WhenAnAnalysisChanges_IsRebuilt()
+    {
+        await SeedAsync();
+        FakeAi.Always(AiAnswer);
+
+        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
+        await RunAsync();
+        var hashBefore = await InDbAsync(db =>
+            db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>().Select(s => s.InputsHash).SingleAsync());
+
+        // Uma conversa recebe mensagem nova: a análise dela é refeita no próximo export.
+        await SeedAsync(db =>
+        {
+            var conversation = db.Set<Conversation>().OrderBy(c => c.StartedAt).First();
+            conversation.LastMessageAt = conversation.LastMessageAt.AddMinutes(5);
+            db.Add(new Message
+            {
+                Id = Guid.NewGuid(),
+                ConversationId = conversation.Id,
+                WhatsappNumberId = NumberId,
+                WaMessageId = "novo-1",
+                Direction = MessageDirection.Inbound,
+                Type = "conversation",
+                Text = "ainda está disponível?",
+                Timestamp = conversation.LastMessageAt,
+            });
+            return Task.CompletedTask;
+        });
+
+        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
+        await RunAsync();
+
+        // Entra uma entrada nova no cache; a antiga continua valendo para o
+        // conjunto de leituras que a gerou.
+        var syntheses = await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>()
+            .OrderBy(s => s.CreatedAt).ToListAsync());
+        Assert.Equal(2, syntheses.Count);
+        Assert.Equal(hashBefore, syntheses[0].InputsHash);
+        Assert.NotEqual(hashBefore, syntheses[1].InputsHash);
     }
 }

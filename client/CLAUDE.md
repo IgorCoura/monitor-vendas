@@ -89,6 +89,13 @@ client/src/
 │   │               #   ShareDialog: envia a mesma lista por WhatsApp ("Nome - número");
 │   │               #   escolhe o número remetente entre os ATIVOS (useAllNumbers) e
 │   │               #   acompanha o progresso por polling enquanto o status é Pending.
+│   ├── ai/         # AiAnalysisPage (rota /ai): lista das leituras da IA já feitas,
+│   │               #   com filtros (período, vendedor, status, motivo, divergência,
+│   │               #   recontato) e painel de sínteses por vendedor — marcadas como
+│   │               #   "Desatualizada" quando as leituras mudaram depois delas.
+│   │               #   Dois botões, dois jobs: "Analisar conversas" relê o filtro
+│   │               #   ignorando o cache; "Refazer síntese" só sintetiza. Ambos
+│   │               #   acompanhados por polling em /ai/jobs/{id}.
 │   ├── reports/    # ExportReportDialog: exportação do relatório em .xlsx. Métricas e
 │   │               #   gráficos vêm de `GET /reports/export/metrics` (nunca hardcoded —
 │   │               #   tipo de desfecho novo aparece sozinho); nada marcado = tudo.

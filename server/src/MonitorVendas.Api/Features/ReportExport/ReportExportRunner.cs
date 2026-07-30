@@ -40,16 +40,6 @@ public sealed class ReportExportRunner(
     private const string NoBudgetReason = "Saldo de IA insuficiente.";
     private const string TimeoutReason = "Prazo da análise por IA esgotado (cota do provedor).";
 
-    private sealed record ConversationRow(
-        Guid Id,
-        Guid NumberId,
-        Guid ContactId,
-        bool StartedByContact,
-        DateTime StartedAt,
-        DateTime LastMessageAt);
-
-    private sealed record NumberRow(Guid Id, string Phone, Guid SellerId, string SellerName);
-
     public async Task<int> ProcessPendingAsync(CancellationToken ct = default)
     {
         var processed = 0;
@@ -165,41 +155,12 @@ public sealed class ReportExportRunner(
         ReportExportRequest request,
         CancellationToken ct)
     {
-        var (conversations, _) = await LoadConversationsAsync(db, request, ct);
+        var (conversations, _) = await LoadWorksetAsync(request, ct);
+
         if (conversations.Count == 0)
             return new AiResult([], [], new AiExportSummary(aiOptions.Value.Model, 0, 0, 0, 0m, DateTime.UtcNow));
 
-        var conversationIds = conversations.Select(c => c.Id).ToList();
-        var numbers = (await NumbersAsync(db, request, ct)).ToDictionary(n => n.Id);
-        var contacts = await db.Set<Contact>().AsNoTracking()
-            .Where(c => conversations.Select(x => x.ContactId).Contains(c.Id))
-            .ToDictionaryAsync(c => c.Id, ct);
-
-        var typeNames = await db.Set<ConversationOutcomeType>().AsNoTracking()
-            .ToDictionaryAsync(t => t.Code, t => t.Name, ct);
-        var catalog = await db.Set<ConversationOutcomeType>().AsNoTracking()
-            .Where(t => t.Active)
-            .OrderBy(t => t.SortOrder)
-            .Select(t => new OutcomeChoice(t.Code, t.Name))
-            .ToListAsync(ct);
-
-        var outcomes = await db.Set<ConversationOutcome>().AsNoTracking()
-            .Where(o => conversationIds.Contains(o.ConversationId))
-            .ToDictionaryAsync(o => o.ConversationId, o => o.OutcomeTypeCode, ct);
-
-        var messages = await db.Set<Message>().AsNoTracking()
-            .Where(m => conversationIds.Contains(m.ConversationId))
-            .OrderBy(m => m.Timestamp)
-            .Select(m => new TranscriptRow(m.ConversationId, m.Direction, m.Timestamp, m.Text, m.Type))
-            .ToListAsync(ct);
-
-        var byConversation = messages.GroupBy(m => m.ConversationId)
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        var calendar = await queries.BuildCalendarAsync(ct);
-        var now = DateTime.UtcNow;
-        var staleAfter = metricsOptions.Value.FollowUpGapBusinessHours;
-
+        var (typeNames, catalog) = await CatalogAsync(ct);
         var analyses = new ConcurrentDictionary<Guid, AnalysisOutcome>();
         var noBudget = false;
         var analyzed = 0;
@@ -227,24 +188,9 @@ public sealed class ReportExportRunner(
 
             var results = await Task.WhenAll(chunk.Select(async conversation =>
             {
-                var rows = byConversation.TryGetValue(conversation.Id, out var list) ? list : [];
-                var contact = contacts.GetValueOrDefault(conversation.ContactId);
-                var silence = calendar.BusinessTimeBetween(conversation.LastMessageAt, now).TotalHours;
-
-                var transcript = TranscriptBuilder.Build(
-                    [.. rows.Select(r => new TranscriptMessage(r.Direction, r.Timestamp, r.Text, r.Type))],
-                    contact?.PushName,
-                    PhoneOf(contact?.RemoteJid),
-                    TimeZoneInfo.FindSystemTimeZoneById(metricsOptions.Value.TimeZone),
-                    conversation.StartedByContact,
-                    silence);
-
-                var input = new ConversationAnalysisInput(
-                    conversation.Id, rows.Count, conversation.LastMessageAt, transcript, silence <= staleAfter);
-
                 using var scope = scopeFactory.CreateScope();
                 var analyzer = scope.ServiceProvider.GetRequiredService<ConversationAnalyzer>();
-                return (conversation.Id, Outcome: await analyzer.AnalyzeAsync(input, catalog, ct));
+                return (conversation.ConversationId, Outcome: await analyzer.AnalyzeAsync(conversation.Input, catalog, ct));
             }));
 
             foreach (var (id, outcome) in results)
@@ -276,38 +222,13 @@ public sealed class ReportExportRunner(
 
         var rowsOut = conversations.Select(conversation =>
         {
-            var number = numbers.GetValueOrDefault(conversation.NumberId);
-            var contact = contacts.GetValueOrDefault(conversation.ContactId);
-            var realCode = outcomes.GetValueOrDefault(conversation.Id);
-            analyses.TryGetValue(conversation.Id, out var outcome);
-            var analysis = outcome?.Analysis;
+            analyses.TryGetValue(conversation.ConversationId, out var outcome);
 
-            var aiCode = analysis?.StatusCode == ConversationAiAnalysis.Open ? null : analysis?.StatusCode;
-
-            return new AiConversationRow(
-                number?.SellerName ?? "—",
-                number?.Phone ?? "—",
-                contact?.PushName ?? PhoneOf(contact?.RemoteJid) ?? "—",
-                PhoneOf(contact?.RemoteJid) ?? "—",
-                conversation.StartedAt,
-                conversation.LastMessageAt,
-                realCode is null ? null : typeNames.GetValueOrDefault(realCode, realCode),
-                analysis is null ? null
-                    : aiCode is null ? "Em andamento" : typeNames.GetValueOrDefault(aiCode, aiCode),
-                analysis?.StatusConfidence,
-                analysis is not null && !string.Equals(aiCode, realCode, StringComparison.OrdinalIgnoreCase),
-                analysis?.StatusEvidence,
-                analysis?.LossReason,
-                analysis?.AskedForSale,
-                analysis?.IgnoredBuyingSignal,
-                analysis?.Objections,
-                analysis?.ShouldRecontact,
-                analysis?.RecontactReason,
-                analysis?.SuggestedMessage,
-                analysis?.Interest,
-                analysis?.Summary,
-                analysis?.ConductAlert,
-                analysis is not null ? null : outcome?.Error ?? skippedReason ?? NoBudgetReason);
+            return AiRowMapper.ToRow(
+                conversation,
+                outcome?.Analysis,
+                typeNames,
+                outcome?.Error ?? skippedReason ?? NoBudgetReason);
         }).ToList();
 
         export.Phase = "Sintetizando vendedores";
@@ -337,29 +258,63 @@ public sealed class ReportExportRunner(
 
         var syntheses = new List<SellerSynthesis>();
 
-        foreach (var group in rows.Where(r => r.Summary is not null).GroupBy(r => r.SellerName))
+        foreach (var group in rows.Where(r => r.Summary is not null && r.SellerId is not null).GroupBy(r => r.SellerId!.Value))
         {
             // Cada síntese pode esperar cota; passado o prazo, o resto sai sem ela.
+            // O cache não espera nada, então só o que vai chamar a IA é cortado.
             if (DateTime.UtcNow >= deadline)
                 break;
 
             using var scope = scopeFactory.CreateScope();
             var synthesizer = scope.ServiceProvider.GetRequiredService<SellerSynthesizer>();
-
-            var lines = group.Select(r =>
-                $"{r.AiStatus ?? "—"} | {AiSheetsWriter.FriendlyLossReason(r.LossReason) ?? "—"} | {r.Summary}").ToList();
-            var summary = string.Join('\n', new[]
-            {
-                $"Conversas auditadas: {lines.Count}",
-                $"Pediu a venda em: {group.Count(r => r.AskedForSale == true)}",
-                $"Sinais de compra ignorados: {group.Count(r => r.IgnoredBuyingSignal == true)}",
-            });
-
-            var input = new SellerSynthesisInput(Guid.Empty, group.Key, summary, lines);
-            syntheses.Add(await synthesizer.SynthesizeAsync(input, ct));
+            syntheses.Add(await synthesizer.SynthesizeAsync(BuildSynthesisInput(group.Key, [.. group]), ct: ct));
         }
 
         return syntheses;
+    }
+
+    // O carregamento das conversas mora no ConversationAiWorkset: a tela de
+    // análises usa exatamente o mesmo, e duplicar era garantir divergência.
+    private async Task<(List<ConversationContext> Items, bool Truncated)> LoadWorksetAsync(
+        ReportExportRequest request,
+        CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var workset = scope.ServiceProvider.GetRequiredService<ConversationAiWorkset>();
+
+        return await workset.LoadAsync(
+            new ConversationAiFilter(request.From, request.To, request.SellerIds, options.Value.MaxConversationsPerExport),
+            ct);
+    }
+
+    private async Task<(Dictionary<string, string> TypeNames, List<OutcomeChoice> Catalog)> CatalogAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var workset = scope.ServiceProvider.GetRequiredService<ConversationAiWorkset>();
+
+        return (await workset.TypeNamesAsync(ct), await workset.CatalogAsync(ct));
+    }
+
+    // As linhas que alimentam a síntese também definem a chave do cache dela.
+    internal static SellerSynthesisInput BuildSynthesisInput(Guid sellerId, IReadOnlyList<AiConversationRow> rows)
+    {
+        var lines = rows
+            .Select(r => $"{r.AiStatus ?? "—"} | {AiSheetsWriter.FriendlyLossReason(r.LossReason) ?? "—"} | {r.Summary}")
+            .ToList();
+
+        var summary = string.Join('\n', new[]
+        {
+            $"Conversas auditadas: {lines.Count}",
+            $"Pediu a venda em: {rows.Count(r => r.AskedForSale == true)}",
+            $"Sinais de compra ignorados: {rows.Count(r => r.IgnoredBuyingSignal == true)}",
+        });
+
+        var analyses = rows
+            .Where(r => r.AnalysisId is not null && r.AnalyzedAt is not null)
+            .Select(r => new AnalysisRef(r.AnalysisId!.Value, r.AnalyzedAt!.Value))
+            .ToList();
+
+        return new SellerSynthesisInput(sellerId, rows[0].SellerName, summary, lines, analyses);
     }
 
     public async Task<ReportExportEstimate> EstimateAsync(ReportExportRequest request, CancellationToken ct = default)
@@ -373,88 +328,45 @@ public sealed class ReportExportRunner(
         if (!request.IncludeAi)
             return new ReportExportEstimate(0, 0, 0, 0m, status.Available, true, false);
 
-        var (conversations, truncated) = await LoadConversationsAsync(db, request, ct);
-        var ids = conversations.Select(c => c.Id).ToList();
-
-        var sizes = await db.Set<Message>().AsNoTracking()
-            .Where(m => ids.Contains(m.ConversationId))
-            .GroupBy(m => m.ConversationId)
-            .Select(g => new { ConversationId = g.Key, Count = g.Count(), Chars = g.Sum(m => (m.Text ?? "").Length) })
-            .ToDictionaryAsync(x => x.ConversationId, ct);
+        var (conversations, truncated) = await LoadWorksetAsync(request, ct);
+        var ids = conversations.Select(c => c.ConversationId).ToList();
 
         var done = await db.Set<ConversationAiAnalysis>().AsNoTracking()
-            .Where(a => ids.Contains(a.ConversationId))
+            .Where(a => ids.Contains(a.ConversationId) && a.IsCurrent)
             .Select(a => new { a.ConversationId, a.MessageCount, a.LastMessageAt })
             .ToListAsync(ct);
 
-        var cachedIds = done
-            .Where(a => sizes.TryGetValue(a.ConversationId, out var size) && size.Count == a.MessageCount &&
-                        conversations.Any(c => c.Id == a.ConversationId && c.LastMessageAt == a.LastMessageAt))
-            .Select(a => a.ConversationId)
+        var cachedIds = conversations
+            .Where(c => done.Any(a => a.ConversationId == c.ConversationId &&
+                                      a.MessageCount == c.Input.MessageCount &&
+                                      a.LastMessageAt == c.LastMessageAt))
+            .Select(c => c.ConversationId)
             .ToHashSet();
 
         var settings = aiOptions.Value;
         var estimate = 0m;
-        foreach (var conversation in conversations.Where(c => !cachedIds.Contains(c.Id)))
+
+        // A transcrição já vem montada pelo workset, então a estimativa usa o
+        // prompt de verdade em vez de um palpite pelo tamanho das mensagens.
+        foreach (var conversation in conversations.Where(c => !cachedIds.Contains(c.ConversationId)))
         {
-            // O prompt é a transcrição mais o cabeçalho de instruções — sem montar
-            // a transcrição de verdade, que custaria a exportação inteira só para
-            // mostrar um preço na tela.
-            var chars = sizes.GetValueOrDefault(conversation.Id)?.Chars ?? 0;
-            var prompt = new string('x', chars + AiAnalysisSchema.SystemPrompt.Length + 600);
+            var prompt = AiAnalysisSchema.SystemPrompt + conversation.Input.Transcript;
             estimate += calculator.EstimateBrl(settings.Model, prompt, settings.MaxOutputTokens, budget.MarginPercent);
         }
 
-        var sellers = (await NumbersAsync(db, request, ct)).Select(n => n.SellerId).Distinct().Count();
-        estimate += sellers * calculator.EstimateBrl(settings.Model, new string('x', 4_000), 700, budget.MarginPercent);
+        // A síntese só custa quando o conjunto de leituras do vendedor muda.
+        var sellersToSynthesize = conversations
+            .Where(c => c.SellerId is not null && !cachedIds.Contains(c.ConversationId))
+            .Select(c => c.SellerId)
+            .Distinct()
+            .Count();
+        estimate += sellersToSynthesize *
+            calculator.EstimateBrl(settings.Model, new string('x', 4_000), settings.MaxOutputTokens, budget.MarginPercent);
 
         var toAnalyze = conversations.Count - cachedIds.Count;
         return new ReportExportEstimate(
             conversations.Count, cachedIds.Count, toAnalyze, estimate,
             status.Available, !status.Enabled || estimate <= status.Available, truncated);
-    }
-
-    private sealed record TranscriptRow(Guid ConversationId, MessageDirection Direction, DateTime Timestamp, string? Text, string Type);
-
-    private async Task<(List<ConversationRow> Conversations, bool Truncated)> LoadConversationsAsync(
-        AppDbContext db,
-        ReportExportRequest request,
-        CancellationToken ct)
-    {
-        var numberIds = (await NumbersAsync(db, request, ct)).Select(n => n.Id).ToList();
-        var max = Math.Max(1, options.Value.MaxConversationsPerExport);
-
-        var conversations = await db.Set<Conversation>().AsNoTracking()
-            .Where(c => numberIds.Contains(c.WhatsappNumberId) &&
-                        c.LastMessageAt >= request.From && c.StartedAt <= request.To)
-            .OrderByDescending(c => c.LastMessageAt)
-            .Take(max + 1)
-            .Select(c => new ConversationRow(c.Id, c.WhatsappNumberId, c.ContactId, c.StartedByContact, c.StartedAt, c.LastMessageAt))
-            .ToListAsync(ct);
-
-        var truncated = conversations.Count > max;
-        if (truncated)
-            conversations.RemoveAt(conversations.Count - 1);
-
-        return (conversations, truncated);
-    }
-
-    private static async Task<List<NumberRow>> NumbersAsync(AppDbContext db, ReportExportRequest request, CancellationToken ct)
-    {
-        var numbers = db.Set<WhatsappNumber>().AsNoTracking();
-
-        // O filtro tem que vir antes da projeção: sobre o NumberRow já montado, o
-        // EF não traduz o Contains e a exportação estoura em 500.
-        if (request.SellerIds.Count > 0)
-        {
-            var sellerIds = request.SellerIds.ToList();
-            numbers = numbers.Where(n => sellerIds.Contains(n.SellerId));
-        }
-
-        return await numbers
-            .Join(db.Set<Seller>().AsNoTracking(), n => n.SellerId, s => s.Id,
-                (n, s) => new NumberRow(n.Id, n.Phone, s.Id, s.Name))
-            .ToListAsync(ct);
     }
 
     private async Task PurgeExpiredAsync(CancellationToken ct)
@@ -467,9 +379,6 @@ public sealed class ReportExportRunner(
             .Where(e => e.CompletedAt != null && e.CompletedAt < cutoff && e.File != null)
             .ExecuteUpdateAsync(s => s.SetProperty(e => e.File, (byte[]?)null), ct);
     }
-
-    private static string? PhoneOf(string? remoteJid) =>
-        remoteJid is null ? null : new string([.. remoteJid.TakeWhile(c => c is not '@' and not ':').Where(char.IsDigit)]);
 
     internal static string FileNameFor(DateTime from, DateTime to, TimeZoneInfo timeZone) =>
         $"relatorio-{ReportWorkbookWriter.Local(from, timeZone):yyyy-MM-dd}-a-{ReportWorkbookWriter.Local(to, timeZone):yyyy-MM-dd}.xlsx";
