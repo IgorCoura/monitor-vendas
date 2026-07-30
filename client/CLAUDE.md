@@ -1,0 +1,117 @@
+# CLAUDE.md — client (Monitor de Vendas)
+
+Front-end do monitor de desempenho de vendedores. Consome a API REST em
+`../server` (ver o CLAUDE.md de lá para o domínio e os índices).
+
+## Stack
+
+- **Vite + React 19 + TypeScript** (strict; `erasableSyntaxOnly` ativo — sem
+  parameter properties em classes).
+- **Tailwind CSS v4** (plugin `@tailwindcss/vite`; tema via `@theme` em
+  `src/index.css`) — sem shadcn/CLI; componentes próprios em `src/components/ui.tsx`.
+- **Recharts** para gráficos; **TanStack Query** para dados; **React Router**
+  para as 4 rotas.
+
+## Atualização dos dados (sem refresh do navegador)
+
+- **`UpdateControls`** (componente compartilhado, à esquerda dos botões de
+  período no dashboard e na página do vendedor): mostra a data/hora da última
+  busca (`dataUpdatedAt` da query), botão de **atualização manual** (ícone de
+  refresh, gira enquanto `isFetching`) e a escolha do **intervalo automático**
+  (1min / 5min / 10min / Off), persistida em `mv:pollMs` (`lib/polling.ts`).
+- O intervalo escolhido é passado para `useRanking`/`useSellerReport`
+  (`refetchInterval`); **não há `refetchInterval` global** no QueryClient — as
+  queries de cadastro não fazem polling, são invalidadas pelas mutações.
+  `refetchOnWindowFocus` (default do TanStack Query) segue ativo.
+- **`usePeriodRange(pollMs)` (lib/) é obrigatório para montar o intervalo do
+  relatório.** O `to` avança junto com o polling (e na hora, via `refreshNow`,
+  na atualização manual); com o polling **Off** a janela fica congelada de
+  propósito. Nunca calcular `rangeForPeriod(period)` uma vez num `useMemo` — o
+  `to` entra na queryKey e, congelado, faz a atualização repetir sempre a mesma
+  janela, escondendo mensagens que chegaram depois de a página abrir (bug
+  corrigido em 2026-07-30).
+- Atualização manual = `refreshNow()` (reposiciona a janela) + `refetch()`
+  (força a busca mesmo se a queryKey não mudou, dentro do mesmo minuto).
+
+## Estado persistido vs. efêmero
+
+Persistido em `localStorage` (via `lib/usePersistedState`, sempre com função
+`sanitize` quando o valor é chave/enum, para valor velho não quebrar a tela):
+
+| Chave | Conteúdo |
+|---|---|
+| `mv:period` | período selecionado, **compartilhado** entre dashboard e página do vendedor |
+| `mv:pollMs` | intervalo de atualização automática (60000/300000/600000/`null` = Off) |
+| `mv:dash:charts` | lista de gráficos abertos e sua métrica (`sanitizeChartKeys`) |
+| `mv:dash:hiddenKpis` / `mv:dash:hiddenColumns` | itens **ocultos** (não os visíveis) |
+| `mv:dash:chartLayout` | lista / grade 2 / grade 3 |
+
+Efêmero por design: dialogs abertos, formulários, QR code exibido.
+- **Vitest + React Testing Library + MSW** para testes (`npm test`).
+- Sem autenticação (decisão do produto).
+
+## Tema rosa talco
+
+Tokens em `src/index.css` (`@theme`): `surface #FAF3F1`, `card #FFF`,
+`edge #F0DEDA`, `ink #43363B`, `ink-muted #8A7379`, `primary #C25E77`
+(+ `primary-strong/soft`), status `ok/warn/danger` (+ `-soft`). Texto nunca
+usa cor de série de gráfico; badges de status sempre têm rótulo textual.
+
+**Paleta de gráficos** (`src/lib/palette.ts`): ordem FIXA `#C25E77, #4C86C6,
+#C67947, #8E6BAE, #4E9D57` — validada pelo `validate_palette.js` da skill
+`dataviz` sobre `#FAF3F1` (todas as 6 checagens PASS). Não reordenar nem
+ciclar; série única não leva legenda; ≥2 séries levam `<Legend>`. Antes de
+criar/alterar gráficos, invoque a skill `dataviz`.
+
+## Estrutura
+
+```
+client/src/
+├── api/            # types.ts (espelho dos DTOs), client.ts (fetch + ApiError), queries.ts (hooks)
+├── components/     # Layout (sidebar), ui.tsx (Card/Button/Input/Badge/Dialog/estados), KpiCard
+├── features/
+│   ├── dashboard/  # KPIs do time + gráficos de ranking empilháveis (métrica EXCLUSIVA
+│   │               #   por gráfico: escolher uma usada em outro faz swap; "+ Adicionar
+│   │               #   gráfico" pega a próxima métrica livre de lib/metrics.ts).
+│   │               #   Personalização em 3 botões contextuais, cada um com seu dialog:
+│   │               #   "Personalizar" (topo) = métricas globais; "Personalizar colunas"
+│   │               #   (cabeçalho de "Todos os índices") = colunas da lista; "Organização"
+│   │               #   (ícone de grid, ao lado de "+ Adicionar gráfico") = lista/grade 2/
+│   │               #   grade 3. Tudo persistido como listas de OCULTOS em localStorage
+│   │               #   (lib/usePersistedState) — item novo aparece por default
+│   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
+│   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
+│   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
+│   └── holidays/   # cadastro de feriados
+├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts
+└── test/           # setup (MSW + ResizeObserver stub), msw.ts (handlers + factories), render.tsx
+```
+
+## Convenções
+
+- Página segue o padrão: seletor de período (Hoje/7/30/90, `periodOptions` em
+  lib/format.ts) → `Spinner`/`ErrorState` → conteúdo; agregados do time são
+  recalculados a partir de somas (nunca média de taxas; médias por hora =
+  soma de mensagens ÷ soma de `effectiveBusinessHours`).
+- **Toda métrica exibida leva o `InfoTip` ("?")** com o texto de
+  `lib/metrics.ts#metricHelp` — os textos espelham o `MetricsCalculator` do
+  server; mudou a regra lá, atualize aqui.
+- **Tipos de desfecho são dinâmicos**: vêm em `metrics.outcomes` do relatório e
+  viram card (`kpi-outcome:<code>`), coluna e opção de gráfico
+  (`outcome:<code>`) automaticamente — **não adicionar tipo hardcoded aqui**;
+  o catálogo é editado na tela `/labels`. `sale` já aparece como "Vendas" nos
+  campos fixos, então é filtrado da lista dinâmica para não duplicar.
+- Erros da API: `ApiError` carrega o `error`/`title` do corpo — exibir a
+  mensagem, não engolir.
+- **Todo teste tem comentário de uma linha em português** acima do caso
+  (mesma regra do server). Testes de página usam `renderWithProviders` +
+  `mswServer.use(...)`; MSW roda com `onUnhandledRequest: 'error'`.
+- Toda alteração exige `npm run build` (type-check) e `npm test` verdes antes
+  de encerrar a tarefa.
+
+## Build, Run & Test
+
+- Dev: `npm run dev` (proxy `/api` → `localhost:8080`; suba a API antes).
+- Testes: `npm test` · Build: `npm run build`.
+- Produção: serviço `client` no `../server/docker-compose.yml` (nginx na
+  porta 3000, proxy `/api` → `api:8080` — mesmo host, sem CORS).

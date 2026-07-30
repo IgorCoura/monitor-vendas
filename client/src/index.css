@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Tema rosa talco: fundo rosado muito claro, cards brancos, acento rosa
+   empoeirado e tinta cinza-ameixa. Cores de série de gráfico vivem em
+   src/lib/palette.ts (validadas pelo validador da skill dataviz). */
+@theme {
+  --color-surface: #faf3f1;
+  --color-card: #ffffff;
+  --color-edge: #f0deda;
+  --color-ink: #43363b;
+  --color-ink-muted: #8a7379;
+  --color-primary: #c25e77;
+  --color-primary-strong: #a94a62;
+  --color-primary-soft: #f6e3e7;
+  --color-ok: #2e7d43;
+  --color-ok-soft: #e4f1e6;
+  --color-warn: #9a6a1f;
+  --color-warn-soft: #f7ecd8;
+  --color-danger: #b3453e;
+  --color-danger-soft: #f8e4e2;
+}
+
+body {
+  @apply bg-surface text-ink antialiased;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}

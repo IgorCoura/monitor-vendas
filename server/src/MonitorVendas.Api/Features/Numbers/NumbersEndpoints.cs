@@ -1,0 +1,127 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Sellers;
+using MonitorVendas.Api.Features.Webhooks;
+using MonitorVendas.Api.Integrations.Evolution;
+
+namespace MonitorVendas.Api.Features.Numbers;
+
+public static class NumbersEndpoints
+{
+    public static RouteGroupBuilder MapNumbersEndpoints(this RouteGroupBuilder group)
+    {
+        group.MapPost("/sellers/{sellerId:guid}/numbers", async (
+            Guid sellerId,
+            CreateNumberRequest request,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            IOptions<WebhookOptions> webhookOptions,
+            CancellationToken ct) =>
+        {
+            var phone = new string([.. (request.Phone ?? "").Where(char.IsDigit)]);
+            if (phone.Length < 10)
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["phone"] = ["Informe o telefone com DDI e DDD, apenas dígitos (ex.: 5511999999999)."]
+                });
+
+            var sellerExists = await db.Set<Seller>().AnyAsync(s => s.Id == sellerId, ct);
+            if (!sellerExists)
+                return Results.NotFound();
+
+            var phoneInUse = await db.Set<WhatsappNumber>().AnyAsync(n => n.Phone == phone, ct);
+            if (phoneInUse)
+                return Results.Conflict(new { error = "Este telefone já está cadastrado." });
+
+            var instanceName = $"mv-{phone}";
+
+            EvolutionApiClient.QrCode qr;
+            try
+            {
+                await evolution.CreateInstanceAsync(instanceName, phone, ct);
+                await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                qr = await evolution.ConnectAsync(instanceName, ct);
+            }
+            catch (HttpRequestException)
+            {
+                return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+            }
+
+            var number = new WhatsappNumber
+            {
+                Id = Guid.NewGuid(),
+                SellerId = sellerId,
+                Phone = phone,
+                InstanceName = instanceName,
+                Status = NumberStatus.Disconnected,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            db.Add(number);
+            await db.SaveChangesAsync(ct);
+
+            return Results.Created($"/api/v1/sellers/{sellerId}/numbers",
+                new CreateNumberResponse(NumberResponse.From(number), new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode)));
+        });
+
+        group.MapGet("/sellers/{sellerId:guid}/numbers", async (Guid sellerId, AppDbContext db, CancellationToken ct) =>
+        {
+            var sellerExists = await db.Set<Seller>().AnyAsync(s => s.Id == sellerId, ct);
+            if (!sellerExists)
+                return Results.NotFound();
+
+            var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
+                .Where(n => n.SellerId == sellerId)
+                .OrderBy(n => n.CreatedAt)
+                .ToListAsync(ct);
+
+            return Results.Ok(numbers.Select(NumberResponse.From));
+        });
+
+        // Reconexão (pós logout/ban temporário): gera um novo QR para o mesmo número.
+        group.MapPost("/numbers/{id:guid}/connect", async (
+            Guid id,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            try
+            {
+                var qr = await evolution.ConnectAsync(number.InstanceName, ct);
+                return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode));
+            }
+            catch (HttpRequestException)
+            {
+                return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        // Promoção manual a ban permanente: o WhatsApp não distingue ban temporário
+        // de permanente no statusReason; quem confirma a perda definitiva é o operador.
+        group.MapPost("/numbers/{id:guid}/ban-permanent", async (Guid id, AppDbContext db, CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            number.Status = NumberStatus.BannedPermanent;
+            db.Add(new NumberStatusEvent
+            {
+                WhatsappNumberId = number.Id,
+                State = "manual",
+                ResultingStatus = NumberStatus.BannedPermanent,
+                OccurredAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(NumberResponse.From(number));
+        });
+
+        return group;
+    }
+}

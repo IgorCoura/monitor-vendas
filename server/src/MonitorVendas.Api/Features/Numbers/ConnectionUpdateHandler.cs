@@ -1,0 +1,65 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Conversations;
+using MonitorVendas.Api.Features.Metrics;
+using MonitorVendas.Api.Features.Webhooks;
+
+namespace MonitorVendas.Api.Features.Numbers;
+
+// statusReason 403 = conta banida pelo WhatsApp (Baileys). Ban começa como temporário;
+// a promoção a permanente é decisão manual (POST /numbers/{id}/ban-permanent).
+public sealed class ConnectionUpdateHandler(IDirtyDayTracker dirtyDays) : IWebhookEventHandler
+{
+    public string EventType => "CONNECTION_UPDATE";
+
+    public async Task HandleAsync(WebhookEvent evt, AppDbContext db, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(evt.Payload);
+        if (WebhookPayload.GetData(evt.Payload, doc) is not { } data)
+            return;
+
+        var state = WebhookPayload.GetString(data, "state")?.ToLowerInvariant();
+        if (state is not ("open" or "close"))
+            return;
+
+        var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.InstanceName == evt.InstanceName, ct);
+        if (number is null)
+            return;
+
+        int? statusReason = data.TryGetProperty("statusReason", out var reason) && reason.TryGetInt32(out var code)
+            ? code
+            : null;
+
+        var newStatus = Resolve(state, statusReason, number.Status);
+        number.Status = newStatus;
+
+        var occurredAt = WebhookPayload.GetEnvelopeTime(doc, evt.ReceivedAt);
+        db.Add(new NumberStatusEvent
+        {
+            WhatsappNumberId = number.Id,
+            State = state,
+            StatusReason = statusReason,
+            ResultingStatus = newStatus,
+            OccurredAt = occurredAt
+        });
+
+        // Downtime/uptime do dia mudou.
+        await dirtyDays.MarkAsync(db, number.Id, occurredAt, ct);
+    }
+
+    private static NumberStatus Resolve(string state, int? statusReason, NumberStatus current)
+    {
+        if (state == "open")
+            return NumberStatus.Active;
+
+        if (statusReason == 403)
+            return current == NumberStatus.BannedPermanent ? current : NumberStatus.BannedTemporary;
+
+        // close sem reason (ex.: sintetizado pela reconciliação) não rebaixa um ban já registrado.
+        if (statusReason is null && current is NumberStatus.BannedTemporary or NumberStatus.BannedPermanent)
+            return current;
+
+        return NumberStatus.Disconnected;
+    }
+}

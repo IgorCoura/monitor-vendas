@@ -1,0 +1,67 @@
+services:
+  client:
+    build:
+      context: ../client
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MonitorVendas.Api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=monitor_vendas;Username=postgres;Password=postgres
+      Evolution__BaseUrl: ${EVOLUTION_BASE_URL:-http://evolution:8080/}
+      Evolution__ApiKey: ${EVOLUTION_API_KEY:-dev-key}
+      Webhook__Secret: ${WEBHOOK_SECRET:-dev-secret}
+      Webhook__PublicBaseUrl: ${WEBHOOK_PUBLIC_BASE_URL:-http://api:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  evolution:
+    image: evoapicloud/evolution-api:latest
+    ports:
+      - "8081:8080"
+    environment:
+      SERVER_URL: http://localhost:8081
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-dev-key}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://postgres:postgres@postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      CACHE_LOCAL_ENABLED: "true"
+      CACHE_REDIS_ENABLED: "false"
+      CONFIG_SESSION_PHONE_CLIENT: MonitorVendas
+      LOG_LEVEL: ERROR
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: monitor_vendas
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # 5433 no host: a máquina de dev tem um PostgreSQL 12 local ocupando a 5432.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d monitor_vendas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  evolution_instances:
