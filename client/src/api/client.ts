@@ -25,7 +25,11 @@ import type {
   SellerResponse,
 } from './types'
 
-const BASE = '/api/v1'
+// Relativo por default: o navegador chama a própria origem e o nginx encaminha
+// /api para a API, sem CORS. Uma URL absoluta aqui é gravada no bundle e vale
+// para aquele build — para trocar o destino sem rebuild, use API_URL no
+// container do front, que é lido pelo nginx a cada start.
+const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
 export class ApiError extends Error {
   readonly status: number

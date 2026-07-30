@@ -183,3 +183,26 @@ client/src/
 - Testes: `npm test` · Build: `npm run build`.
 - Produção: serviço `client` no `../server/docker-compose.yml` (nginx na
   porta 3000, proxy `/api` → `api:8080` — mesmo host, sem CORS).
+
+## Onde mora a URL da API (duas variáveis, e a diferença importa)
+
+| Variável | Quando é lida | Para quê |
+|---|---|---|
+| **`API_URL`** | **a cada start do container** | destino do proxy `/api` do nginx. Default `http://api:8080` |
+| **`VITE_API_BASE_URL`** | **no build** (fica no bundle) | base que o navegador chama. Default `/api/v1` |
+
+**Use `API_URL` para trocar de destino.** O `nginx.conf.template` vira
+`default.conf` no start (entrypoint do nginx + `envsubst`), então mudar a
+variável no orquestrador e reiniciar basta — sem rebuild. É o que resolve
+front e API como **serviços separados**, onde o hostname `api` não resolve.
+
+`NGINX_ENVSUBST_FILTER=^API_URL$` no Dockerfile **não é opcional**: sem ele o
+`envsubst` substituiria também `$host`, `$uri` e `$proxy_add_x_forwarded_for`,
+que são variáveis do nginx, e a config sai quebrada.
+
+`API_URL` **não termina com barra** — com barra, o `proxy_pass` remove o prefixo
+`/api` e todas as rotas dão 404.
+
+`VITE_API_BASE_URL` só serve se o navegador tiver de falar com **outro domínio**.
+Como é gravado no bundle, o mesmo container não serve dois ambientes, e a API
+passa a precisar de `Cors__AllowedOrigins__0`. No arranjo padrão não se mexe.
