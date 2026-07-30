@@ -335,7 +335,7 @@ export function ExportReportDialog({
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
-                className="mt-1"
+                className="mt-1 h-4 w-4 shrink-0"
                 checked={includeAudio}
                 onChange={(e) => setIncludeAudio(e.target.checked)}
                 aria-label="Enviar áudios das conversas"

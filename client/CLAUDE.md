@@ -65,8 +65,9 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   quando o componente é outro (tabela × cards, botões × `<select>`). Nunca
   duplicar a lógica da página.
 - **Navegação**: sidebar some abaixo de `md` e entra a `components/mobile/BottomNav`
-  (barra inferior fixa, mesmas 5 rotas). O conteúdo reserva a altura dela com a
-  classe `pb-nav`.
+  (barra inferior fixa, as mesmas 6 rotas, com rótulos curtos — "Painel", "IA").
+  O conteúdo reserva a altura dela com a classe `pb-nav`. **Rota nova entra nos
+  dois lugares**: `links` do `Layout` e `items` do `BottomNav`.
 - **`Dialog` vira bottom sheet** abaixo de `md`: colado embaixo, `max-h-[90dvh]`
   (**`dvh`, nunca `vh`** — no celular o `vh` ignora a barra de URL e joga o
   rodapé para fora da tela), rolagem do fundo travada, Escape fecha. Botão de
@@ -78,7 +79,12 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   fora ou rolar. Toda métrica continua com a explicação acessível.
 - **Tabelas viram cards** (`components/mobile/MetricList`): `MetricList` para
   rótulo→valor e `ExpandableMetricCard` para uma linha da tabela com "ver mais".
-  As colunas exibidas são exatamente as `visibleColumns` da tabela.
+  As colunas exibidas são exatamente as `visibleColumns` da tabela. Quando o
+  conteúdo escondido não é rótulo→valor (o detalhe da IA é texto corrido), ele
+  vai na prop `details`.
+- **Filtros longos viram folha "Filtros (n)"** — é assim em `/contacts` (4
+  filtros) e em `/ai` (7). O contador conta só o que o usuário estreitou; data
+  sempre tem valor e não entra.
 - **Testes**: `jsdom` não tem `matchMedia` — o stub vive em `test/viewport.ts`,
   instalado no `test/setup.ts` com **desktop como default**. Para testar a versão
   de celular use `renderMobile()` (`test/render.tsx`); o `setup.ts` devolve para

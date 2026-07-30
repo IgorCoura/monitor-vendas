@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AiAnalysisPage } from './AiAnalysisPage'
-import { renderWithProviders } from '../../test/render'
+import { renderMobile, renderWithProviders } from '../../test/render'
 import { http, HttpResponse, mswServer, seller } from '../../test/msw'
 import type { AiAnalysisRowDto } from '../../api/types'
 
@@ -158,5 +158,65 @@ describe('AiAnalysisPage', () => {
     const panel = await screen.findByTestId('ai-syntheses')
     expect(within(panel).getByText('Desatualizada')).toBeInTheDocument()
     expect(within(panel).getByText('responde rápido')).toBeInTheDocument()
+  })
+
+  describe('no celular', () => {
+    // Oito colunas nao cabem em 360px: cada conversa vira um card com os mesmos campos.
+    it('troca a tabela por cards', async () => {
+      mswServer.use(analysesHandler())
+
+      renderMobile(<AiAnalysisPage />)
+
+      const cards = await screen.findByTestId('analyses-cards')
+      expect(screen.queryByTestId('analyses-table')).not.toBeInTheDocument()
+      expect(within(cards).getByText('Maria')).toBeInTheDocument()
+      expect(within(cards).getByText('Clientes perdidos')).toBeInTheDocument()
+      expect(within(cards).getByText('Sim')).toBeInTheDocument()
+    })
+
+    // O detalhe (evidencia, mensagem sugerida) e o que torna a analise acionavel:
+    // no card ele abre pelo mesmo botao de expandir.
+    it('abre o detalhe dentro do card', async () => {
+      mswServer.use(analysesHandler())
+
+      renderMobile(<AiAnalysisPage />)
+      const user = userEvent.setup()
+      const cards = await screen.findByTestId('analyses-cards')
+
+      expect(screen.queryByText(/achei caro/)).not.toBeInTheDocument()
+
+      await user.click(within(cards).getByRole('button', { name: /ver o que a IA leu/ }))
+
+      expect(screen.getByText(/achei caro/)).toBeInTheDocument()
+      expect(screen.getByText(/consigo melhorar a condição/)).toBeInTheDocument()
+    })
+
+    // Sete campos de filtro na tela empurrariam a primeira analise para fora dela:
+    // eles vao para uma folha, com a contagem dos ativos no botao.
+    it('abre os filtros numa folha e conta os ativos', async () => {
+      const ana = seller('Ana')
+      let lastUrl: URL | null = null
+      mswServer.use(
+        http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+        analysesHandler((url) => {
+          lastUrl = url
+        }),
+      )
+
+      renderMobile(<AiAnalysisPage />)
+      const user = userEvent.setup()
+      await screen.findByTestId('analyses-cards')
+
+      expect(screen.queryByTestId('ai-filters')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Filtros' }))
+      await user.selectOptions(
+        within(screen.getByTestId('ai-filters')).getByLabelText('Divergência'),
+        'true',
+      )
+
+      await waitFor(() => expect(lastUrl!.searchParams.get('divergent')).toBe('true'))
+      expect(screen.getByRole('button', { name: 'Filtros (1)' })).toBeInTheDocument()
+    })
   })
 })

@@ -12,8 +12,8 @@ function renderAt(route: string) {
 }
 
 describe('BottomNav', () => {
-  // A barra inferior leva às mesmas cinco rotas da sidebar do desktop.
-  it('lista as cinco rotas do app', () => {
+  // A barra inferior leva às mesmas rotas da sidebar do desktop, na mesma ordem.
+  it('lista as rotas do app', () => {
     renderAt('/')
 
     const nav = screen.getByTestId('bottom-nav')
@@ -22,6 +22,7 @@ describe('BottomNav', () => {
       '/',
       '/registry',
       '/contacts',
+      '/ai',
       '/labels',
       '/holidays',
     ])

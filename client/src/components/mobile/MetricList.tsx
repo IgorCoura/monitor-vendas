@@ -10,12 +10,15 @@ export function MetricList({ items }: { items: MetricItem[] }) {
   return (
     <dl className="divide-y divide-edge/60 text-sm">
       {items.map((item) => (
+        // O rótulo é sempre curto e não encolhe; quem quebra linha é o valor.
+        // Com `shrink-0` no valor, um resumo de uma frase (a leitura da IA)
+        // empurrava o card e a página inteira ganhava rolagem lateral.
         <div key={item.key} className="flex items-start justify-between gap-3 py-2">
-          <dt className="flex min-w-0 items-center gap-1.5 text-ink-muted">
-            <span className="min-w-0">{item.label}</span>
+          <dt className="flex shrink-0 items-center gap-1.5 text-ink-muted">
+            {item.label}
             {item.help && <InfoTip text={item.help} />}
           </dt>
-          <dd className="shrink-0 text-right font-medium text-ink">{item.value}</dd>
+          <dd className="min-w-0 text-right font-medium break-words text-ink">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -28,23 +31,28 @@ export function MetricList({ items }: { items: MetricItem[] }) {
 export function ExpandableMetricCard({
   title,
   items,
+  details,
   previewCount = 4,
   moreLabel = 'ver mais índices',
   ...rest
 }: {
   title: ReactNode
   items: MetricItem[]
+  // Conteúdo livre que só aparece expandido — o detalhe da análise da IA é
+  // texto corrido (evidência, objeções, mensagem sugerida), não rótulo→valor.
+  details?: ReactNode
   previewCount?: number
   moreLabel?: string
 } & { 'data-testid'?: string }) {
   const [expanded, setExpanded] = useState(false)
-  const hasMore = items.length > previewCount
-  const visible = expanded || !hasMore ? items : items.slice(0, previewCount)
+  const hasMore = items.length > previewCount || details !== undefined
+  const visible = expanded || items.length <= previewCount ? items : items.slice(0, previewCount)
 
   return (
     <Card {...rest}>
       <div className="mb-1 font-semibold">{title}</div>
       <MetricList items={visible} />
+      {expanded && details}
       {hasMore && (
         <button
           type="button"

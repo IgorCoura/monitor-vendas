@@ -32,6 +32,14 @@ function ContactsIcon() {
   )
 }
 
+function AiIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-5 w-5">
+      <path d="M10 1.5l1.35 3.9 3.9 1.35-3.9 1.35L10 12l-1.35-3.9-3.9-1.35 3.9-1.35L10 1.5Zm5.25 9.5l.72 2.08 2.08.72-2.08.72-.72 2.08-.72-2.08-2.08-.72 2.08-.72.72-2.08Zm-10 1.5l.54 1.56 1.56.54-1.56.54-.54 1.56-.54-1.56-1.56-.54 1.56-.54.54-1.56Z" />
+    </svg>
+  )
+}
+
 function LabelsIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-5 w-5">
@@ -48,10 +56,13 @@ function HolidaysIcon() {
   )
 }
 
+// Os rótulos são mais curtos que os da sidebar ("Painel", "IA"): com seis abas
+// em 390px sobram ~65px para cada uma.
 const items: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/', label: 'Painel', icon: <DashboardIcon /> },
   { to: '/registry', label: 'Cadastros', icon: <RegistryIcon /> },
   { to: '/contacts', label: 'Contatos', icon: <ContactsIcon /> },
+  { to: '/ai', label: 'IA', icon: <AiIcon /> },
   { to: '/labels', label: 'Etiquetas', icon: <LabelsIcon /> },
   { to: '/holidays', label: 'Feriados', icon: <HolidaysIcon /> },
 ]
@@ -70,7 +81,7 @@ export function BottomNav() {
           end={item.to === '/'}
           className={({ isActive }) =>
             clsx(
-              'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition-colors',
+              'flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-0.5 py-2 text-center text-[11px] font-medium transition-colors',
               isActive ? 'text-primary-strong' : 'text-ink-muted',
             )
           }
