@@ -4,6 +4,7 @@ import clsx from 'clsx'
 const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/registry', label: 'Cadastros' },
+  { to: '/contacts', label: 'Contatos' },
   { to: '/labels', label: 'Etiquetas' },
   { to: '/holidays', label: 'Feriados' },
 ]

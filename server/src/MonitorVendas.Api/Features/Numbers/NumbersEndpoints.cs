@@ -79,6 +79,18 @@ public static class NumbersEndpoints
             return Results.Ok(numbers.Select(NumberResponse.From));
         });
 
+        group.MapGet("/numbers", async (AppDbContext db, CancellationToken ct) =>
+        {
+            var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
+                .Join(db.Set<Seller>().AsNoTracking(), n => n.SellerId, s => s.Id, (n, s) => new { n, s })
+                .OrderBy(x => x.s.Name).ThenBy(x => x.n.Phone)
+                .Select(x => new { x.n.Id, x.n.Phone, x.n.Status, SellerId = x.s.Id, SellerName = x.s.Name })
+                .ToListAsync(ct);
+
+            return Results.Ok(numbers.Select(x =>
+                new NumberWithSellerResponse(x.Id, x.Phone, x.Status.ToString(), x.SellerId, x.SellerName)));
+        });
+
         // Reconexão (pós logout/ban temporário): gera um novo QR para o mesmo número.
         group.MapPost("/numbers/{id:guid}/connect", async (
             Guid id,

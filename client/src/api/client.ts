@@ -1,5 +1,9 @@
 import type {
+  ContactFilters,
+  ContactPageDto,
+  ContactShareDto,
   CreateNumberResponse,
+  NumberWithSellerResponse,
   HolidayResponse,
   LabelSuggestionDto,
   NumberResponse,
@@ -54,6 +58,16 @@ export interface DateRange {
   to: string
 }
 
+// Os mesmos filtros alimentam a prévia e o arquivo — a planilha é sempre o que
+// está na tela.
+function contactQuery(filters: ContactFilters): URLSearchParams {
+  const params = new URLSearchParams({ from: filters.from, to: filters.to })
+  if (filters.sellerId) params.set('sellerId', filters.sellerId)
+  if (filters.outcomeTypes.length > 0) params.set('outcomeTypes', filters.outcomeTypes.join(','))
+  if (filters.banned !== 'all') params.set('banned', String(filters.banned === 'banned'))
+  return params
+}
+
 export const api = {
   sellers: {
     list: () => request<SellerResponse[]>('/sellers'),
@@ -64,6 +78,7 @@ export const api = {
   },
   numbers: {
     list: (sellerId: string) => request<NumberResponse[]>(`/sellers/${sellerId}/numbers`),
+    listAll: () => request<NumberWithSellerResponse[]>('/numbers'),
     create: (sellerId: string, phone: string) =>
       request<CreateNumberResponse>(`/sellers/${sellerId}/numbers`, {
         method: 'POST',
@@ -89,6 +104,23 @@ export const api = {
       request<OutcomeTermDto>(`/outcome-types/${code}/terms`, { method: 'POST', body: JSON.stringify({ term }) }),
     removeTerm: (code: string, termId: string) =>
       request<void>(`/outcome-types/${code}/terms/${termId}`, { method: 'DELETE' }),
+  },
+  contacts: {
+    list: (filters: ContactFilters, page: number, pageSize: number) => {
+      const params = contactQuery(filters)
+      params.set('page', String(page))
+      params.set('pageSize', String(pageSize))
+      return request<ContactPageDto>(`/contacts?${params}`)
+    },
+    // O download é feito pelo navegador: assim o nome do arquivo vem do
+    // Content-Disposition do servidor.
+    exportUrl: (filters: ContactFilters) => `${BASE}/contacts/export?${contactQuery(filters)}`,
+    share: (filters: ContactFilters, senderNumberId: string, destination: string) =>
+      request<ContactShareDto>(`/contacts/share?${contactQuery(filters)}`, {
+        method: 'POST',
+        body: JSON.stringify({ senderNumberId, destination }),
+      }),
+    shareStatus: (id: string) => request<ContactShareDto>(`/contacts/share/${id}`),
   },
   holidays: {
     list: () => request<HolidayResponse[]>('/holidays'),

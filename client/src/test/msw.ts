@@ -1,6 +1,6 @@
 import { setupServer } from 'msw/node'
 import { http, HttpResponse } from 'msw'
-import type { MetricsDto, RankingEntryDto, SellerResponse } from '../api/types'
+import type { ContactRowDto, MetricsDto, RankingEntryDto, SellerResponse } from '../api/types'
 
 export function metrics(overrides: Partial<MetricsDto> = {}): MetricsDto {
   return {
@@ -41,6 +41,25 @@ export function rankingEntry(name: string, overrides: Partial<MetricsDto> = {}):
   return { sellerId: crypto.randomUUID(), name, metrics: metrics(overrides) }
 }
 
+export function contactRow(name: string, overrides: Partial<ContactRowDto> = {}): ContactRowDto {
+  return {
+    contactId: crypto.randomUUID(),
+    name,
+    phone: '5511700001111',
+    firstMessageAt: '2026-07-01T13:00:00Z',
+    lastMessageAt: '2026-07-10T13:00:00Z',
+    outcomeTypeCode: null,
+    outcome: null,
+    labels: [],
+    sellerId: crypto.randomUUID(),
+    sellerName: 'Ana',
+    sellerNumber: '5511900002222',
+    numberStatus: 'Active',
+    numberBanned: false,
+    ...overrides,
+  }
+}
+
 export function seller(name: string, active = true): SellerResponse {
   return { id: crypto.randomUUID(), name, active, createdAt: new Date().toISOString() }
 }
@@ -51,6 +70,10 @@ export const mswServer = setupServer(
   http.get('/api/v1/sellers/:id/numbers', () => HttpResponse.json([])),
   http.get('/api/v1/reports/ranking', () => HttpResponse.json([])),
   http.get('/api/v1/holidays', () => HttpResponse.json([])),
+  http.get('/api/v1/numbers', () => HttpResponse.json([])),
+  http.get('/api/v1/contacts', () =>
+    HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
+  ),
   http.get('/api/v1/outcome-types', () =>
     HttpResponse.json([
       { code: 'sale', name: 'Vendas', sortOrder: 1, active: true, terms: [{ id: 't1', term: 'venda' }] },

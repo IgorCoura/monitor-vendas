@@ -10,7 +10,7 @@ Front-end do monitor de desempenho de vendedores. Consome a API REST em
 - **Tailwind CSS v4** (plugin `@tailwindcss/vite`; tema via `@theme` em
   `src/index.css`) — sem shadcn/CLI; componentes próprios em `src/components/ui.tsx`.
 - **Recharts** para gráficos; **TanStack Query** para dados; **React Router**
-  para as 4 rotas.
+  para as rotas (Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados).
 
 ## Atualização dos dados (sem refresh do navegador)
 
@@ -79,6 +79,15 @@ client/src/
 │   │               #   (ícone de grid, ao lado de "+ Adicionar gráfico") = lista/grade 2/
 │   │               #   grade 3. Tudo persistido como listas de OCULTOS em localStorage
 │   │               #   (lib/usePersistedState) — item novo aparece por default
+│   ├── contacts/   # lista de clientes (1 linha por contato) + exportação Excel;
+│   │               #   filtros de/até, vendedor, desfecho (chips, `none` = sem
+│   │               #   desfecho) e banimento. O botão de exportar é um <a> para
+│   │               #   `api.contacts.exportUrl(filters)` — o navegador baixa e o
+│   │               #   nome do arquivo vem do Content-Disposition. Filtros são
+│   │               #   efêmeros de propósito (data salva envelhece mal).
+│   │               #   ShareDialog: envia a mesma lista por WhatsApp ("Nome - número");
+│   │               #   escolhe o número remetente entre os ATIVOS (useAllNumbers) e
+│   │               #   acompanha o progresso por polling enquanto o status é Pending.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
 │   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp

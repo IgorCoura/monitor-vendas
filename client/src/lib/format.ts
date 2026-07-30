@@ -45,6 +45,22 @@ export function fmtDateTime(iso: string | null | undefined): string {
   })
 }
 
+// <input type="date"> trabalha em "YYYY-MM-DD" no fuso local; a API espera ISO
+// UTC. O dia escolhido vai inteiro: da meia-noite local ao último instante dele.
+export function toDayInput(date: Date): string {
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+export function dayStartIso(day: string): string {
+  return new Date(`${day}T00:00:00`).toISOString()
+}
+
+export function dayEndIso(day: string): string {
+  return new Date(`${day}T23:59:59.999`).toISOString()
+}
+
 // Intervalo dos últimos N dias em ISO UTC, para os query params from/to.
 export function periodRange(days: number, now: Date = new Date()): { from: string; to: string } {
   const to = now.toISOString()

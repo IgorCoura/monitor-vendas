@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MonitorVendas.Api.Common;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Contacts;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
@@ -38,6 +39,11 @@ if (builder.Configuration.GetValue("Webhook:ProcessorEnabled", true))
     builder.Services.AddHostedService<WebhookProcessorBackgroundService>();
 
 builder.Services.AddScoped<ReportQueries>();
+builder.Services.AddScoped<ContactQueries>();
+builder.Services.Configure<ContactShareOptions>(builder.Configuration.GetSection(ContactShareOptions.Section));
+builder.Services.AddSingleton<IContactShareSender, ContactShareSender>();
+if (builder.Configuration.GetValue("ContactShare:Enabled", true))
+    builder.Services.AddHostedService<ContactShareBackgroundService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ReportCacheVersion>();
 builder.Services.AddScoped<ReportCache>();
@@ -72,6 +78,8 @@ v1.MapWebhookEndpoints();
 v1.MapReportsEndpoints();
 v1.MapHolidaysEndpoints();
 v1.MapOutcomeTypesEndpoints();
+v1.MapContactsEndpoints();
+v1.MapContactShareEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

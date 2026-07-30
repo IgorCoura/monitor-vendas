@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Contacts;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Webhooks;
@@ -47,6 +48,12 @@ public sealed class MessageUpsertHandler(
             return;
 
         var fromMe = WebhookPayload.GetBool(key, "fromMe");
+
+        // Mensagem que o próprio sistema mandou (envio da lista de contatos) não é
+        // atividade do vendedor — contaria como mensagem enviada e sujaria a métrica.
+        if (fromMe && await db.Set<ContactShareMessage>().AnyAsync(m => m.WaMessageId == waMessageId, ct))
+            return;
+
         var timestamp = WebhookPayload.GetUnixTimestamp(data, "messageTimestamp") ?? evt.ReceivedAt;
         var pushName = WebhookPayload.GetString(data, "pushName");
 

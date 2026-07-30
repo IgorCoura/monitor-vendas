@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   pedido).
 - **Versionamento de API** obrigatório em toda rota: `/api/v1/...`
   (Asp.Versioning.Http, versão no segmento da URL).
+- **ClosedXML** — geração do `.xlsx` da exportação de contatos (única
+  dependência de arquivo do projeto).
 - **docker-compose** para o stack local (client + API + Postgres).
 - **Front-end**: `../client` (React 19 + Vite + Tailwind v4 + Recharts, tema
   rosa talco) — tem `CLAUDE.md` próprio. Serviço `client` no compose (nginx
@@ -110,6 +112,67 @@ Implementado em 2026-07-30. **Tipo novo não exige migração nem código.**
   ativo aparece, mesmo zerado); `Sales`/`ConversionRate`/`AvgTimeToClose`
   continuam no DTO como atalho do tipo `sale`.
 
+## Exportação de contatos (`Features/Contacts`)
+
+Planilha de clientes para trabalhar fora do painel. **Uma linha por contato** —
+não por conversa: um cliente que falou com dois vendedores sai uma vez só.
+
+- **Tudo é recortado pelo período**: o contato entra se teve mensagem entre
+  `from` e `to`, e as colunas consideram só esse intervalo (datas = mín/máx das
+  mensagens no período). Sem `from`/`to`, é o histórico inteiro.
+- **Colunas singulares vêm da conversa mais recente do período**: vendedor,
+  número e banimento são os do último atendimento. Desfecho é o de maior
+  `MarkedAt` entre as conversas do contato (mesmo espírito do "última etiqueta
+  vence", um nível acima); etiquetas são a **união das ativas**, pelo nome.
+- **Filtros**: `from`/`to`, `sellerId`, `outcomeTypes` (códigos separados por
+  vírgula; `none` = sem desfecho) e `banned` (true/false, avaliado sobre o
+  número responsável). O filtro por vendedor restringe as conversas
+  consideradas — a linha passa a refletir aquele vendedor.
+- `ContactQueries.ListAsync` faz **6 queries em lote** (agregação por conversa
+  em SQL, montagem do contato em memória); desfecho e banimento filtram em
+  memória porque só existem depois de escolher o responsável.
+- `GET /api/v1/contacts` é a prévia paginada (`page`/`pageSize`, máx. 200) e
+  `GET /api/v1/contacts/export` devolve o `.xlsx` com **os mesmos filtros**.
+  Teto de `ContactQueries.MaxRows` (50.000) linhas no arquivo; acima disso a
+  resposta traz `X-Truncated: true` e o `total` da prévia denuncia o corte.
+- `ContactWorkbookWriter` grava em lote (`InsertData`) e usa **largura de coluna
+  fixa** — `AdjustToContents` mede texto célula a célula e custava mais que a
+  planilha inteira. Datas saem convertidas para `Metrics:TimeZone`; telefone é
+  texto (senão o Excel vira notação científica).
+- Benchmark (`Performance/ContactBenchmarkTests`, mesma base de 28.800
+  mensagens / 3.600 contatos): prévia **110 ms**, exportação completa
+  **534 ms** (era 1.921 ms antes das duas otimizações do writer).
+
+## Envio da lista de contatos por WhatsApp (`ContactShare`)
+
+Mesma lista da tela de contatos, mandada por WhatsApp como texto
+`Nome - 5511999998888`, uma linha por cliente.
+
+- **O conteúdo é congelado no pedido**: `POST /contacts/share` monta as mensagens
+  e grava em `contact_share_messages`; o serviço em background **não reconsulta o
+  banco** — o que chega é o que foi confirmado na tela.
+- `ContactMessageBuilder` (puro) quebra em blocos numerados (`Contatos (1/3) —
+  01/07 a 30/07`) que cabem em `MaxCharsPerMessage`. Bloco único não leva
+  contador; contato sem nome sai só com o número; linha que sozinha estoura o
+  limite vira mensagem própria — **nenhum contato é descartado**.
+- `ContactShareSender` (gated `ContactShare:Enabled`) manda uma mensagem por vez
+  com `DelayBetweenMessagesSeconds` de intervalo. Falha registra `Attempts` e
+  **para o envio inteiro** (metade da lista é pior que nada); a passada seguinte
+  retoma de onde parou. Um envio é tentado **uma vez por passada** — repescar na
+  mesma passada gastaria as tentativas todas sem intervalo (bug corrigido, com
+  teste de regressão em `ContactShareTests`).
+- **A mensagem enviada volta pelo webhook como `fromMe`** e seria contada como
+  mensagem do vendedor. Por isso `SendTextAsync` devolve o `key.id`, ele é
+  gravado em `ContactShareMessage.WaMessageId` e o `MessageUpsertHandler`
+  descarta o upsert com esse id. Mexeu no envio? Mantenha essa amarração.
+- Recusas (nada é enviado): destino sem DDI/DDD, remetente inexistente ou não
+  `Active`, filtro sem contatos, e lista que daria mais de
+  `MaxMessagesPerShare` mensagens.
+- Config `ContactShare`: `Enabled`, `IntervalSeconds`,
+  `DelayBetweenMessagesSeconds`, `MaxCharsPerMessage`, `MaxMessagesPerShare`,
+  `MaxAttempts`. Nos testes o serviço fica desligado e o delay é 0 —
+  `IContactShareSender.ProcessPendingAsync()` é chamado direto.
+
 ## Arquitetura de leitura das métricas (3 camadas)
 
 Otimizado em 2026-07-30 (benchmark com 28.800 mensagens, 10 vendedores × 2
@@ -159,10 +222,13 @@ faixas estreitas até 30 min, larga na cauda) e a mediana é estimada por
 interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exata**.
 
 **Endpoints**: `POST/GET/PUT /api/v1/sellers`, `POST/GET /sellers/{id}/numbers`,
+`GET /numbers` (todos, com vendedor),
 `POST /numbers/{id}/connect` (novo QR), `POST /numbers/{id}/ban-permanent`,
 `POST /webhooks/evolution/{secret}`, `POST/GET/DELETE /holidays`,
 `GET/POST/PUT/DELETE /outcome-types` (+ `/{code}/terms`),
-`GET /outcome-labels/suggestions`, `POST /reports/rebuild`,
+`GET /outcome-labels/suggestions`, `GET /contacts`, `GET /contacts/export`,
+`POST /contacts/share` + `GET /contacts/share/{id}`,
+`POST /reports/rebuild`,
 `GET /reports/sellers/{id}?from&to`, `GET /reports/ranking?from&to`,
 `GET /health`, `GET /api/v1/ping`.
 
@@ -194,6 +260,8 @@ server/
 │   │   ├── Sellers/                       #   Seller + CRUD endpoints
 │   │   ├── Numbers/                       #   WhatsappNumber, NumberStatusEvent, ConnectionUpdateHandler, endpoints (create/connect/ban-permanent)
 │   │   ├── Webhooks/                      #   WebhookEvent (fila bruta), endpoint de recepção, WebhookProcessor + IWebhookEventHandler, WebhookOptions
+│   │   ├── Contacts/                      #   ContactQueries (1 linha por contato), ContactsEndpoints (prévia + export), ContactWorkbookWriter (ClosedXML),
+│   │   │                                  #   ContactShare + ContactMessageBuilder + ContactShareSender + ContactShareEndpoints (envio por WhatsApp)
 │   │   ├── Conversations/                 #   Contact, Conversation, Message, ConversationOutcome, ConversationLabel (histórico), WhatsappLabel, handlers de mensagem/labels, WebhookPayload (parsing)
 │   │   ├── Outcomes/                      #   ConversationOutcomeType + OutcomeLabelTerm + LabelNormalizer, OutcomeLabelMatcher (+CatalogVersion), OutcomeResolver (última etiqueta vence), OutcomeReconciler, OutcomeTypesEndpoints
 │   │   ├── Reconciliation/                #   ReconciliationService + BackgroundService + Options
@@ -204,8 +272,8 @@ server/
 │   │                                      #   MetricsSnapshot (forma somável), DailyMetricsBuilder (+background), DirtyDayTracker
 │   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (5) + DesignTimeDbContextFactory
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
-│   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n})
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler), 58 testes
+│   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler), 138 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -217,7 +285,8 @@ server/
   Nova migração: `dotnet ef migrations add <Nome> --project src/MonitorVendas.Api
   --startup-project src/MonitorVendas.Api -o Data/Migrations` (dotnet-ef é
   local tool; sem `--startup-project` o CLI tenta buildar o dcproj e falha).
-- Config via appsettings/env: `Evolution:BaseUrl` (barra final!) e `ApiKey`;
+- Config via appsettings/env: bloco `ContactShare` (ver seção do envio);
+  `Evolution:BaseUrl` (barra final!) e `ApiKey`;
   `Webhook:Secret`/`PublicBaseUrl`/`ProcessorEnabled`/`ProcessorIntervalSeconds`;
   `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`; bloco `Metrics`
   (timezone, horas úteis seg–sex, sábado
@@ -231,8 +300,9 @@ server/
   services (webhook, reconciliação, agregação) **e o cache** (`CacheSeconds=0`,
   senão resultado vazaria entre testes) e substitui a Evolution por
   `FakeEvolutionHandler`; o pipeline é dirigido deterministicamente via
-  `IWebhookProcessor.ProcessPendingAsync()`, `IReconciliationService.RunOnceAsync()`
-  e `DailyMetricsBuilder.ProcessDirtyDaysAsync()`. Para testar com config
+  `IWebhookProcessor.ProcessPendingAsync()`, `IReconciliationService.RunOnceAsync()`,
+  `DailyMetricsBuilder.ProcessDirtyDaysAsync()` e
+  `IContactShareSender.ProcessPendingAsync()`. Para testar com config
   diferente sem recriar o Postgres: `Factory.WithWebHostBuilder(b => b.UseSetting(...))`.
 - **Ao mexer nas métricas, o teste que não pode falhar é
   `DailyAggregateTests.AggregatedRead_MatchesLiveCalculation`**: ele garante que

@@ -4,7 +4,9 @@ namespace MonitorVendas.Api.Integrations.Evolution;
 
 public sealed class EvolutionApiClient(HttpClient http)
 {
-    public async Task SendTextAsync(string instanceName, string number, string text, CancellationToken cancellationToken = default)
+    // Devolve o id da mensagem criada: o webhook dela volta como MESSAGES_UPSERT e
+    // seria contado como mensagem enviada pelo vendedor dono do número.
+    public async Task<string?> SendTextAsync(string instanceName, string number, string text, CancellationToken cancellationToken = default)
     {
         var response = await http.PostAsJsonAsync(
             $"message/sendText/{instanceName}",
@@ -12,6 +14,9 @@ public sealed class EvolutionApiClient(HttpClient http)
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return doc.RootElement.TryGetProperty("key", out var key) ? GetString(key, "id") : null;
     }
 
     public async Task CreateInstanceAsync(string instanceName, string phone, CancellationToken cancellationToken = default)

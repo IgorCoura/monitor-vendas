@@ -1,3 +1,5 @@
+using MonitorVendas.Api.Common;
+
 namespace MonitorVendas.Api.Features.Metrics;
 
 public static class ReportsEndpoints
@@ -84,16 +86,8 @@ public static class ReportsEndpoints
     // Sem parâmetros: últimos 30 dias. Datas sem offset são tratadas como UTC.
     private static (DateTime FromUtc, DateTime ToUtc) NormalizeRange(DateTime? from, DateTime? to)
     {
-        var toUtc = ToUtc(to) ?? DateTime.UtcNow;
-        var fromUtc = ToUtc(from) ?? toUtc.AddDays(-30);
+        var toUtc = UtcDates.ToUtc(to) ?? DateTime.UtcNow;
+        var fromUtc = UtcDates.ToUtc(from) ?? toUtc.AddDays(-30);
         return (fromUtc, toUtc);
     }
-
-    private static DateTime? ToUtc(DateTime? value) => value?.Kind switch
-    {
-        null => null,
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.Value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value.Value, DateTimeKind.Utc),
-    };
 }

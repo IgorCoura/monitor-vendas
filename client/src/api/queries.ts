@@ -1,6 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type DateRange } from './client'
+import type { ContactFilters } from './types'
 
 export function useSellers() {
   return useQuery({ queryKey: ['sellers'], queryFn: api.sellers.list })
@@ -48,6 +49,38 @@ export function useSellerReport(
     queryFn: () => api.reports.seller(id, range, takeFresh(freshRef)),
     enabled: !!id,
     refetchInterval: pollMs ?? false,
+  })
+}
+
+export function useContacts(filters: ContactFilters, page: number, pageSize = 50) {
+  return useQuery({
+    queryKey: ['contacts', filters, page, pageSize],
+    queryFn: () => api.contacts.list(filters, page, pageSize),
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useAllNumbers() {
+  return useQuery({ queryKey: ['numbers', 'all'], queryFn: api.numbers.listAll })
+}
+
+export function useCreateContactShare() {
+  return useMutation({
+    mutationFn: ({ filters, senderNumberId, destination }: {
+      filters: ContactFilters
+      senderNumberId: string
+      destination: string
+    }) => api.contacts.share(filters, senderNumberId, destination),
+  })
+}
+
+// Enquanto o envio está pendente a tela acompanha o progresso; terminado, para.
+export function useContactShareStatus(id: string | null) {
+  return useQuery({
+    queryKey: ['contact-share', id],
+    queryFn: () => api.contacts.shareStatus(id!),
+    enabled: !!id,
+    refetchInterval: (query) => (query.state.data?.status === 'Pending' ? 2000 : false),
   })
 }
 

@@ -109,6 +109,63 @@ export interface RankingEntryDto {
   metrics: MetricsDto
 }
 
+// Uma linha por contato: vendedor/número/banimento vêm da conversa mais recente
+// dentro do período filtrado.
+export interface ContactRowDto {
+  contactId: string
+  name: string
+  phone: string
+  firstMessageAt: string
+  lastMessageAt: string
+  outcomeTypeCode: string | null
+  outcome: string | null
+  labels: string[]
+  sellerId: string | null
+  sellerName: string | null
+  sellerNumber: string | null
+  numberStatus: NumberStatus
+  numberBanned: boolean
+}
+
+export interface ContactPageDto {
+  items: ContactRowDto[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface NumberWithSellerResponse {
+  id: string
+  phone: string
+  status: NumberStatus
+  sellerId: string
+  sellerName: string
+}
+
+export type ContactShareStatus = 'Pending' | 'Completed' | 'Failed'
+
+export interface ContactShareDto {
+  id: string
+  senderNumberId: string
+  senderPhone: string
+  destination: string
+  totalContacts: number
+  totalMessages: number
+  sentMessages: number
+  status: ContactShareStatus
+  error: string | null
+  createdAt: string
+  completedAt: string | null
+}
+
+export interface ContactFilters {
+  from: string
+  to: string
+  sellerId: string
+  outcomeTypes: string[]
+  banned: 'all' | 'banned' | 'active'
+}
+
 export interface HolidayResponse {
   id: string
   date: string

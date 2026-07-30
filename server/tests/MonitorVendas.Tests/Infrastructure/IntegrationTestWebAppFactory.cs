@@ -34,6 +34,10 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         // Agregação dirigida pelos testes (DailyMetricsBuilder.ProcessDirtyDaysAsync),
         // não pelo BackgroundService — determinismo.
         builder.UseSetting("Metrics:AggregationEnabled", "false");
+        // Envio de contatos também é dirigido pelos testes; sem intervalo entre as
+        // mensagens (o delay existe para proteger o número em produção).
+        builder.UseSetting("ContactShare:Enabled", "false");
+        builder.UseSetting("ContactShare:DelayBetweenMessagesSeconds", "0");
         builder.UseSetting("Evolution:BaseUrl", "http://evolution.fake/");
         builder.UseSetting("Evolution:ApiKey", "test-key");
 
