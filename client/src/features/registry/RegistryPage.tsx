@@ -15,16 +15,55 @@ import { ApiError } from '../../api/client'
 function QrDialog({ qr, onClose }: { qr: QrCodeDto | null; onClose: () => void }) {
   const base64 = qr?.base64
   const src = base64 ? (base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`) : null
+  const pairingCode = qr?.pairingCode ?? null
+  const [copied, setCopied] = useState(false)
+
+  async function copyPairingCode() {
+    if (!pairingCode) return
+    try {
+      await navigator.clipboard.writeText(pairingCode)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
   return (
     <Dialog open={qr !== null} onClose={onClose} title="Escaneie o QR code no WhatsApp">
       {src ? (
-        <img src={src} alt="QR code de conexão do WhatsApp" className="mx-auto max-w-64" />
+        // 256px fixos estouravam a folha num iPhone SE (320px de tela): a
+        // imagem acompanha a largura disponível, sem passar do tamanho de antes.
+        <img
+          src={src}
+          alt="QR code de conexão do WhatsApp"
+          className="mx-auto w-[min(16rem,70vw)] md:w-64"
+        />
       ) : (
-        <p className="text-sm break-all">{qr?.code ?? qr?.pairingCode ?? 'QR indisponível — tente reconectar.'}</p>
+        <p className="text-sm break-all">{qr?.code ?? pairingCode ?? 'QR indisponível — tente reconectar.'}</p>
       )}
       <p className="mt-3 text-xs text-ink-muted">
         WhatsApp → Aparelhos conectados → Conectar aparelho. O QR expira rápido; gere outro se precisar.
       </p>
+
+      {/* Quem abre o painel pelo celular está com o telefone na mão — não tem
+          uma segunda câmera para ler o QR da própria tela. O código de
+          pareamento é a saída: "Conectar com número de telefone" no WhatsApp. */}
+      {pairingCode && (
+        <div className="mt-4 rounded-lg bg-surface p-3">
+          <p className="text-xs font-medium text-ink-muted">
+            No mesmo aparelho? Use o código de pareamento em WhatsApp → Aparelhos conectados →
+            Conectar com número de telefone.
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <code data-testid="pairing-code" className="flex-1 text-base font-semibold tracking-widest">
+              {pairingCode}
+            </code>
+            <Button variant="ghost" onClick={copyPairingCode} className="shrink-0">
+              {copied ? 'Copiado' : 'Copiar'}
+            </Button>
+          </div>
+        </div>
+      )}
     </Dialog>
   )
 }
@@ -74,10 +113,10 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
 
   return (
     <Card className={seller.active ? '' : 'opacity-60'}>
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         {editing ? (
           <form
-            className="flex flex-1 gap-2"
+            className="flex flex-1 flex-col gap-2 sm:flex-row"
             onSubmit={async (e) => {
               e.preventDefault()
               await updateSeller.mutateAsync({ id: seller.id, name, active: seller.active })
@@ -132,12 +171,15 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
         ))}
       </ul>
 
-      <form className="mt-3 flex gap-2" onSubmit={handleAddNumber}>
+      {/* Em coluna no celular: lado a lado, o botão de texto longo espremia o
+          campo do telefone até ele sumir. */}
+      <form className="mt-3 flex flex-col gap-2 md:flex-row" onSubmit={handleAddNumber}>
         <Input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Telefone com DDI (5511999999999)"
           aria-label={`Novo número para ${seller.name}`}
+          inputMode="numeric"
           className="flex-1"
         />
         <Button type="submit" disabled={createNumber.isPending || phone.trim().length < 10}>
@@ -162,7 +204,7 @@ export function RegistryPage() {
 
       <Card>
         <form
-          className="flex gap-2"
+          className="flex flex-col gap-2 md:flex-row"
           onSubmit={async (e) => {
             e.preventDefault()
             if (!newName.trim()) return

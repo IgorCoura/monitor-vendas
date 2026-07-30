@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ContactsPage } from './ContactsPage'
-import { renderWithProviders } from '../../test/render'
+import { renderMobile, renderWithProviders } from '../../test/render'
 import { contactRow, http, HttpResponse, mswServer, seller } from '../../test/msw'
 
 function contactsHandler(onRequest?: (url: URL) => void) {
@@ -155,5 +155,44 @@ describe('ContactsPage', () => {
     expect(params.get('outcomeTypes')).toBe('none')
     expect(params.get('from')).toBeTruthy()
     expect(params.get('to')).toBeTruthy()
+  })
+
+  describe('no celular', () => {
+    // Nove colunas não cabem em 360px: cada contato vira um card com os mesmos campos.
+    it('troca a tabela por cards', async () => {
+      mswServer.use(contactsHandler())
+
+      renderMobile(<ContactsPage />)
+
+      const cards = await screen.findByTestId('contacts-cards')
+      expect(screen.queryByTestId('contacts-table')).not.toBeInTheDocument()
+      expect(within(cards).getByText('Maria Silva')).toBeInTheDocument()
+      // Um card por contato, cada um com o número do cliente na prévia.
+      expect(within(cards).getAllByText('5511700001111')).toHaveLength(2)
+
+      // Vendedor e banimento ficam na parte escondida do card.
+      expect(within(cards).queryByText('Bruno')).not.toBeInTheDocument()
+      const user = userEvent.setup()
+      await user.click(within(cards).getAllByRole('button', { name: /ver mais dados/ })[1])
+      expect(within(cards).getByText('Bruno')).toBeInTheDocument()
+    })
+
+    // Os filtros saem da tela e vão para uma folha, com o número de filtros ativos no botão.
+    it('abre os filtros numa folha e conta os ativos', async () => {
+      mswServer.use(contactsHandler())
+
+      renderMobile(<ContactsPage />)
+      const user = userEvent.setup()
+      await screen.findByTestId('contacts-cards')
+
+      expect(screen.queryByTestId('filters')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Filtros' }))
+      await user.click(within(screen.getByTestId('filters')).getByRole('button', { name: 'Sem desfecho' }))
+
+      expect(screen.getByRole('button', { name: 'Filtros (1)' })).toBeInTheDocument()
+      const href = screen.getByTestId('export-link').getAttribute('href') ?? ''
+      expect(new URL(href, 'http://localhost').searchParams.get('outcomeTypes')).toBe('none')
+    })
   })
 })

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import { useAllNumbers, useContactShareStatus, useCreateContactShare } from '../../api/queries'
 import type { ContactFilters, ContactRowDto } from '../../api/types'
-import { Button, Dialog, ErrorState, Input } from '../../components/ui'
+import { Button, Dialog, ErrorState, Input, Select } from '../../components/ui'
 
 // Mesma regra do servidor (ContactMessageBuilder): contato sem nome salvo sai só
 // com o número. Aqui é só o exemplo do formato — o texto real é montado lá.
@@ -50,8 +50,28 @@ export function ShareDialog({
     }
   }
 
+  const sendDisabled = createShare.isPending || destination.replace(/\D/g, '').length < 10
+
   return (
-    <Dialog open={open} onClose={close} title="Enviar contatos por WhatsApp">
+    <Dialog
+      open={open}
+      onClose={close}
+      title="Enviar contatos por WhatsApp"
+      // No rodapé do dialog os botões ficam fora da área rolável: no celular,
+      // com o teclado aberto, eles continuam alcançáveis.
+      footer={
+        share || active.length === 0 ? undefined : (
+          <div className="flex justify-end gap-2 max-md:flex-col-reverse">
+            <Button variant="ghost" onClick={close}>
+              Cancelar
+            </Button>
+            <Button onClick={send} disabled={sendDisabled}>
+              Enviar
+            </Button>
+          </div>
+        )
+      }
+    >
       {share ? (
         <div className="space-y-3" data-testid="share-progress">
           <p className="text-sm">
@@ -71,18 +91,17 @@ export function ShareDialog({
             <>
               <label className="flex flex-col gap-1 text-xs font-medium text-ink-muted">
                 Enviar pelo número
-                <select
+                <Select
                   aria-label="Enviar pelo número"
                   value={sender}
                   onChange={(e) => setSenderNumberId(e.target.value)}
-                  className="rounded-lg border border-edge bg-card px-3 py-1.5 text-sm text-ink focus:border-primary focus:outline-none"
                 >
                   {active.map((number) => (
                     <option key={number.id} value={number.id}>
                       {number.phone} — {number.sellerName}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
 
               <label className="flex flex-col gap-1 text-xs font-medium text-ink-muted">
@@ -92,6 +111,7 @@ export function ShareDialog({
                   value={destination}
                   onChange={(e) => setDestination(e.target.value)}
                   placeholder="5511999999999"
+                  inputMode="numeric"
                 />
               </label>
 
@@ -106,18 +126,6 @@ export function ShareDialog({
               </div>
 
               {error && <ErrorState message={error} />}
-
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={close}>
-                  Cancelar
-                </Button>
-                <Button
-                  onClick={send}
-                  disabled={createShare.isPending || destination.replace(/\D/g, '').length < 10}
-                >
-                  Enviar
-                </Button>
-              </div>
             </>
           )}
         </div>

@@ -51,6 +51,39 @@ Efêmero por design: dialogs abertos, formulários, QR code exibido.
 - **Vitest + React Testing Library + MSW** para testes (`npm test`).
 - Sem autenticação (decisão do produto).
 
+## Mobile (celular) e desktop na mesma base
+
+A UI atende **duas apresentações**: a de desktop (a original, inalterada) e a de
+celular. A regra de ouro é **uma fonte de verdade**: cada rota continua sendo um
+componente só — queries, totais, filtros e polling não são duplicados. Só o que
+é visual diverge.
+
+- **`lib/useIsMobile()`** — `matchMedia('(max-width: 767px)')` via
+  `useSyncExternalStore`. 767px é a borda do `md` do Tailwind: **CSS e JS
+  concordam sempre**. Mudou aqui, mude os breakpoints das classes.
+- **Como divergir**: classe `md:` quando é só espaçamento/direção; `isMobile ?`
+  quando o componente é outro (tabela × cards, botões × `<select>`). Nunca
+  duplicar a lógica da página.
+- **Navegação**: sidebar some abaixo de `md` e entra a `components/mobile/BottomNav`
+  (barra inferior fixa, mesmas 5 rotas). O conteúdo reserva a altura dela com a
+  classe `pb-nav`.
+- **`Dialog` vira bottom sheet** abaixo de `md`: colado embaixo, `max-h-[90dvh]`
+  (**`dvh`, nunca `vh`** — no celular o `vh` ignora a barra de URL e joga o
+  rodapé para fora da tela), rolagem do fundo travada, Escape fecha. Botão de
+  ação sempre no `footer`, que fica fora da área rolável.
+- **Toque**: `Button`, `Input`, `Select` e os chips têm `min-h-11` (44px) abaixo
+  de `md`. Campos usam **16px** no celular (regra global no `index.css`): abaixo
+  disso o Safari do iOS dá zoom ao focar e a tela parece quebrada.
+- **`InfoTip` abre no toque** no celular (hover não existe lá) e fecha ao tocar
+  fora ou rolar. Toda métrica continua com a explicação acessível.
+- **Tabelas viram cards** (`components/mobile/MetricList`): `MetricList` para
+  rótulo→valor e `ExpandableMetricCard` para uma linha da tabela com "ver mais".
+  As colunas exibidas são exatamente as `visibleColumns` da tabela.
+- **Testes**: `jsdom` não tem `matchMedia` — o stub vive em `test/viewport.ts`,
+  instalado no `test/setup.ts` com **desktop como default**. Para testar a versão
+  de celular use `renderMobile()` (`test/render.tsx`); o `setup.ts` devolve para
+  desktop depois de cada teste.
+
 ## Tema rosa talco
 
 Tokens em `src/index.css` (`@theme`): `surface #FAF3F1`, `card #FFF`,
@@ -69,7 +102,10 @@ criar/alterar gráficos, invoque a skill `dataviz`.
 ```
 client/src/
 ├── api/            # types.ts (espelho dos DTOs), client.ts (fetch + ApiError), queries.ts (hooks)
-├── components/     # Layout (sidebar), ui.tsx (Card/Button/Input/Badge/Dialog/estados), KpiCard
+├── components/     # Layout (sidebar md+ / barra inferior no celular), ui.tsx
+│   │               #   (Card/Button/Input/Select/Badge/Dialog/InfoTip/estados), KpiCard
+│   └── mobile/     #   BottomNav (5 rotas), PeriodBar (período + atualização),
+│                   #   MetricList/ExpandableMetricCard (as tabelas viram cards)
 ├── features/
 │   ├── dashboard/  # KPIs do time + gráficos de ranking empilháveis (métrica EXCLUSIVA
 │   │               #   por gráfico: escolher uma usada em outro faz swap; "+ Adicionar
@@ -107,8 +143,10 @@ client/src/
 │   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
-├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts
-└── test/           # setup (MSW + ResizeObserver stub), msw.ts (handlers + factories), render.tsx
+├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,
+│                   #   useIsMobile.ts (breakpoint único de 767px)
+└── test/           # setup (MSW + ResizeObserver + matchMedia stubs), msw.ts (handlers +
+                    #   factories), render.tsx (renderWithProviders/renderMobile), viewport.ts
 ```
 
 ## Convenções

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ExportReportDialog } from './ExportReportDialog'
-import { renderWithProviders } from '../../test/render'
+import { renderMobile, renderWithProviders } from '../../test/render'
 import { http, HttpResponse, mswServer } from '../../test/msw'
 import type { ReportExportDto, ReportExportFilters } from '../../api/types'
 
@@ -193,5 +193,31 @@ describe('ExportReportDialog', () => {
     await user.click(await screen.findByRole('button', { name: 'Gerar planilha' }))
 
     expect(await screen.findByText('Modelo sem preço.')).toBeInTheDocument()
+  })
+
+  describe('no celular', () => {
+    // As listas de chips começam fechadas: abertas, "Gerar planilha" ficava
+    // dezenas de chips abaixo e o usuário não chegava nele.
+    it('mantém o botão de gerar ao alcance, com os chips recolhidos', async () => {
+      renderMobile(<ExportReportDialog open onClose={() => {}} range={range} />)
+
+      expect(await screen.findByRole('button', { name: 'Gerar planilha' })).toBeInTheDocument()
+      expect(screen.queryByTestId('metric-chips')).not.toBeInTheDocument()
+      // O rodapé de ações fica fora do corpo rolável do dialog.
+      expect(screen.getByTestId('dialog-body')).not.toContainElement(
+        screen.getByTestId('export-actions'),
+      )
+    })
+
+    // A seção abre no toque e mostra quantos itens foram marcados nela.
+    it('abre a seção de métricas e marca a contagem escolhida', async () => {
+      renderMobile(<ExportReportDialog open onClose={() => {}} range={range} />)
+      const user = userEvent.setup()
+
+      await user.click(await screen.findByRole('button', { name: /^Métricas/ }))
+      await user.click(within(screen.getByTestId('metric-chips')).getByRole('button', { name: 'Vendas' }))
+
+      expect(screen.getByRole('button', { name: /Métricas\s*\(1\)/ })).toBeInTheDocument()
+    })
   })
 })
