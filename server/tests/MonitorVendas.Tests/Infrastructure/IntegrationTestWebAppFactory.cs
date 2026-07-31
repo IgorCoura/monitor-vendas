@@ -59,8 +59,9 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         builder.UseSetting("AiBudget:AmountPerWindow", "1.00");
         builder.UseSetting("AiBudget:WindowHours", "24");
         builder.UseSetting("AiBudget:MarginPercent", "20");
-        // Exportação também é dirigida pelos testes (IReportExportRunner.ProcessPendingAsync).
-        builder.UseSetting("ReportExport:Enabled", "false");
+        // Os jobs de IA são dirigidos pelos testes (IAiJobRunner.ProcessPendingAsync),
+        // não pelo BackgroundService — determinismo.
+        builder.UseSetting("AiJob:Enabled", "false");
 
         builder.ConfigureTestServices(services =>
         {

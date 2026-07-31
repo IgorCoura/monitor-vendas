@@ -11,7 +11,8 @@ Front-end do monitor de desempenho de vendedores. Consome a API REST em
   `src/index.css`) — sem shadcn/CLI; componentes próprios em `src/components/ui.tsx`.
 - **Recharts** para gráficos; **TanStack Query** para dados; **React Router**
   para as rotas (Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados).
-  A exportação do relatório é dialog no Dashboard ("Exportar Excel"), não rota.
+  A exportação do relatório é dialog no Dashboard ("Exportar Excel"), não rota —
+  só escolhe filtros; o arquivo é um `<a>` para `GET /reports/export`.
 
 ## Atualização dos dados (sem refresh do navegador)
 
@@ -135,16 +136,17 @@ client/src/
 │   │               #   com filtros (período, vendedor, status, motivo, divergência,
 │   │               #   recontato) e painel de sínteses por vendedor — marcadas como
 │   │               #   "Desatualizada" quando as leituras mudaram depois delas.
-│   │               #   Dois botões, dois jobs: "Analisar conversas" relê o filtro
-│   │               #   ignorando o cache; "Refazer síntese" só sintetiza. Ambos
-│   │               #   acompanhados por polling em /ai/jobs/{id}.
+│   │               #   Dois botões, uma vaga só: "Analisar conversas" e "Refazer
+│   │               #   síntese", ambos refazendo SÓ o que mudou (o servidor decide;
+│   │               #   a tela nunca manda `force`). Cada um abre o mesmo dialog de
+│   │               #   dois passos (custo estimado → "iniciada, roda em segundo
+│   │               #   plano"). O estado vem de GET /ai/status, não de polling de
+│   │               #   job. "Exportar Excel" é um <a> com os filtros da tela.
 │   ├── reports/    # ExportReportDialog: exportação do relatório em .xlsx. Métricas e
 │   │               #   gráficos vêm de `GET /reports/export/metrics` (nunca hardcoded —
 │   │               #   tipo de desfecho novo aparece sozinho); nada marcado = tudo.
-│   │               #   Com "Incluir análise por IA" ligado, chama /estimate e mostra
-│   │               #   custo estimado + saldo, bloqueando o botão se não couber.
-│   │               #   O job é acompanhado por polling e o download é um <a> para
-│   │               #   `api.reports.exportFileUrl(id)`.
+│   │               #   Sem IA e sem job: o botão é um <a> para
+│   │               #   `api.reports.exportUrl(filters)` e o navegador baixa.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
 │   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
@@ -170,7 +172,13 @@ client/src/
   o catálogo é editado na tela `/labels`. `sale` já aparece como "Vendas" nos
   campos fixos, então é filtrado da lista dinâmica para não duplicar.
 - Erros da API: `ApiError` carrega o `error`/`title` do corpo — exibir a
-  mensagem, não engolir.
+  mensagem, não engolir. Na tela `/ai` isso vale para o **409** (já existe rodada
+  em andamento) e o **422** (sem saldo): as duas frases vêm do servidor.
+- **O trabalho de IA é 100% do servidor.** A tela nunca acompanha progresso —
+  `useAiStatus` pergunta o estado da vaga única (5 s enquanto houver rodada) e é
+  ele que trava os dois botões, mostra o banner "em andamento" e as datas da
+  última análise e da última síntese, separadas. Como vem do banco, recarregar a
+  página não perde nada.
 - **Todo teste tem comentário de uma linha em português** acima do caso
   (mesma regra do server). Testes de página usam `renderWithProviders` +
   `mswServer.use(...)`; MSW roda com `onUnhandledRequest: 'error'`.
@@ -179,10 +187,11 @@ client/src/
 
 ## Build, Run & Test
 
-- Dev: `npm run dev` (proxy `/api` → `localhost:8080`; suba a API antes).
+- Dev: `npm run dev` sobe em **:8202** (proxy `/api` → `localhost:8200`; suba
+  a API antes).
 - Testes: `npm test` · Build: `npm run build`.
 - Produção: serviço `client` no `../server/docker-compose.yml` (nginx na
-  porta 3000, proxy `/api` → `api:8080` — mesmo host, sem CORS).
+  porta 8203 no host, proxy `/api` → `api:8080` — mesmo host, sem CORS).
 
 ## Onde mora a URL da API (duas variáveis, e a diferença importa)
 

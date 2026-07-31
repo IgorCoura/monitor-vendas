@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { ApiError } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import {
   useAiAnalyses,
-  useAiJob,
+  useAiEstimate,
   useAiLossReasons,
+  useAiStatus,
   useAiSyntheses,
   useOutcomeTypes,
   useRunAiAnalyses,
@@ -28,8 +29,24 @@ import { useIsMobile } from '../../lib/useIsMobile'
 
 const PAGE_SIZE = 50
 
+// Os dois só refazem o que mudou: conversa com mensagem nova e vendedor cujo
+// conjunto de leituras mudou. Reprocessar tudo existe na API (`force`), mas não
+// vira botão — pagar de novo pela mesma leitura não compensa.
+type AiRunKind = 'analyses' | 'syntheses'
+
+const RUN_LABEL: Record<AiRunKind, string> = {
+  analyses: 'Analisar conversas',
+  syntheses: 'Refazer síntese',
+}
+
 function brl(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
+// Nunca rodou é diferente de rodou e não terminou: os dois viram "—", mas só
+// depois de o servidor dizer que não há data.
+function lastRun(completedAt: string | null | undefined): string {
+  return completedAt ? fmtDateTime(completedAt) : '—'
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -65,9 +82,36 @@ function Select({
 
 // O conteúdo do detalhe é o mesmo nos dois layouts; só a moldura muda (linha da
 // tabela no desktop, bloco dentro do card no celular).
+// Áudio que a IA não conseguiu ouvir (download falhou ou passou do teto por
+// conversa) deixa a leitura incompleta. Sem este aviso, ela fica idêntica a uma
+// leitura completa — foi o que fez uma falha de download parecer erro da IA.
+function AudioWarning({ row }: { row: AiAnalysisRowDto }) {
+  if (row.audioExpected === 0 || row.audioAttached >= row.audioExpected) return null
+
+  const faltando = row.audioExpected - row.audioAttached
+
+  return (
+    <span
+      data-testid={`audio-warning-${row.analysisId}`}
+      className="rounded-full bg-warn-soft px-2 py-0.5 text-xs font-medium text-ink"
+      title="A IA analisou esta conversa sem ouvir todos os áudios."
+    >
+      {faltando} de {row.audioExpected} áudios não lidos
+    </span>
+  )
+}
+
 function DetailBody({ row }: { row: AiAnalysisRowDto }) {
   return (
     <div className="grid gap-2 md:grid-cols-2">
+      {row.audioExpected > 0 && (
+        <p>
+          <strong className="text-ink">Áudios ouvidos:</strong> {row.audioAttached} de{' '}
+          {row.audioExpected}
+          {row.audioAttached < row.audioExpected &&
+            ' — os que faltam não puderam ser baixados ou passaram do limite por conversa.'}
+        </p>
+      )}
       {row.evidence && (
         <p>
           <strong className="text-ink">Evidência:</strong> “{row.evidence}”
@@ -133,8 +177,9 @@ export function AiAnalysisPage() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [jobId, setJobId] = useState<string | null>(null)
   const [includeAudio, setIncludeAudio] = useState(false)
+  const [confirming, setConfirming] = useState<AiRunKind | null>(null)
+  const [started, setStarted] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const filters: AiAnalysisFilters = useMemo(
@@ -157,26 +202,53 @@ export function AiAnalysisPage() {
   const { data: sellers } = useSellers()
   const { data: types } = useOutcomeTypes()
   const { data: lossReasons } = useAiLossReasons()
-  const { data: job } = useAiJob(jobId)
+  const { data: jobState } = useAiStatus()
 
   const runAnalyses = useRunAiAnalyses()
   const runSyntheses = useRunAiSyntheses()
-  const running = job?.status === 'Pending' || job?.status === 'Running'
+  const estimate = useAiEstimate()
 
-  async function start(kind: 'analyses' | 'syntheses') {
+  // A vaga é única e vem do banco: enquanto houver rodada, os dois botões ficam
+  // travados — e continuam travados depois de recarregar a página.
+  const running = jobState?.running ?? null
+
+  const { mutate: runEstimate, reset: resetEstimate } = estimate
+
+  function confirm(kind: AiRunKind) {
+    setError(null)
+    setStarted(false)
+    resetEstimate()
+    setConfirming(kind)
+    runEstimate({ kind: kind === 'syntheses' ? 'Synthesize' : 'Analyze', filters, includeAudio })
+  }
+
+  async function start() {
+    if (!confirming) return
+
     setError(null)
     try {
-      const created =
-        kind === 'analyses'
-          ? await runAnalyses.mutateAsync({ filters, conversationIds: [], includeAudio })
-          : await runSyntheses.mutateAsync(filters)
-      setJobId(created.id)
+      if (confirming === 'syntheses') await runSyntheses.mutateAsync(filters)
+      else await runAnalyses.mutateAsync({ filters, conversationIds: [], includeAudio })
+
+      setStarted(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Não foi possível iniciar.')
     }
   }
 
+  function closeConfirm() {
+    setConfirming(null)
+    setStarted(false)
+    setError(null)
+  }
+
   const total = data?.total ?? 0
+
+  // A mais recente das duas últimas rodadas, se ela falhou. Sem isso, "análise
+  // não realizada por falta de saldo" só existiria no banco.
+  const failure = [jobState?.lastAnalysis, jobState?.lastSynthesis]
+    .filter((job) => job?.status === 'Failed' && job.error)
+    .sort((a, b) => (b!.completedAt ?? '').localeCompare(a!.completedAt ?? ''))[0]
 
   // Datas sempre têm valor, então não contam: o número no botão "Filtros" é o
   // dos recortes que o usuário realmente escolheu.
@@ -259,18 +331,33 @@ export function AiAnalysisPage() {
             para fora dela. */}
         <div className="flex w-full flex-col gap-2 md:w-auto md:items-end">
           <div className="flex items-center gap-2 max-md:flex-col max-md:items-stretch">
-            <Button variant="ghost" onClick={() => start('analyses')} disabled={running}>
-              Analisar conversas
+            <Button variant="ghost" onClick={() => confirm('analyses')} disabled={!!running}>
+              {RUN_LABEL.analyses}
             </Button>
-            <Button onClick={() => start('syntheses')} disabled={running}>
-              Refazer síntese
+            <Button onClick={() => confirm('syntheses')} disabled={!!running}>
+              {RUN_LABEL.syntheses}
             </Button>
+            {/* Exporta as leituras que já existem: nenhuma chamada de IA, então
+                o download é direto, como o de contatos. */}
+            <a
+              href={api.ai.analysesExportUrl(filters)}
+              data-testid="ai-export"
+              className="flex min-h-11 items-center justify-center rounded-lg border border-edge px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface md:min-h-0"
+            >
+              Exportar Excel
+            </a>
             {isMobile && (
               <Button variant="ghost" onClick={() => setFiltersOpen(true)}>
                 Filtros{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
               </Button>
             )}
           </div>
+          {/* Separadas de propósito: refazer a síntese é barato e acontece com
+              outra frequência do que reler as conversas. */}
+          <p data-testid="ai-last-runs" className="text-xs text-ink-muted">
+            Última análise: {lastRun(jobState?.lastAnalysis?.completedAt)} · Última síntese:{' '}
+            {lastRun(jobState?.lastSynthesis?.completedAt)}
+          </p>
           <label className="flex min-h-11 items-center gap-2 text-xs text-ink-muted md:min-h-0">
             <input
               type="checkbox"
@@ -284,36 +371,113 @@ export function AiAnalysisPage() {
         </div>
       </div>
 
-      {error && <ErrorState message={error} />}
+      {error && !confirming && <ErrorState message={error} />}
 
-      {job && (
+      {running && (
         <Card
-          data-testid="ai-job"
+          data-testid="ai-running"
           className="flex gap-3 py-3 max-md:flex-col max-md:items-start md:items-center"
         >
-          {running && <Spinner />}
+          <Spinner />
           <div className="text-sm">
-            {running && (
-              <span>
-                {job.kind === 'Analyze' ? 'Analisando conversas' : 'Refazendo sínteses'}…{' '}
-                {job.processed}/{job.total}
-              </span>
-            )}
-            {job.status === 'Completed' && (
-              <span>
-                Concluído: {job.processed} processadas
-                {job.skipped > 0 && `, ${job.skipped} sem análise`} · custo {brl(job.costBrl)}
-              </span>
-            )}
-            {job.status === 'Failed' && <span className="text-danger">{job.error ?? 'Falhou.'}</span>}
+            {running.kind === 'Analyze' ? 'Análise em andamento' : 'Síntese em andamento'} — roda em
+            segundo plano no servidor.
           </div>
-          {running && (
-            <span className="text-xs text-ink-muted">
-              Pode levar minutos por causa do limite de chamadas da IA.
-            </span>
-          )}
+          <span className="text-xs text-ink-muted">
+            Não é possível iniciar outra até esta terminar. Pode levar minutos por causa do limite de
+            chamadas da IA.
+          </span>
         </Card>
       )}
+
+      {/* Rodada que terminou mal não pode sumir em silêncio: o motivo fica na
+          tela até a próxima começar. */}
+      {!running && failure && (
+        <ErrorState
+          message={`${failure.kind === 'Analyze' ? 'Última análise' : 'Última síntese'}: ${failure.error}`}
+        />
+      )}
+
+      <Dialog
+        open={confirming !== null}
+        onClose={closeConfirm}
+        title={confirming ? RUN_LABEL[confirming] : ''}
+        footer={
+          started ? (
+            <div className="flex justify-end">
+              <Button onClick={closeConfirm}>Entendi</Button>
+            </div>
+          ) : (
+            <div className="flex justify-end gap-2 max-md:flex-col-reverse">
+              <Button variant="ghost" onClick={closeConfirm}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={start}
+                disabled={
+                  estimate.isPending ||
+                  estimate.data?.affordable === false ||
+                  runAnalyses.isPending ||
+                  runSyntheses.isPending
+                }
+              >
+                Confirmar
+              </Button>
+            </div>
+          )
+        }
+      >
+        {started ? (
+          <div className="space-y-2 text-sm" data-testid="ai-started">
+            <p>{confirming === 'syntheses' ? 'Síntese iniciada.' : 'Análise iniciada.'}</p>
+            <p className="text-ink-muted">
+              Roda em segundo plano no servidor. Pode fechar esta tela — o resultado aparece aqui
+              quando terminar.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2 text-sm" data-testid="ai-estimate">
+            {estimate.isPending && <span className="text-ink-muted">Calculando o custo…</span>}
+            {estimate.data && (
+              <>
+                <p>
+                  Custo estimado {brl(estimate.data.estimatedBrl)} · saldo{' '}
+                  {brl(estimate.data.available)}
+                  {!estimate.data.budgetEnabled && ' (controle de saldo desligado)'}
+                </p>
+                {/* Só o que mudou custa: dizer quanto foi reaproveitado é o que
+                    explica um custo baixo (ou zero) sem parecer erro. */}
+                <p className="text-xs text-ink-muted">
+                  {confirming === 'analyses'
+                    ? `${estimate.data.conversations} conversas no período · ${estimate.data.conversations - estimate.data.cached} sem leitura ou com mensagem nova · ${estimate.data.cached} reaproveitadas (não custam nada)`
+                    : `${estimate.data.sellers} vendedores a sintetizar; o resto não mudou desde a última síntese`}
+                </p>
+                {estimate.data.truncated && (
+                  <p className="text-xs text-ink-muted">
+                    O período tem mais conversas que o limite por rodada; as mais recentes entram
+                    primeiro.
+                  </p>
+                )}
+                {!estimate.data.affordable && (
+                  <p className="font-medium text-danger">
+                    O saldo da janela não cobre esta rodada. Reduza o período ou espere a recarga.
+                  </p>
+                )}
+                {confirming === 'analyses' && (
+                  <p className="text-xs text-ink-muted">
+                    As conversas analisadas são enviadas ao provedor de IA com nome e telefone do
+                    cliente mascarados.
+                  </p>
+                )}
+              </>
+            )}
+            {estimate.isError && (
+              <ErrorState message="Não foi possível calcular o custo desta rodada." />
+            )}
+            {error && <ErrorState message={error} />}
+          </div>
+        )}
+      </Dialog>
 
       {isMobile ? (
         <Dialog open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filtros">
@@ -410,6 +574,9 @@ export function AiAnalysisPage() {
                         {row.confidence < 0.5 && (
                           <span className="ml-1 text-xs text-ink-muted">(confiança baixa)</span>
                         )}
+                        <span className="ml-1 inline-block">
+                          <AudioWarning row={row} />
+                        </span>
                       </>
                     ),
                   },
@@ -473,6 +640,9 @@ export function AiAnalysisPage() {
                       {row.confidence < 0.5 && (
                         <span className="ml-1 text-xs text-ink-muted">(confiança baixa)</span>
                       )}
+                      <span className="ml-1 inline-block">
+                        <AudioWarning row={row} />
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <span

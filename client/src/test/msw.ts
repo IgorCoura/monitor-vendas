@@ -92,21 +92,27 @@ export const mswServer = setupServer(
     HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
   ),
   http.get('/api/v1/ai/syntheses', () => HttpResponse.json([])),
+  // Nenhuma rodada em andamento e nenhuma anterior: o estado inicial da tela.
+  http.get('/api/v1/ai/status', () =>
+    HttpResponse.json({ running: null, lastAnalysis: null, lastSynthesis: null }),
+  ),
+  http.post('/api/v1/ai/estimate', () =>
+    HttpResponse.json({
+      conversations: 12,
+      cached: 4,
+      sellers: 2,
+      estimatedBrl: 2.4,
+      available: 17.6,
+      affordable: true,
+      budgetEnabled: true,
+      truncated: false,
+    }),
+  ),
   http.get('/api/v1/ai/loss-reasons', () =>
     HttpResponse.json([
       { code: 'preco', label: 'Preço' },
       { code: 'sumiu', label: 'Cliente sumiu' },
     ]),
-  ),
-  http.get('/api/v1/ai/budget', () =>
-    HttpResponse.json({
-      enabled: true,
-      limit: 20,
-      committed: 0,
-      available: 20,
-      windowStart: '2026-07-30T03:00:00Z',
-      windowEnd: '2026-07-31T03:00:00Z',
-    }),
   ),
 )
 

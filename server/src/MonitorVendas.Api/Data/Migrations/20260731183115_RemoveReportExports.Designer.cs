@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MonitorVendas.Api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MonitorVendas.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260731183115_RemoveReportExports")]
+    partial class RemoveReportExports
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -27,9 +30,6 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
-
-                    b.Property<bool?>("Active")
-                        .HasColumnType("boolean");
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
@@ -72,10 +72,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Active")
-                        .IsUnique()
-                        .HasFilter("\"Active\"");
 
                     b.HasIndex("Status", "CreatedAt");
 
@@ -147,12 +143,6 @@ namespace MonitorVendas.Api.Data.Migrations
 
                     b.Property<bool>("AskedForSale")
                         .HasColumnType("boolean");
-
-                    b.Property<int>("AudioAttached")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("AudioExpected")
-                        .HasColumnType("integer");
 
                     b.Property<string>("ConductAlert")
                         .HasMaxLength(300)
@@ -759,9 +749,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
-
-                    b.Property<DateTime?>("LastReconciledAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Phone")
                         .IsRequired()

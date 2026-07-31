@@ -11,6 +11,17 @@ public class ConversationAiAnalysis
     public int MessageCount { get; set; }
     public DateTime LastMessageAt { get; set; }
 
+    // Esta leitura ainda serve para a conversa como ela está agora? A regra mora
+    // só aqui: o analisador decide se chama a IA e o estimador decide se cobra,
+    // e os dois precisam responder a mesma coisa.
+    public bool StillServes(ConversationAnalysisInput input) =>
+        MessageCount == input.MessageCount &&
+        LastMessageAt == input.LastMessageAt &&
+        IncludedAudio == (input.Attachments is { Count: > 0 }) &&
+        // Leitura que ouviu 3 de 5 áudios não serve quando os 5 estão disponíveis:
+        // faltou conversa, não faltou modelo.
+        AudioAttached == (input.Attachments?.Count ?? 0);
+
     // Leitura anterior não é apagada: vira histórico e permite ver a IA mudando
     // de opinião. Só a corrente alimenta planilha e tela (índice único parcial).
     public bool IsCurrent { get; set; } = true;
@@ -18,6 +29,12 @@ public class ConversationAiAnalysis
     // Se os áudios foram enviados junto. Entra na chave do cache: ligar o áudio
     // muda o que a IA enxerga, e a leitura surda anterior deixa de servir.
     public bool IncludedAudio { get; set; }
+
+    // Quantos áudios a conversa tem e quantos o modelo realmente ouviu. Sem esse
+    // par, leitura surda e leitura completa ficam idênticas na tela — foi o que
+    // fez uma falha de download passar por "a IA não entendeu o áudio".
+    public int AudioExpected { get; set; }
+    public int AudioAttached { get; set; }
 
     // Código do catálogo de desfechos, ou `Open` para conversa ainda viva.
     public string StatusCode { get; set; } = string.Empty;

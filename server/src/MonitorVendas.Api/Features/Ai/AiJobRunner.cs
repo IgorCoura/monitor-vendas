@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
 using MonitorVendas.Api.Features.Ai.Analysis;
-using MonitorVendas.Api.Features.ReportExport;
+using MonitorVendas.Api.Features.Ai.Export;
 using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Ai;
@@ -13,11 +13,18 @@ public sealed record AiJobFilters(
     DateTime To,
     IReadOnlyList<Guid> SellerIds,
     IReadOnlyList<Guid> ConversationIds,
-    bool IncludeAudio = false);
+    bool IncludeAudio = false,
+    // Default: só refaz o que mudou — conversa com mensagem nova, síntese cujo
+    // conjunto de leituras mudou. `true` ignora o cache e reprocessa tudo; a tela
+    // não expõe isso (a conta não compensa), mas a API aceita para reprocessar à
+    // mão quando o prompt ou o modelo mudam.
+    bool Force = false);
 
 public interface IAiJobRunner
 {
     Task<int> ProcessPendingAsync(CancellationToken ct = default);
+
+    Task<int> ReleaseStuckJobsAsync(CancellationToken ct = default);
 }
 
 // Executa os dois botões da tela de análises. Reusa o mesmo workset, o mesmo
@@ -25,7 +32,7 @@ public interface IAiJobRunner
 // a mesma, tenha vindo de onde vier.
 public sealed class AiJobRunner(
     IServiceScopeFactory scopeFactory,
-    IOptions<ReportExportOptions> exportOptions,
+    IOptions<AiJobOptions> jobOptions,
     IOptions<AiOptions> aiOptions,
     ILogger<AiJobRunner> logger) : IAiJobRunner
 {
@@ -60,6 +67,23 @@ public sealed class AiJobRunner(
         return processed;
     }
 
+    // Job que ficou "rodando" é de um processo que morreu no meio: só existe um
+    // runner, então ninguém mais o retomaria. Sem isso a vaga única ficaria
+    // ocupada para sempre e os botões nunca voltariam.
+    public async Task<int> ReleaseStuckJobsAsync(CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        return await db.Set<AiJob>()
+            .Where(j => j.Status == AiJobStatus.Running)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.Status, AiJobStatus.Failed)
+                .SetProperty(j => j.Active, (bool?)null)
+                .SetProperty(j => j.Error, "A rodada foi interrompida antes de terminar.")
+                .SetProperty(j => j.CompletedAt, DateTime.UtcNow), ct);
+    }
+
     private async Task RunAsync(Guid jobId, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
@@ -75,12 +99,22 @@ public sealed class AiJobRunner(
 
         try
         {
-            var deadline = DateTime.UtcNow.AddSeconds(Math.Max(5, exportOptions.Value.AiDeadlineSeconds));
+            // Segunda barreira do saldo: a primeira é o endpoint, mas entre o
+            // clique e a vez do job a janela pode ter virado ou outra rodada pode
+            // ter gastado. Confere antes de mandar o primeiro token.
+            if (!await CanAffordAsync(job.Kind, filters, ct))
+            {
+                job.Status = AiJobStatus.Failed;
+                job.Error = AiJobEstimator.NoBudgetMessage(job.Kind);
+                job.CompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                return;
+            }
 
             if (job.Kind == AiJobKind.Analyze)
-                await AnalyzeAsync(db, job, filters, deadline, ct);
+                await AnalyzeAsync(db, job, filters, ct);
             else
-                await SynthesizeAsync(db, job, filters, deadline, ct);
+                await SynthesizeAsync(db, job, filters, ct);
 
             job.Status = AiJobStatus.Completed;
             job.CompletedAt = DateTime.UtcNow;
@@ -94,11 +128,26 @@ public sealed class AiJobRunner(
             job.CompletedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
         }
+        finally
+        {
+            // A vaga é liberada tenha o job terminado bem ou mal: falha que
+            // deixasse a flag de pé travaria a tela até alguém mexer no banco.
+            job.Active = null;
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
     }
 
-    private async Task AnalyzeAsync(AppDbContext db, AiJob job, AiJobFilters filters, DateTime deadline, CancellationToken ct)
+    private async Task<bool> CanAffordAsync(AiJobKind kind, AiJobFilters filters, CancellationToken ct)
     {
-        var (conversations, catalog) = await LoadAsync(filters, force: true, ct);
+        using var scope = scopeFactory.CreateScope();
+        var estimator = scope.ServiceProvider.GetRequiredService<AiJobEstimator>();
+
+        return (await estimator.EstimateAsync(kind, filters, ct)).Affordable;
+    }
+
+    private async Task AnalyzeAsync(AppDbContext db, AiJob job, AiJobFilters filters, CancellationToken ct)
+    {
+        var (conversations, catalog) = await LoadAsync(filters, filters.Force, ct);
 
         // Seleção explícita da tela ganha do período: o usuário marcou aquelas.
         if (filters.ConversationIds.Count > 0)
@@ -110,9 +159,11 @@ public sealed class AiJobRunner(
         job.Total = conversations.Count;
         await db.SaveChangesAsync(ct);
 
+        // Sem prazo: o job roda em background e a tela não espera por ele, então
+        // cortar no meio só deixaria metade das conversas lidas.
         foreach (var chunk in conversations.Chunk(Math.Max(1, aiOptions.Value.MaxConcurrency)))
         {
-            if (ct.IsCancellationRequested || DateTime.UtcNow >= deadline)
+            if (ct.IsCancellationRequested)
                 break;
 
             var results = await Task.WhenAll(chunk.Select(async conversation =>
@@ -141,7 +192,7 @@ public sealed class AiJobRunner(
         job.Skipped += conversations.Count - job.Processed - job.Skipped;
     }
 
-    private async Task SynthesizeAsync(AppDbContext db, AiJob job, AiJobFilters filters, DateTime deadline, CancellationToken ct)
+    private async Task SynthesizeAsync(AppDbContext db, AiJob job, AiJobFilters filters, CancellationToken ct)
     {
         var (conversations, _) = await LoadAsync(filters, force: false, ct);
         var ids = conversations.Select(c => c.ConversationId).ToList();
@@ -163,7 +214,7 @@ public sealed class AiJobRunner(
 
         foreach (var group in groups)
         {
-            if (ct.IsCancellationRequested || DateTime.UtcNow >= deadline)
+            if (ct.IsCancellationRequested)
                 break;
 
             var rows = group
@@ -173,9 +224,10 @@ public sealed class AiJobRunner(
             using var inner = scopeFactory.CreateScope();
             var synthesizer = inner.ServiceProvider.GetRequiredService<SellerSynthesizer>();
 
-            // Force: o botão existe justamente para refazer o que já está em cache.
+            // Sem Force, vendedor cujo conjunto de leituras não mudou volta do
+            // cache sem custo: refazer daria a mesma síntese e cobraria de novo.
             var synthesis = await synthesizer.SynthesizeAsync(
-                ReportExportRunner.BuildSynthesisInput(group.Key, rows), force: true, ct);
+                SellerSynthesizer.BuildInput(group.Key, rows), filters.Force, ct);
 
             if (synthesis.Error is null)
                 job.Processed++;
@@ -197,7 +249,7 @@ public sealed class AiJobRunner(
 
         var (items, _) = await workset.LoadAsync(
             new ConversationAiFilter(filters.From, filters.To, filters.SellerIds,
-                exportOptions.Value.MaxConversationsPerExport, force, filters.IncludeAudio),
+                jobOptions.Value.MaxConversationsPerRun, force, filters.IncludeAudio),
             ct);
 
         return (items, await workset.CatalogAsync(ct));
@@ -206,12 +258,23 @@ public sealed class AiJobRunner(
 
 public sealed class AiJobBackgroundService(
     IAiJobRunner runner,
-    IOptions<ReportExportOptions> options,
+    IOptions<AiJobOptions> options,
     ILogger<AiJobBackgroundService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var interval = TimeSpan.FromSeconds(Math.Max(1, options.Value.IntervalSeconds));
+
+        try
+        {
+            var released = await runner.ReleaseStuckJobsAsync(stoppingToken);
+            if (released > 0)
+                logger.LogWarning("{Count} job(s) de IA ficaram presos e foram liberados na inicialização.", released);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Erro ao liberar jobs de IA presos.");
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {

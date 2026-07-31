@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Ai.Export;
 using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Ai.Analysis;
@@ -57,6 +58,28 @@ public sealed class SellerSynthesizer(
         - Responda em português do Brasil, direto e curto.
         """;
 
+
+    // As linhas que alimentam a síntese também definem a chave do cache dela.
+    public static SellerSynthesisInput BuildInput(Guid sellerId, IReadOnlyList<AiConversationRow> rows)
+    {
+        var lines = rows
+            .Select(r => $"{r.AiStatus ?? "—"} | {AiAnalysisSchema.FriendlyLossReason(r.LossReason) ?? "—"} | {r.Summary}")
+            .ToList();
+
+        var summary = string.Join('\n', new[]
+        {
+            $"Conversas auditadas: {lines.Count}",
+            $"Pediu a venda em: {rows.Count(r => r.AskedForSale == true)}",
+            $"Sinais de compra ignorados: {rows.Count(r => r.IgnoredBuyingSignal == true)}",
+        });
+
+        var analyses = rows
+            .Where(r => r.AnalysisId is not null && r.AnalyzedAt is not null)
+            .Select(r => new AnalysisRef(r.AnalysisId!.Value, r.AnalyzedAt!.Value))
+            .ToList();
+
+        return new SellerSynthesisInput(sellerId, rows[0].SellerName, summary, lines, analyses);
+    }
 
     public async Task<SellerSynthesis> SynthesizeAsync(
         SellerSynthesisInput input,

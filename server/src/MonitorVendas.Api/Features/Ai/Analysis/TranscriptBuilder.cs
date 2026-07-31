@@ -9,7 +9,12 @@ public sealed record TranscriptMessage(
     DateTime TimestampUtc,
     string? Text,
     string Type,
-    int? DurationSeconds = null);
+    int? DurationSeconds = null,
+    // Posição deste áudio entre os anexos enviados (1..N), na mesma ordem em que
+    // eles vão na chamada. Nulo = não foi anexado, e aí o marcador é só um aviso
+    // de que existiu áudio. Sem essa numeração o modelo recebe N blobs soltos e
+    // não sabe a qual momento da conversa cada um pertence.
+    int? AudioIndex = null);
 
 // Monta o texto que vai para a IA. Nome e telefone do cliente são substituídos
 // por marcadores: a análise não perde nada com isso e o dado pessoal não sai
@@ -53,7 +58,7 @@ public static partial class TranscriptBuilder
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(message.TimestampUtc, DateTimeKind.Utc), timeZone);
         var who = message.Direction == MessageDirection.Inbound ? "Cliente" : "Vendedor";
         var body = string.IsNullOrWhiteSpace(message.Text)
-            ? MediaLabel(message.Type, message.DurationSeconds)
+            ? MediaLabel(message.Type, message.DurationSeconds, message.AudioIndex)
             : Mask(message.Text, name, phone);
 
         return $"{who} ({local:dd/MM HH:mm}): {body}";
@@ -124,13 +129,21 @@ public static partial class TranscriptBuilder
 
     // A duração vai junto: um áudio de 3 segundos e um de 4 minutos dizem coisas
     // muito diferentes, e sem isso o modelo trata os dois como o mesmo evento.
-    public static string MediaLabel(string type, int? durationSeconds = null)
+    // Áudio anexado ganha número: é o que liga o blob enviado ao seu lugar na
+    // conversa ("[áudio 2 de 45s]" = o segundo anexo).
+    public static string MediaLabel(string type, int? durationSeconds = null, int? audioIndex = null)
     {
         var label = BaseMediaLabel(type);
+        if (label is not ("[áudio]" or "[vídeo]"))
+            return label;
 
-        return durationSeconds is > 0 && label is "[áudio]" or "[vídeo]"
-            ? $"{label[..^1]} de {durationSeconds}s]"
-            : label;
+        var inner = label[1..^1];
+        if (audioIndex is > 0)
+            inner += $" {audioIndex}";
+        if (durationSeconds is > 0)
+            inner += $" de {durationSeconds}s";
+
+        return $"[{inner}]";
     }
 
     private static string BaseMediaLabel(string type) => type switch

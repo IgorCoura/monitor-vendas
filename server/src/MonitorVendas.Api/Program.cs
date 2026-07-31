@@ -37,13 +37,13 @@ builder.Services.AddScoped<AiBudget>();
 builder.Services.AddScoped<ConversationAiWorkset>();
 builder.Services.AddScoped<ConversationAnalyzer>();
 builder.Services.AddScoped<SellerSynthesizer>();
+builder.Services.AddScoped<AiAnalysisQueries>();
+builder.Services.AddScoped<AiJobEstimator>();
 builder.Services.AddSingleton<IAiJobRunner, AiJobRunner>();
-builder.Services.Configure<ReportExportOptions>(builder.Configuration.GetSection(ReportExportOptions.Section));
-if (builder.Configuration.GetValue("ReportExport:Enabled", true))
+builder.Services.Configure<AiJobOptions>(builder.Configuration.GetSection(AiJobOptions.Section));
+if (builder.Configuration.GetValue("AiJob:Enabled", true))
     builder.Services.AddHostedService<AiJobBackgroundService>();
-builder.Services.AddSingleton<IReportExportRunner, ReportExportRunner>();
-if (builder.Configuration.GetValue("ReportExport:Enabled", true))
-    builder.Services.AddHostedService<ReportExportBackgroundService>();
+builder.Services.AddScoped<ReportExportBuilder>();
 builder.Services.Configure<WebhookOptions>(builder.Configuration.GetSection(WebhookOptions.Section));
 builder.Services.Configure<MetricsOptions>(builder.Configuration.GetSection(MetricsOptions.Section));
 builder.Services.AddSingleton<IWebhookProcessor, WebhookProcessor>();
@@ -75,7 +75,7 @@ if (builder.Configuration.GetValue("Metrics:AggregationEnabled", true))
 
 builder.Services.Configure<ReconciliationOptions>(builder.Configuration.GetSection(ReconciliationOptions.Section));
 builder.Services.AddSingleton<IReconciliationService, ReconciliationService>();
-if (builder.Configuration.GetValue("Reconciliation:Enabled", false))
+if (builder.Configuration.GetValue("Reconciliation:Enabled", true))
     builder.Services.AddHostedService<ReconciliationBackgroundService>();
 builder.Services.AddHealthChecks().AddDbContextCheck<AppDbContext>();
 

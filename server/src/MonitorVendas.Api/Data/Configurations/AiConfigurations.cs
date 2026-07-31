@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MonitorVendas.Api.Features.Ai;
 using MonitorVendas.Api.Features.Ai.Analysis;
 using MonitorVendas.Api.Features.Conversations;
-using MonitorVendas.Api.Features.ReportExport;
 using MonitorVendas.Api.Features.Sellers;
 
 namespace MonitorVendas.Api.Data.Configurations;
@@ -83,22 +82,8 @@ public class AiJobConfiguration : IEntityTypeConfiguration<AiJob>
         builder.Property(j => j.Error).HasMaxLength(500);
         builder.Property(j => j.CostBrl).HasPrecision(18, 6);
         builder.HasIndex(j => new { j.Status, j.CreatedAt });
-    }
-}
-
-public class ReportExportConfiguration : IEntityTypeConfiguration<ReportExport>
-{
-    public void Configure(EntityTypeBuilder<ReportExport> builder)
-    {
-        builder.ToTable("report_exports");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.FiltersJson).IsRequired();
-        builder.Property(e => e.Status).HasConversion<string>().HasMaxLength(12).IsRequired();
-        builder.Property(e => e.Phase).HasMaxLength(60);
-        builder.Property(e => e.Error).HasMaxLength(500);
-        builder.Property(e => e.FileName).HasMaxLength(120);
-        builder.Property(e => e.CostBrl).HasPrecision(18, 6);
-        // A fila do serviço em background: pendentes na ordem de criação.
-        builder.HasIndex(e => new { e.Status, e.CreatedAt });
+        // Uma rodada por vez, garantido pelo banco: análise e síntese disputam a
+        // mesma vaga porque disputam a mesma cota do provedor.
+        builder.HasIndex(j => j.Active).IsUnique().HasFilter("\"Active\"");
     }
 }

@@ -15,7 +15,11 @@ public sealed record ConversationAnalysisInput(
     // ter mudado — é o único caminho que ignora o cache de propósito.
     bool Force = false,
     // Áudios da conversa, quando o usuário pediu para enviá-los.
-    IReadOnlyList<AiAttachment>? Attachments = null);
+    IReadOnlyList<AiAttachment>? Attachments = null,
+    // Quantos áudios a conversa tem ao todo. Comparado com `Attachments`, é o que
+    // denuncia leitura surda: 3 de 5 anexados significa que o modelo não ouviu
+    // dois trechos, e a tela precisa dizer isso.
+    int AudioExpected = 0);
 
 public enum AnalysisResultKind
 {
@@ -49,19 +53,16 @@ public sealed class ConversationAnalyzer(
         var withAudio = input.Attachments is { Count: > 0 };
 
         // Conversa que não recebeu mensagem nova desde a última leitura não é
-        // reanalisada: é a economia que torna reexportar o mesmo período grátis.
+        // reanalisada: é a economia que torna "analisar só o que mudou" barato.
         // Mas ligar o áudio muda o que a IA enxerga, então a leitura surda não
         // serve — o modo entra na chave do cache.
-        if (!input.Force &&
-            existing is not null &&
-            existing.MessageCount == input.MessageCount &&
-            existing.LastMessageAt == input.LastMessageAt &&
-            existing.IncludedAudio == withAudio)
+        if (!input.Force && existing is not null && existing.StillServes(input))
             return new AnalysisOutcome(AnalysisResultKind.Cached, existing, null);
 
         var settings = options.Value;
         var schema = AiAnalysisSchema.BuildSchema(outcomes, input.AllowOpen);
-        var userPrompt = AiAnalysisSchema.BuildUserPrompt(outcomes, input.AllowOpen, input.Transcript);
+        var userPrompt = AiAnalysisSchema.BuildUserPrompt(
+            outcomes, input.AllowOpen, input.Transcript, input.Attachments?.Count ?? 0);
         var request = new AiRequest(
             AiAnalysisSchema.SystemPrompt, userPrompt, schema, settings.MaxOutputTokens, input.Attachments);
 
@@ -146,6 +147,8 @@ public sealed class ConversationAnalyzer(
         analysis.MessageCount = input.MessageCount;
         analysis.LastMessageAt = input.LastMessageAt;
         analysis.IncludedAudio = input.Attachments is { Count: > 0 };
+        analysis.AudioExpected = input.AudioExpected;
+        analysis.AudioAttached = input.Attachments?.Count ?? 0;
         analysis.StatusCode = parsed.Status;
         analysis.StatusConfidence = parsed.Confidence;
         analysis.StatusEvidence = Trim(parsed.Evidence, 500);

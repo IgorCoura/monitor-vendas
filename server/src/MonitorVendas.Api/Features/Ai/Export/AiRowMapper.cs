@@ -1,6 +1,6 @@
 using MonitorVendas.Api.Features.Ai.Analysis;
 
-namespace MonitorVendas.Api.Features.ReportExport;
+namespace MonitorVendas.Api.Features.Ai.Export;
 
 // Uma conversa + a leitura da IA viram uma linha. A regra da divergência mora
 // só aqui: a planilha, a tela e a síntese precisam concordar sobre o que é

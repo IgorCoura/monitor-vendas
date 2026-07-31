@@ -106,24 +106,40 @@ public sealed class ConversationAiWorkset(
             var phone = PhoneOf(contact?.RemoteJid);
             var silence = calendar.BusinessTimeBetween(conversation.LastMessageAt, now).TotalHours;
 
+            var attachments = new List<AiAttachment>();
+            var audioSeconds = 0d;
+            var audioIndexes = new Dictionary<string, int>();
+            // Quantos áudios a conversa tem, independentemente de terem sido
+            // baixados: é a referência que denuncia a leitura incompleta.
+            var audioExpected = filter.IncludeAudio
+                ? rows.Count(r => r.Type is "audioMessage" or "pttMessage")
+                : 0;
+
+            // Os áudios são buscados ANTES da transcrição: só depois de saber quais
+            // foram baixados dá para numerar os marcadores na mesma ordem em que os
+            // anexos vão na chamada. Áudio que falhou continua como marcador sem
+            // número — o modelo não recebeu aquele trecho e não deve inventá-lo.
+            if (filter.IncludeAudio && number is not null)
+            {
+                (attachments, audioSeconds, audioIndexes) = await FetchAudioAsync(
+                    number.InstanceName,
+                    rows.Select(r => (r.WaMessageId, r.DurationSeconds, r.Type)),
+                    ct);
+            }
+
             var transcript = TranscriptBuilder.Build(
-                [.. rows.Select(r => new TranscriptMessage(r.Direction, r.Timestamp, r.Text, r.Type, r.DurationSeconds))],
+                [.. rows.Select(r => new TranscriptMessage(
+                    r.Direction,
+                    r.Timestamp,
+                    r.Text,
+                    r.Type,
+                    r.DurationSeconds,
+                    audioIndexes.TryGetValue(r.WaMessageId, out var index) ? index : null))],
                 contact?.PushName,
                 phone,
                 timeZone,
                 conversation.StartedByContact,
                 silence);
-
-            var attachments = new List<AiAttachment>();
-            var audioSeconds = 0d;
-
-            if (filter.IncludeAudio && number is not null)
-            {
-                (attachments, audioSeconds) = await FetchAudioAsync(
-                    number.InstanceName,
-                    rows.Select(r => (r.WaMessageId, r.DurationSeconds, r.Type)),
-                    ct);
-            }
 
             items.Add(new ConversationContext(
                 conversation.Id,
@@ -144,7 +160,8 @@ public sealed class ConversationAiWorkset(
                     // classificada como "em andamento": o relógio decide antes da IA.
                     silence <= staleAfter,
                     filter.Force,
-                    attachments.Count == 0 ? null : attachments),
+                    attachments.Count == 0 ? null : attachments,
+                    audioExpected),
                 audioSeconds));
         }
 
@@ -170,13 +187,14 @@ public sealed class ConversationAiWorkset(
     // Busca os áudios da conversa até o teto configurado. Falha na Evolution ou
     // mídia expirada devolve menos anexos — a conversa continua sendo analisada
     // pelo texto, com o marcador "[áudio de 45s]" no lugar.
-    private async Task<(List<AiAttachment> Attachments, double Seconds)> FetchAudioAsync(
+    private async Task<(List<AiAttachment> Attachments, double Seconds, Dictionary<string, int> Indexes)> FetchAudioAsync(
         string instanceName,
         IEnumerable<(string WaMessageId, int? DurationSeconds, string Type)> media,
         CancellationToken ct)
     {
         var cap = Math.Max(0, aiOptions.Value.MaxAudioSecondsPerConversation);
         var attachments = new List<AiAttachment>();
+        var indexes = new Dictionary<string, int>();
         var total = 0d;
 
         foreach (var item in media.Where(m => m.Type is "audioMessage" or "pttMessage"))
@@ -193,10 +211,13 @@ public sealed class ConversationAiWorkset(
             }
 
             attachments.Add(new AiAttachment(audio.MimeType, audio.Base64, seconds));
+            // O índice é a posição do anexo na chamada, e é o que o marcador
+            // "[áudio N ...]" da transcrição referencia.
+            indexes[item.WaMessageId] = attachments.Count;
             total += seconds;
         }
 
-        return (attachments, total);
+        return (attachments, total, indexes);
     }
 
     private async Task<List<NumberRow>> NumbersAsync(ConversationAiFilter filter, CancellationToken ct)

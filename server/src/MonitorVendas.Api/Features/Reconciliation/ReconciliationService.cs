@@ -11,9 +11,15 @@ public sealed class ReconciliationOptions
 {
     public const string Section = "Reconciliation";
 
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
     public int IntervalMinutes { get; set; } = 30;
+
+    // Janela do primeiro ciclo de um número, antes de existir marca d'água.
     public int LookbackHours { get; set; } = 2;
+
+    // Teto da marca d'água: número parado há semanas não faz a volta puxar o
+    // histórico inteiro da Evolution numa tacada.
+    public int MaxLookbackHours { get; set; } = 72;
 }
 
 public interface IReconciliationService
@@ -35,16 +41,45 @@ public sealed class ReconciliationService(
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var evolution = scope.ServiceProvider.GetRequiredService<EvolutionApiClient>();
 
-        var numbers = await db.Set<WhatsappNumber>().AsNoTracking().ToListAsync(ct);
-        var lookbackStart = DateTime.UtcNow.AddHours(-Math.Max(1, options.Value.LookbackHours));
+        // Com tracking: a marca d'água de cada número é atualizada aqui.
+        var numbers = await db.Set<WhatsappNumber>().ToListAsync(ct);
+
+        // Número cadastrado que nunca chegou a parear não tem instância viva na
+        // Evolution: consultar dá 404 a cada ciclo, enchendo o log de aviso sobre
+        // algo que não é falha. "Já esteve ativo" é o que separa isso de um
+        // número que pareou e caiu — esse precisa ser reconciliado.
+        var everConnected = await db.Set<NumberStatusEvent>()
+            .Where(e => e.ResultingStatus == NumberStatus.Active)
+            .Select(e => e.WhatsappNumberId)
+            .Distinct()
+            .ToListAsync(ct);
+
         var inserted = 0;
+        var advanced = false;
 
         foreach (var number in numbers)
         {
+            if (number.Status != NumberStatus.Active && !everConnected.Contains(number.Id))
+            {
+                logger.LogDebug(
+                    "Reconciliação: {Instance} nunca pareou, sem instância na Evolution para consultar.",
+                    number.InstanceName);
+                continue;
+            }
+
+            // Capturado antes das chamadas: mensagem que chegar durante a varredura
+            // fica para o próximo ciclo em vez de cair no vão entre as duas.
+            var startedAt = DateTime.UtcNow;
+
             try
             {
                 inserted += await ReconcileConnectionStateAsync(number, db, evolution, ct);
-                inserted += await ReconcileMessagesAsync(number, lookbackStart, db, evolution, ct);
+                inserted += await ReconcileMessagesAsync(number, LookbackStartFor(number), db, evolution, ct);
+
+                // Só avança depois que a Evolution respondeu às duas chamadas: marca
+                // que avançasse na falha declararia varrido um trecho nunca lido.
+                number.LastReconciledAt = startedAt;
+                advanced = true;
             }
             catch (HttpRequestException ex)
             {
@@ -52,7 +87,7 @@ public sealed class ReconciliationService(
             }
         }
 
-        if (inserted > 0)
+        if (inserted > 0 || advanced)
         {
             try
             {
@@ -65,6 +100,18 @@ public sealed class ReconciliationService(
         }
 
         return inserted;
+    }
+
+    // De onde varrer: da última varredura bem-sucedida deste número, ou da janela
+    // inicial se ele nunca foi varrido. O teto evita que um número parado há
+    // semanas puxe o histórico inteiro de uma vez.
+    private DateTime LookbackStartFor(WhatsappNumber number)
+    {
+        var now = DateTime.UtcNow;
+        var start = number.LastReconciledAt ?? now.AddHours(-Math.Max(1, options.Value.LookbackHours));
+        var floor = now.AddHours(-Math.Max(1, options.Value.MaxLookbackHours));
+
+        return start < floor ? floor : start;
     }
 
     private static async Task<int> ReconcileConnectionStateAsync(

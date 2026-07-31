@@ -86,9 +86,9 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
         });
     }
 
-    private async Task<AiJobDto> RunJobAsync(string path)
+    private async Task<AiJobDto> RunJobAsync(string path, bool? force = null)
     {
-        var created = await (await Client.PostAsJsonAsync($"/api/v1/{path}", new { from = PeriodStart, to = PeriodEnd }))
+        var created = await (await Client.PostAsJsonAsync($"/api/v1/{path}", new { from = PeriodStart, to = PeriodEnd, force }))
             .Content.ReadFromJsonAsync<AiJobDto>();
 
         using (var scope = Factory.Services.CreateScope())
@@ -139,8 +139,9 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
         Assert.Equal("Vendas", vendas.Items[0].AiStatus);
     }
 
-    // Reanalisar cria uma versão nova: a tela mostra a leitura corrente e quantas
-    // versões existem, sem perder o histórico.
+    // Reanalisar (com `force`, já que a conversa não mudou) cria uma versão nova:
+    // a tela mostra a leitura corrente e quantas versões existem, sem perder o
+    // histórico.
     [Fact]
     public async Task Analyze_Twice_KeepsVersionCount()
     {
@@ -148,7 +149,7 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
         FakeAi.Always(Answer("lost", "preco"));
 
         await RunJobAsync("ai/analyses/run");
-        await RunJobAsync("ai/analyses/run");
+        await RunJobAsync("ai/analyses/run", force: true);
 
         var page = await Client.GetFromJsonAsync<AiAnalysisPageDto>($"/api/v1/ai/analyses?{Query}");
         var item = Assert.Single(page!.Items);
@@ -187,6 +188,87 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
         Assert.False(synthesis.Stale);
     }
 
+    // Refazer a síntese sem nada ter mudado volta do cache: não chama a IA nem
+    // cobra, e a estimativa avisa isso antes de o usuário confirmar.
+    [Fact]
+    public async Task Synthesize_WhenNothingChanged_CostsNothing()
+    {
+        await SeedAsync(1);
+        FakeAi.Always(Answer("lost", "preco"));
+        await RunJobAsync("ai/analyses/run");
+
+        FakeAi.Always(JsonSerializer.Serialize(new
+        {
+            overview = "amostra pequena",
+            strengths = new[] { "responde rápido" },
+            improvements = new[] { "não pede a venda" },
+        }));
+        await RunJobAsync("ai/syntheses/run");
+        var callsAfterFirst = FakeAi.CallCount;
+
+        var estimate = await (await Client.PostAsJsonAsync("/api/v1/ai/estimate", new
+        {
+            kind = "Synthesize",
+            from = PeriodStart,
+            to = PeriodEnd,
+        })).Content.ReadFromJsonAsync<AiEstimate>();
+
+        Assert.Equal(0, estimate!.Sellers);
+        Assert.Equal(0m, estimate.EstimatedBrl);
+
+        var job = await RunJobAsync("ai/syntheses/run");
+
+        Assert.Equal("Completed", job.Status);
+        Assert.Equal(callsAfterFirst, FakeAi.CallCount);
+        Assert.Equal(0m, job.CostBrl);
+        // Uma linha só: refazer com o mesmo conjunto de leituras não duplica nada.
+        Assert.Equal(1, await InDbAsync(db => db.Set<SellerAiSynthesis>().CountAsync()));
+    }
+
+    // Leitura nova muda o conjunto que alimenta a síntese, e aí ela é refeita —
+    // é o único caso em que a síntese volta a custar.
+    [Fact]
+    public async Task Synthesize_AfterTheReadingsChange_RunsAgain()
+    {
+        await SeedAsync(1);
+        FakeAi.Always(Answer("lost", "preco"));
+        await RunJobAsync("ai/analyses/run");
+
+        FakeAi.Always(JsonSerializer.Serialize(new { overview = "ok", strengths = new[] { "a" }, improvements = new[] { "b" } }));
+        await RunJobAsync("ai/syntheses/run");
+
+        // Mensagem nova força uma leitura nova, que muda o hash do conjunto.
+        await SeedAsync(db =>
+        {
+            var conversation = db.Set<Conversation>().Single();
+            conversation.LastMessageAt = conversation.LastMessageAt.AddMinutes(5);
+            db.Add(new Message
+            {
+                Id = Guid.NewGuid(),
+                ConversationId = conversation.Id,
+                WhatsappNumberId = NumberId,
+                WaMessageId = "m-novo",
+                Direction = MessageDirection.Inbound,
+                Type = "conversation",
+                Text = "ainda tem?",
+                Timestamp = conversation.LastMessageAt,
+            });
+            return Task.CompletedTask;
+        });
+
+        FakeAi.Always(Answer("sale"));
+        await RunJobAsync("ai/analyses/run");
+
+        FakeAi.Always(JsonSerializer.Serialize(new { overview = "mudou", strengths = new[] { "c" }, improvements = new[] { "d" } }));
+        var callsBefore = FakeAi.CallCount;
+        var job = await RunJobAsync("ai/syntheses/run");
+
+        Assert.Equal(callsBefore + 1, FakeAi.CallCount);
+        Assert.True(job.CostBrl > 0);
+        // A síntese antiga fica no banco, chaveada pelo conjunto que a gerou.
+        Assert.Equal(2, await InDbAsync(db => db.Set<SellerAiSynthesis>().CountAsync()));
+    }
+
     // Reanalisar depois de sintetizar deixa a síntese desatualizada, e a tela avisa
     // — senão o usuário leria um parecer que descreve leituras que já mudaram.
     [Fact]
@@ -200,7 +282,7 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
         await RunJobAsync("ai/syntheses/run");
 
         FakeAi.Always(Answer("sale"));
-        await RunJobAsync("ai/analyses/run");
+        await RunJobAsync("ai/analyses/run", force: true);
 
         var syntheses = await Client.GetFromJsonAsync<List<AiSynthesisDto>>("/api/v1/ai/syntheses");
         Assert.True(Assert.Single(syntheses!).Stale);

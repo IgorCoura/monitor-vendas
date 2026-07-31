@@ -25,6 +25,12 @@ public class AiJob
     public string FiltersJson { get; set; } = string.Empty;
     public AiJobStatus Status { get; set; }
 
+    // `true` enquanto o job está na fila ou rodando, NULL quando termina. É a
+    // flag que a tela lê para travar os botões e, com o índice único parcial, o
+    // que garante uma rodada por vez mesmo com dois cliques simultâneos —
+    // no Postgres vários NULL convivem, mas só existe um `true`.
+    public bool? Active { get; set; }
+
     public int Total { get; set; }
     public int Processed { get; set; }
     public int Skipped { get; set; }
