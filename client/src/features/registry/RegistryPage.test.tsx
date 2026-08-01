@@ -147,4 +147,16 @@ describe('RegistryPage', () => {
 
     expect(await screen.findByText('Já existe um pareamento em andamento.')).toBeInTheDocument()
   })
+
+  // Vendedor inativo tem o card esmaecido; o botão precisa estar desativado de
+  // verdade. (Regressão: parecia indisponível e mesmo assim conectava.)
+  it('não deixa conectar WhatsApp em vendedor inativo', async () => {
+    mswServer.use(http.get('/api/v1/sellers', () => HttpResponse.json([seller('Ana', false)])))
+
+    renderWithProviders(<RegistryPage />)
+
+    expect(await screen.findByRole('button', { name: 'Conectar WhatsApp' })).toBeDisabled()
+    expect(screen.getByText('Vendedor inativo: reative para conectar um WhatsApp.')).toBeInTheDocument()
+  })
+
 })

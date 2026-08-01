@@ -69,6 +69,11 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   (barra inferior fixa, as mesmas 6 rotas, com rótulos curtos — "Painel", "IA").
   O conteúdo reserva a altura dela com a classe `pb-nav`. **Rota nova entra nos
   dois lugares**: `links` do `Layout` e `items` do `BottomNav`.
+- **`Dialog` monta no `document.body` por portal.** `fixed`/`z-index` só valem
+  dentro do stacking context mais próximo, e `opacity`, `transform` ou `filter`
+  em qualquer ancestral criam um: aberto de dentro do card de vendedor inativo
+  (`opacity-60`), o dialog herdava a transparência e ficava atrás dos outros
+  cards. Componente novo que se sobrepõe à tela segue a mesma regra.
 - **`Dialog` vira bottom sheet** abaixo de `md`: colado embaixo, `max-h-[90dvh]`
   (**`dvh`, nunca `vh`** — no celular o `vh` ignora a barra de URL e joga o
   rodapé para fora da tela), rolagem do fundo travada, Escape fecha. Botão de

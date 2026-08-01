@@ -120,6 +120,9 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   `WebhookOptions.SubscribedEvents`, tratado pelo `QrCodeUpdatedHandler`, que só
   aceita sessão viva em `AwaitingScan`). Sem isso o `GET` devolvia `qr` nulo e o
   diálogo ficava no spinner para sempre — o QR nunca aparecia na tela.
+- **Vendedor inativo não recebe WhatsApp**: `POST /sellers/{id}/pairings` responde
+  **409**. Quem foi desativado saiu do time, e o número conectado nele ficaria
+  fora de todo relatório.
 - **Uma sessão por vez em todo o sistema**: `PairingSession.Active` (`true`
   enquanto viva, NULL ao terminar) com índice único parcial. Duas pessoas
   pareando ao mesmo tempo criariam duas instâncias e uma sessão órfã; o segundo
@@ -646,7 +649,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 411 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 412 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -712,7 +715,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (411 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (412 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

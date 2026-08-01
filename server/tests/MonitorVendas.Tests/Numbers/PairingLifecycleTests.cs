@@ -74,6 +74,27 @@ public class PairingLifecycleTests(IntegrationTestWebAppFactory factory) : BaseI
         Assert.Equal(0, await InDbAsync(db => db.Set<PairingSession>().CountAsync()));
     }
 
+    // Vendedor desativado não recebe WhatsApp novo: é quem saiu do time, e o
+    // número conectado nele ficaria fora de todo relatório.
+    [Fact]
+    public async Task Start_ForAnInactiveSeller_IsRefused()
+    {
+        await SeedSellerAsync();
+        await SeedAsync(async db =>
+        {
+            var seller = await db.Set<Seller>().SingleAsync(s => s.Id == AnaId);
+            seller.Active = false;
+        });
+
+        var response = await Client.PostAsJsonAsync($"/api/v1/sellers/{AnaId}/pairings", new { });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("inativo", await response.Content.ReadAsStringAsync());
+        // Nada criado: nem sessão, nem instância pendurada na Evolution.
+        Assert.Equal(0, await InDbAsync(db => db.Set<PairingSession>().CountAsync()));
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Path.Contains("/instance/create"));
+    }
+
     // Evolution fora do ar na criação da instância: sem instância não há QR, então
     // a sessão morre na hora e a vaga fica livre para a próxima tentativa.
     [Fact]

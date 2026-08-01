@@ -57,4 +57,21 @@ describe('Dialog', () => {
     expect(body).not.toContainElement(footer)
     expect(footer).toHaveTextContent('Confirmar')
   })
+
+  // O dialog monta no body, não onde é chamado: `fixed` e `z-index` só valem
+  // dentro do stacking context mais próximo, e `opacity`/`transform` em qualquer
+  // ancestral cria um. (Regressão: aberto de dentro do card de vendedor inativo
+  // — que usa `opacity-60` —, o QR aparecia meio transparente e atrás dos
+  // outros cards.)
+  it('monta fora do container que o chamou', () => {
+    const { container } = render(
+      <div className="opacity-60">
+        <Host onClose={() => {}} />
+      </div>,
+    )
+
+    const dialog = screen.getByRole('dialog')
+    expect(container).not.toContainElement(dialog)
+    expect(document.body).toContainElement(dialog)
+  })
 })

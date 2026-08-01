@@ -23,8 +23,14 @@ public sealed class PairingService(
 {
     public async Task<PairingResult> StartAsync(Guid sellerId, CancellationToken ct)
     {
-        if (!await db.Set<Seller>().AnyAsync(s => s.Id == sellerId, ct))
+        var seller = await db.Set<Seller>().AsNoTracking().FirstOrDefaultAsync(s => s.Id == sellerId, ct);
+        if (seller is null)
             return new PairingResult(null, "Vendedor não encontrado.", NotFound: true);
+
+        // Vendedor desativado é quem saiu do time: conectar um WhatsApp nele é
+        // engano de quem clicou, e o número ficaria fora de todo relatório.
+        if (!seller.Active)
+            return new PairingResult(null, "Vendedor inativo. Reative-o antes de conectar um WhatsApp.", Conflict: true);
 
         var now = DateTime.UtcNow;
         var session = new PairingSession

@@ -8,6 +8,7 @@ import {
   type InputHTMLAttributes,
   type SelectHTMLAttributes,
 } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import type { NumberStatus } from '../api/types'
 import { useIsMobile } from '../lib/useIsMobile'
@@ -127,7 +128,13 @@ export function Dialog({
   }, [open])
 
   if (!open) return null
-  return (
+
+  // Portal no body porque `fixed` e `z-index` só valem dentro do stacking
+  // context mais próximo — e qualquer ancestral com `opacity`, `transform` ou
+  // `filter` cria um. Renderizado onde é chamado, o dialog aberto de dentro do
+  // card de um vendedor inativo (`opacity-60`) herdava a transparência e ficava
+  // preso atrás dos outros cards.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 md:items-center md:p-4"
       onClick={onClose}
@@ -168,7 +175,8 @@ export function Dialog({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

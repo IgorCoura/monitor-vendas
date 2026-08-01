@@ -295,9 +295,21 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
 
       {/* Sem campo de telefone: digitar o número permitia cadastrar um e parear
           outro, e o histórico ficava pendurado no número errado. */}
-      <Button className="mt-3 w-full md:w-auto" onClick={handleStartPairing} disabled={startPairing.isPending}>
+      {/* Vendedor inativo tem o card inteiro esmaecido; o botão precisa estar
+          desativado de verdade, senão ele parece indisponível e funciona. */}
+      <Button
+        className="mt-3 w-full md:w-auto"
+        onClick={handleStartPairing}
+        disabled={startPairing.isPending || !seller.active}
+        title={seller.active ? undefined : 'Reative o vendedor para conectar um WhatsApp.'}
+      >
         Conectar WhatsApp
       </Button>
+      {!seller.active && (
+        <p className="mt-2 text-xs text-ink-muted">
+          Vendedor inativo: reative para conectar um WhatsApp.
+        </p>
+      )}
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}
 
       <QrDialog qr={qr} onClose={() => setQr(null)} />
