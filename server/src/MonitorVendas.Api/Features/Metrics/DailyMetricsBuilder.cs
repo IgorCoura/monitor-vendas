@@ -51,6 +51,21 @@ public sealed class DailyMetricsBuilder(
             var results = await queries.ComputeForNumbersAsync(numbers, calculator, fromUtc, toUtc, ct);
             var periodSeconds = (toUtc - fromUtc).TotalSeconds;
 
+            // O dono do dia sai do carimbo das próprias mensagens; dia sem mensagem
+            // (só downtime, por exemplo) fica com o dono atual do número. A troca
+            // de vendedor só vale a partir do dia seguinte, então o dia é de um só.
+            // Pares distintos e agrupamento em memória: o Postgres não tem max(uuid),
+            // e o dia tem um dono só — se aparecer mais de um, fica o primeiro.
+            var sellerPairs = await db.Set<Conversations.Message>().AsNoTracking()
+                .Where(m => numberIds.Contains(m.WhatsappNumberId) && m.Timestamp >= fromUtc && m.Timestamp < toUtc)
+                .Select(m => new { m.WhatsappNumberId, m.SellerId })
+                .Distinct()
+                .ToListAsync(ct);
+
+            var sellerByNumber = sellerPairs
+                .GroupBy(p => p.WhatsappNumberId)
+                .ToDictionary(g => g.Key, g => g.First().SellerId);
+
             var existing = await db.Set<DailyNumberMetrics>()
                 .Where(d => numberIds.Contains(d.WhatsappNumberId) && d.Day == group.Key)
                 .ToListAsync(ct);
@@ -59,11 +74,17 @@ public sealed class DailyMetricsBuilder(
                 .Where(o => numberIds.Contains(o.WhatsappNumberId) && o.Day == group.Key)
                 .ToListAsync(ct);
 
-            foreach (var (numberId, result) in results)
+            // O agregado é por (número, dia) e o dia tem um dono só — a troca de
+            // vendedor vale a partir do dia seguinte. Se ainda assim aparecer mais
+            // de um par no mesmo dia, os pedaços somam em vez de um sobrescrever o
+            // outro.
+            foreach (var byNumber in results.GroupBy(kv => kv.Key.NumberId))
             {
+                var numberId = byNumber.Key;
+
                 // O downtime em segundos sai do uptime (mesma fórmula, sem perda).
-                var downtimeSeconds = periodSeconds * (1 - result.UptimePercent / 100.0);
-                var snapshot = MetricsSnapshot.FromResult(result, downtimeSeconds);
+                var snapshot = MetricsSnapshot.Merge(byNumber.Select(kv =>
+                    MetricsSnapshot.FromResult(kv.Value, periodSeconds * (1 - kv.Value.UptimePercent / 100.0))));
 
                 var row = existing.FirstOrDefault(d => d.WhatsappNumberId == numberId);
                 if (row is null)
@@ -73,6 +94,9 @@ public sealed class DailyMetricsBuilder(
                 }
 
                 snapshot.CopyTo(row);
+                row.SellerId = sellerByNumber.TryGetValue(numberId, out var seller)
+                    ? seller
+                    : numbers.First(n => n.Id == numberId).SellerId;
                 row.ComputedAt = DateTime.UtcNow;
                 written++;
 

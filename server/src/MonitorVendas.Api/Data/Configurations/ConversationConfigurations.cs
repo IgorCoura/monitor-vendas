@@ -28,6 +28,9 @@ public class ConversationConfiguration : IEntityTypeConfiguration<Conversation>
         builder.HasIndex(c => new { c.WhatsappNumberId, c.ContactId, c.LastMessageAt });
         // Carga do relatório: conversas do número que tocam a janela.
         builder.HasIndex(c => new { c.WhatsappNumberId, c.StartedAt });
+        // Relatório por vendedor: o dono é o carimbado na conversa, não o atual
+        // do número — sem FK, porque o vendedor pode sumir e o passado fica.
+        builder.HasIndex(c => new { c.SellerId, c.StartedAt });
     }
 }
 
@@ -45,5 +48,6 @@ public class MessageConfiguration : IEntityTypeConfiguration<Message>
         // Composto: a carga do relatório filtra por conversa + janela de tempo.
         builder.HasIndex(m => new { m.ConversationId, m.Timestamp });
         builder.HasIndex(m => m.Timestamp);
+        builder.HasIndex(m => new { m.SellerId, m.Timestamp });
     }
 }

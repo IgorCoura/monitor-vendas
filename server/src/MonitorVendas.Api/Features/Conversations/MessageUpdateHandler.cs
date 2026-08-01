@@ -19,7 +19,8 @@ public sealed class MessageUpdateHandler(IDirtyDayTracker dirtyDays) : IWebhookE
             return;
 
         var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.InstanceName == evt.InstanceName, ct);
-        if (number is null)
+        // Número em quarentena (conectou com outro WhatsApp) não recebe nada.
+        if (number is null || number.Status == NumberStatus.WrongNumber)
             return;
 
         // O payload pode vir como objeto único ou como array de updates.

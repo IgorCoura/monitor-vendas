@@ -74,7 +74,8 @@ public sealed class LabelsAssociationHandler(
 
         var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.InstanceName == evt.InstanceName, ct);
         var contact = await db.Set<Contact>().FirstOrDefaultAsync(c => c.RemoteJid == chatId, ct);
-        if (number is null || contact is null)
+        // Número em quarentena (conectou com outro WhatsApp) não recebe nada.
+        if (number is null || contact is null || number.Status == NumberStatus.WrongNumber)
             return;
 
         var conversation = await db.Set<Conversation>()

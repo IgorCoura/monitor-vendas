@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { useAllNumbers, useContactShareStatus, useCreateContactShare } from '../../api/queries'
 import type { ContactFilters, ContactRowDto } from '../../api/types'
 import { Button, Dialog, ErrorState, Input, Select } from '../../components/ui'
+import { fmtPhone } from '../../lib/format'
 
 // Mesma regra do servidor (ContactMessageBuilder): contato sem nome salvo sai só
 // com o número. Aqui é só o exemplo do formato — o texto real é montado lá.
@@ -98,7 +99,7 @@ export function ShareDialog({
                 >
                   {active.map((number) => (
                     <option key={number.id} value={number.id}>
-                      {number.phone} — {number.sellerName}
+                      {fmtPhone(number.phone)} — {number.sellerName}
                     </option>
                   ))}
                 </Select>

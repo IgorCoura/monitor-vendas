@@ -64,6 +64,7 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
                 {
                     Id = conversationId,
                     WhatsappNumberId = NumberId,
+                    SellerId = SellerId,
                     ContactId = contactId,
                     StartedByContact = true,
                     StartedAt = start,
@@ -74,6 +75,7 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
                     Id = Guid.NewGuid(),
                     ConversationId = conversationId,
                     WhatsappNumberId = NumberId,
+                    SellerId = SellerId,
                     WaMessageId = $"m-{i}",
                     Direction = MessageDirection.Inbound,
                     Type = "conversation",
@@ -247,6 +249,7 @@ public class AiAnalysisEndpointsTests(IntegrationTestWebAppFactory factory) : Ba
                 Id = Guid.NewGuid(),
                 ConversationId = conversation.Id,
                 WhatsappNumberId = NumberId,
+                SellerId = SellerId,
                 WaMessageId = "m-novo",
                 Direction = MessageDirection.Inbound,
                 Type = "conversation",

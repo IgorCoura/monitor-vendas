@@ -12,41 +12,48 @@ public sealed class ContactQueries(AppDbContext db)
     // Teto da exportação: acima disso o arquivo deixa de ser planilha e vira dump.
     public const int MaxRows = 50_000;
 
-    private sealed record ConversationAgg(Guid ContactId, Guid ConversationId, Guid NumberId, DateTime FirstAt, DateTime LastAt);
-    private sealed record NumberInfo(Guid Id, string Phone, NumberStatus Status, Guid SellerId, string SellerName);
+    private sealed record ConversationAgg(
+        Guid ContactId, Guid ConversationId, Guid NumberId, Guid SellerId, DateTime FirstAt, DateTime LastAt);
+
+    private sealed record NumberInfo(Guid Id, string Phone, NumberStatus Status);
 
     // Carga em lote (6 queries, independentemente da quantidade de contatos) e
     // agrupamento em memória — mesmo desenho do ReportQueries.
     public async Task<IReadOnlyList<ContactRowDto>> ListAsync(ContactFilter filter, CancellationToken ct)
     {
+        // Todos os números: o filtro por vendedor é aplicado na CONVERSA, que
+        // carimba quem atendeu. Filtrar pelo dono atual do número faria uma
+        // transferência trocar de vendedor todo o histórico do contato.
         var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
-            .Where(n => filter.SellerId == null || n.SellerId == filter.SellerId)
-            .Join(db.Set<Seller>().AsNoTracking(), n => n.SellerId, s => s.Id,
-                (n, s) => new NumberInfo(n.Id, n.Phone, n.Status, s.Id, s.Name))
+            .Select(n => new NumberInfo(n.Id, n.Phone, n.Status))
             .ToListAsync(ct);
 
         if (numbers.Count == 0)
             return [];
 
-        var numberIds = numbers.Select(n => n.Id).ToArray();
+        var sellerNames = await db.Set<Seller>().AsNoTracking()
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+
         var numberById = numbers.ToDictionary(n => n.Id);
 
         var activity = db.Set<Message>().AsNoTracking()
             .Join(db.Set<Conversation>().AsNoTracking(), m => m.ConversationId, c => c.Id,
-                (m, c) => new { m.Timestamp, ConversationId = c.Id, c.ContactId, c.WhatsappNumberId })
-            .Where(x => numberIds.Contains(x.WhatsappNumberId));
+                (m, c) => new { m.Timestamp, ConversationId = c.Id, c.ContactId, c.WhatsappNumberId, c.SellerId });
 
+        if (filter.SellerId is { } sellerId)
+            activity = activity.Where(x => x.SellerId == sellerId);
         if (filter.FromUtc is { } fromUtc)
             activity = activity.Where(x => x.Timestamp >= fromUtc);
         if (filter.ToUtc is { } toUtc)
             activity = activity.Where(x => x.Timestamp < toUtc);
 
         var conversations = await activity
-            .GroupBy(x => new { x.ContactId, x.ConversationId, x.WhatsappNumberId })
+            .GroupBy(x => new { x.ContactId, x.ConversationId, x.WhatsappNumberId, x.SellerId })
             .Select(g => new ConversationAgg(
                 g.Key.ContactId,
                 g.Key.ConversationId,
                 g.Key.WhatsappNumberId,
+                g.Key.SellerId,
                 g.Min(x => x.Timestamp),
                 g.Max(x => x.Timestamp)))
             .ToListAsync(ct);
@@ -92,7 +99,11 @@ public sealed class ContactQueries(AppDbContext db)
             {
                 var contact = contactById[group.Key];
                 var phone = PhoneOf(contact.RemoteJid);
-                var responsible = numberById[group.MaxBy(c => c.LastAt)!.NumberId];
+
+                // O atendimento mais recente manda: dele saem o número, o status e
+                // o vendedor — este último carimbado na conversa, não o dono atual.
+                var latest = group.MaxBy(c => c.LastAt)!;
+                var responsible = numberById[latest.NumberId];
 
                 var outcome = group
                     .SelectMany(c => outcomeByConversation[c.ConversationId])
@@ -115,8 +126,8 @@ public sealed class ContactQueries(AppDbContext db)
                     outcome?.OutcomeTypeCode,
                     outcome is null ? null : typeNames.GetValueOrDefault(outcome.OutcomeTypeCode, outcome.OutcomeTypeCode),
                     active,
-                    responsible.SellerId,
-                    responsible.SellerName,
+                    latest.SellerId,
+                    sellerNames.GetValueOrDefault(latest.SellerId, "—"),
                     responsible.Phone,
                     responsible.Status.ToString(),
                     responsible.Status is NumberStatus.BannedTemporary or NumberStatus.BannedPermanent);

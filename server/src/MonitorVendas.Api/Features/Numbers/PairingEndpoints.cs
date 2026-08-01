@@ -1,0 +1,136 @@
+using Microsoft.EntityFrameworkCore;
+using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Reconciliation;
+using MonitorVendas.Api.Integrations.Evolution;
+
+namespace MonitorVendas.Api.Features.Numbers;
+
+public sealed record PairingSessionDto(
+    Guid Id,
+    Guid SellerId,
+    string Status,
+    string? DetectedPhone,
+    string? DetectedProfileName,
+    string? Error,
+    // O que a tela precisa perguntar antes de concluir: transferir de vendedor,
+    // reativar um número banido, ou os dois.
+    bool RequiresTransfer,
+    bool RequiresBannedConfirmation,
+    string? CurrentOwnerName,
+    DateTime ExpiresAt,
+    QrCodeDto? Qr)
+{
+    public static PairingSessionDto Of(
+        PairingSession session,
+        QrCodeDto? qr = null,
+        bool requiresTransfer = false,
+        bool requiresBanned = false,
+        string? currentOwner = null) =>
+        new(session.Id, session.SellerId, session.Status.ToString(), session.DetectedPhone,
+            session.DetectedProfileName, session.Error, requiresTransfer, requiresBanned,
+            currentOwner, session.ExpiresAt, qr);
+}
+
+public static class PairingEndpoints
+{
+    public static RouteGroupBuilder MapPairingEndpoints(this RouteGroupBuilder group)
+    {
+        // Conectar um WhatsApp: a instância nasce sem número e o cadastro só
+        // acontece depois que o WhatsApp diz qual número é.
+        group.MapPost("/sellers/{sellerId:guid}/pairings", async (
+            Guid sellerId,
+            PairingService pairing,
+            EvolutionApiClient evolution,
+            CancellationToken ct) =>
+        {
+            var result = await pairing.StartAsync(sellerId, ct);
+            if (result.Session is null)
+                return (result.Conflict, result.NotFound) switch
+                {
+                    (true, _) => Results.Conflict(new { error = result.Error }),
+                    (_, true) => Results.NotFound(new { error = result.Error }),
+                    _ => Results.Problem(title: result.Error, statusCode: StatusCodes.Status502BadGateway),
+                };
+
+            try
+            {
+                var qr = await evolution.ConnectAsync(result.Session.InstanceName, ct);
+                return Results.Ok(PairingSessionDto.Of(
+                    result.Session, new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode)));
+            }
+            catch (HttpRequestException)
+            {
+                await pairing.CancelAsync(result.Session, "Falha ao gerar o QR code.", ct);
+                return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        group.MapGet("/pairings/{id:guid}", async (Guid id, AppDbContext db, CancellationToken ct) =>
+        {
+            var session = await db.Set<PairingSession>().AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
+            return session is null ? Results.NotFound() : Results.Ok(await DescribeAsync(session, db, ct));
+        });
+
+        // Confirma transferência de vendedor e/ou reativação de número banido.
+        group.MapPost("/pairings/{id:guid}/confirm", async (
+            Guid id,
+            AppDbContext db,
+            PairingService pairing,
+            IReconciliationService reconciliation,
+            CancellationToken ct) =>
+        {
+            var session = await db.Set<PairingSession>().FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (session is null)
+                return Results.NotFound();
+
+            var result = await pairing.ConfirmAsync(session, ct);
+            if (result.Session is null)
+                return Results.Conflict(new { error = result.Error });
+
+            // Confirmada a sessão, o que foi descartado na quarentena volta pela
+            // reconciliação — mesmo pipeline, mesma idempotência.
+            await reconciliation.RunOnceAsync(ct);
+
+            return Results.Ok(await DescribeAsync(session, db, ct));
+        });
+
+        group.MapPost("/pairings/{id:guid}/cancel", async (
+            Guid id,
+            AppDbContext db,
+            PairingService pairing,
+            CancellationToken ct) =>
+        {
+            var session = await db.Set<PairingSession>().FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (session is null)
+                return Results.NotFound();
+
+            await pairing.CancelAsync(session, "Cancelado por quem abriu.", ct);
+            return Results.Ok(await DescribeAsync(session, db, ct));
+        });
+
+        return group;
+    }
+
+    // A tela precisa saber QUAL pergunta fazer: transferir, reativar banido, ou
+    // as duas — e de quem é o número hoje.
+    private static async Task<PairingSessionDto> DescribeAsync(PairingSession session, AppDbContext db, CancellationToken ct)
+    {
+        if (session.Status != PairingStatus.AwaitingConfirmation || session.ExistingNumberId is not { } numberId)
+            return PairingSessionDto.Of(session);
+
+        var existing = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == numberId, ct);
+        if (existing is null)
+            return PairingSessionDto.Of(session);
+
+        var owner = await db.Set<Sellers.Seller>().AsNoTracking()
+            .Where(s => s.Id == existing.SellerId)
+            .Select(s => s.Name)
+            .FirstOrDefaultAsync(ct);
+
+        return PairingSessionDto.Of(
+            session,
+            requiresTransfer: existing.SellerId != session.SellerId,
+            requiresBanned: existing.Status == NumberStatus.BannedPermanent,
+            currentOwner: owner);
+    }
+}

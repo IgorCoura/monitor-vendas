@@ -44,6 +44,10 @@ builder.Services.Configure<AiJobOptions>(builder.Configuration.GetSection(AiJobO
 if (builder.Configuration.GetValue("AiJob:Enabled", true))
     builder.Services.AddHostedService<AiJobBackgroundService>();
 builder.Services.AddScoped<ReportExportBuilder>();
+builder.Services.Configure<PairingOptions>(builder.Configuration.GetSection(PairingOptions.Section));
+builder.Services.AddScoped<PairingService>();
+if (builder.Configuration.GetValue("Pairing:CleanupEnabled", true))
+    builder.Services.AddHostedService<PairingCleanupService>();
 builder.Services.Configure<WebhookOptions>(builder.Configuration.GetSection(WebhookOptions.Section));
 builder.Services.Configure<MetricsOptions>(builder.Configuration.GetSection(MetricsOptions.Section));
 builder.Services.AddSingleton<IWebhookProcessor, WebhookProcessor>();
@@ -91,6 +95,7 @@ var v1 = app.MapVersionedGroup();
 v1.MapGet("/ping", () => Results.Ok(new { status = "ok" }));
 v1.MapSellersEndpoints();
 v1.MapNumbersEndpoints();
+v1.MapPairingEndpoints();
 v1.MapWebhookEndpoints();
 v1.MapReportsEndpoints();
 v1.MapHolidaysEndpoints();

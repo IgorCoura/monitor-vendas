@@ -50,14 +50,50 @@ public sealed class EvolutionApiClient(HttpClient http)
         return new Media(base64, GetString(root, "mimetype") ?? "application/octet-stream");
     }
 
-    public async Task CreateInstanceAsync(string instanceName, string phone, CancellationToken cancellationToken = default)
+    // `number` é OMITIDO quando não se sabe o telefone — mandá-lo vazio faz a
+    // Evolution recusar com 400 ("number does not match pattern"). É o caso do
+    // pareamento por QR, em que o número só aparece depois de conectar.
+    public async Task CreateInstanceAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
     {
-        var response = await http.PostAsJsonAsync(
-            "instance/create",
-            new { instanceName, number = phone, qrcode = true, integration = "WHATSAPP-BAILEYS" },
-            cancellationToken);
+        object body = string.IsNullOrWhiteSpace(phone)
+            ? new { instanceName, qrcode = true, integration = "WHATSAPP-BAILEYS" }
+            : new { instanceName, number = phone, qrcode = true, integration = "WHATSAPP-BAILEYS" };
+
+        var response = await http.PostAsJsonAsync("instance/create", body, cancellationToken);
 
         response.EnsureSuccessStatusCode();
+    }
+
+    // Derruba a sessão sem apagar a instância: o número pode voltar depois pelo
+    // mesmo registro. Best-effort de propósito — sessão já caída responde erro, e
+    // isso não pode impedir quem chamou de registrar a decisão dele.
+    public async Task<bool> LogoutAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.DeleteAsync($"instance/logout/{instanceName}", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
+    // Apaga a instância e, por cascata no banco da Evolution, todo o histórico
+    // dela (chats, contatos, mensagens, etiquetas). Só é seguro porque a fonte de
+    // verdade é o NOSSO banco: lá a Evolution é transporte, não arquivo.
+    public async Task<bool> DeleteInstanceAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.DeleteAsync($"instance/delete/{instanceName}", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
     }
 
     public async Task SetWebhookAsync(string instanceName, string url, IReadOnlyCollection<string> events, CancellationToken cancellationToken = default)

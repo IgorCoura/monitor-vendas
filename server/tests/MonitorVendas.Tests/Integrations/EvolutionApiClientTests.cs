@@ -86,6 +86,105 @@ public class EvolutionApiClientTests
         Assert.Equal("open", state);
     }
 
+    // Sem o objeto `instance` na resposta não há estado: devolver null é o que faz
+    // a reconciliação não inventar uma mudança de status.
+    [Fact]
+    public async Task GetConnectionStateAsync_WithoutInstance_IsNull()
+    {
+        var (client, _) = Build(body: """{"error":"not found"}""");
+
+        Assert.Null(await client.GetConnectionStateAsync("mv-1"));
+    }
+
+    // A Evolution devolve as mensagens ora como array, ora aninhadas em
+    // `messages.records`, e o timestamp ora número, ora string. Formato não lido é
+    // mensagem perdida na reconciliação.
+    [Fact]
+    public async Task FindMessagesAsync_ReadsNestedRecordsAndStringTimestamps()
+    {
+        var (client, _) = Build(body: """
+            {
+              "messages": {
+                "records": [
+                  {
+                    "key": { "remoteJid": "5511922221111@s.whatsapp.net", "fromMe": false, "id": "N-1" },
+                    "messageTimestamp": "1785000000"
+                  }
+                ]
+              }
+            }
+            """);
+
+        var found = await client.FindMessagesAsync("mv-1");
+
+        var message = Assert.Single(found);
+        Assert.Equal("N-1", message.KeyId);
+        Assert.Equal(new DateTime(2026, 7, 25, 17, 20, 0, DateTimeKind.Utc), message.Timestamp);
+    }
+
+    // Mídia sem base64 na resposta não vira anexo: a análise segue pelo texto.
+    [Fact]
+    public async Task GetMediaAsync_WithoutBase64_IsNull()
+    {
+        var (client, _) = Build(body: """{"mimetype":"audio/ogg"}""");
+
+        Assert.Null(await client.GetMediaAsync("mv-1", "m-1"));
+    }
+
+    // Sem `mimetype` o anexo ainda vale, com um tipo genérico — perder o áudio por
+    // causa de um campo ausente seria pior.
+    [Fact]
+    public async Task GetMediaAsync_WithoutMimetype_FallsBackToOctetStream()
+    {
+        var (client, _) = Build(body: """{"base64":"AAAA"}""");
+
+        var media = await client.GetMediaAsync("mv-1", "m-1");
+
+        Assert.Equal("application/octet-stream", media!.MimeType);
+    }
+
+    // Erro HTTP ao buscar mídia também degrada para "sem áudio", nunca derruba a
+    // análise da conversa.
+    [Fact]
+    public async Task GetMediaAsync_OnHttpError_IsNull()
+    {
+        var (client, _) = Build(HttpStatusCode.InternalServerError, "erro");
+
+        Assert.Null(await client.GetMediaAsync("mv-1", "m-1"));
+    }
+
+    // Evolution fora do ar: as operações best-effort respondem "não deu" em vez de
+    // estourar. Quem chama registra a decisão do operador de qualquer jeito.
+    [Fact]
+    public async Task WhenEvolutionIsUnreachable_BestEffortCallsReportFailure()
+    {
+        var client = new EvolutionApiClient(new HttpClient(new ThrowingHandler())
+        {
+            BaseAddress = new Uri("http://evolution.local/"),
+        });
+
+        Assert.Null(await client.GetMediaAsync("mv-1", "m-1"));
+        Assert.False(await client.LogoutAsync("mv-1"));
+        Assert.False(await client.DeleteInstanceAsync("mv-1"));
+    }
+
+    // Erro HTTP (instância já derrubada, por exemplo) também é "não deu", não
+    // exceção: derrubar sessão que já caiu não pode impedir o registro do ban.
+    [Fact]
+    public async Task LogoutAndDelete_OnHttpError_ReturnFalse()
+    {
+        var (client, _) = Build(HttpStatusCode.NotFound, "erro");
+
+        Assert.False(await client.LogoutAsync("mv-1"));
+        Assert.False(await client.DeleteInstanceAsync("mv-1"));
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new HttpRequestException("conexão recusada");
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

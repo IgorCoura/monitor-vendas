@@ -39,7 +39,9 @@ public sealed class AiAnalysisQueries(AppDbContext db)
             from analysis in db.Set<ConversationAiAnalysis>().AsNoTracking().Where(a => a.IsCurrent)
             join conversation in db.Set<Conversation>().AsNoTracking() on analysis.ConversationId equals conversation.Id
             join number in db.Set<WhatsappNumber>().AsNoTracking() on conversation.WhatsappNumberId equals number.Id
-            join seller in db.Set<Seller>().AsNoTracking() on number.SellerId equals seller.Id
+            // O vendedor é o carimbado na conversa: número transferido não muda
+            // quem atendeu no passado.
+            join seller in db.Set<Seller>().AsNoTracking() on conversation.SellerId equals seller.Id
             join contact in db.Set<Contact>().AsNoTracking() on conversation.ContactId equals contact.Id
             join outcome in db.Set<ConversationOutcome>().AsNoTracking() on conversation.Id equals outcome.ConversationId into outcomes
             from outcome in outcomes.DefaultIfEmpty()

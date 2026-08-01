@@ -4,7 +4,7 @@ import { api } from '../../api/client'
 import { useContacts, useOutcomeTypes, useSellers } from '../../api/queries'
 import type { ContactFilters } from '../../api/types'
 import { Button, Card, Dialog, EmptyState, ErrorState, Input, Select, Spinner } from '../../components/ui'
-import { dayEndIso, dayStartIso, fmtDateTime, toDayInput } from '../../lib/format'
+import { dayEndIso, dayStartIso, fmtDateTime, toDayInput, fmtPhone } from '../../lib/format'
 import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { ShareDialog } from './ShareDialog'
@@ -225,13 +225,13 @@ export function ContactsPage() {
               title={row.name}
               moreLabel="ver mais dados"
               items={[
-                { key: 'phone', label: 'Número', value: row.phone },
+                { key: 'phone', label: 'Número', value: fmtPhone(row.phone) },
                 { key: 'first', label: '1ª mensagem', value: fmtDateTime(row.firstMessageAt) },
                 { key: 'last', label: 'Última mensagem', value: fmtDateTime(row.lastMessageAt) },
                 { key: 'outcome', label: 'Desfecho', value: row.outcome ?? '—' },
                 { key: 'labels', label: 'Etiquetas', value: row.labels.join(', ') || '—' },
                 { key: 'seller', label: 'Vendedor', value: row.sellerName ?? '—' },
-                { key: 'sellerNumber', label: 'Nº do vendedor', value: row.sellerNumber ?? '—' },
+                { key: 'sellerNumber', label: 'Nº do vendedor', value: fmtPhone(row.sellerNumber) },
                 { key: 'banned', label: 'Banido?', value: row.numberBanned ? 'Sim' : 'Não' },
               ] satisfies MetricItem[]}
             />
@@ -259,13 +259,13 @@ export function ContactsPage() {
               {data.items.map((row) => (
                 <tr key={row.contactId} className="border-b border-edge/60 last:border-0">
                   <td className="px-4 py-3 font-medium">{row.name}</td>
-                  <td className="px-4 py-3 text-ink-muted">{row.phone}</td>
+                  <td className="px-4 py-3 text-ink-muted">{fmtPhone(row.phone)}</td>
                   <td className="px-4 py-3 text-ink-muted">{fmtDateTime(row.firstMessageAt)}</td>
                   <td className="px-4 py-3 text-ink-muted">{fmtDateTime(row.lastMessageAt)}</td>
                   <td className="px-4 py-3">{row.outcome ?? '—'}</td>
                   <td className="px-4 py-3 text-ink-muted">{row.labels.join(', ') || '—'}</td>
                   <td className="px-4 py-3">{row.sellerName ?? '—'}</td>
-                  <td className="px-4 py-3 text-ink-muted">{row.sellerNumber ?? '—'}</td>
+                  <td className="px-4 py-3 text-ink-muted">{fmtPhone(row.sellerNumber)}</td>
                   <td className="px-4 py-3">{row.numberBanned ? 'Sim' : 'Não'}</td>
                 </tr>
               ))}

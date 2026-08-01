@@ -24,8 +24,21 @@ export interface NumberResponse {
   createdAt: string
 }
 
-export interface CreateNumberResponse {
-  number: NumberResponse
+export type PairingStatus = 'AwaitingScan' | 'AwaitingConfirmation' | 'Completed' | 'Rejected'
+
+// Uma tentativa de conectar um WhatsApp. O número não é digitado: vem do próprio
+// aparelho que leu o QR, e só então vira cadastro.
+export interface PairingSessionDto {
+  id: string
+  sellerId: string
+  status: PairingStatus
+  detectedPhone: string | null
+  detectedProfileName: string | null
+  error: string | null
+  requiresTransfer: boolean
+  requiresBannedConfirmation: boolean
+  currentOwnerName: string | null
+  expiresAt: string
   qr: QrCodeDto | null
 }
 

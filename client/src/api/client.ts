@@ -9,8 +9,8 @@ import type {
   ContactFilters,
   ContactPageDto,
   ContactShareDto,
-  CreateNumberResponse,
   NumberWithSellerResponse,
+  PairingSessionDto,
   HolidayResponse,
   LabelSuggestionDto,
   NumberResponse,
@@ -132,14 +132,27 @@ export const api = {
   numbers: {
     list: (sellerId: string) => request<NumberResponse[]>(`/sellers/${sellerId}/numbers`),
     listAll: () => request<NumberWithSellerResponse[]>('/numbers'),
-    create: (sellerId: string, phone: string) =>
-      request<CreateNumberResponse>(`/sellers/${sellerId}/numbers`, {
+    // Reconectar um número que já existe. Ban permanente é decisão manual: só
+    // volta com confirmação explícita de quem opera.
+    connect: (id: string, confirmBanned = false) =>
+      request<QrCodeDto>(`/numbers/${id}/connect${confirmBanned ? '?confirmBanned=true' : ''}`, {
         method: 'POST',
-        body: JSON.stringify({ phone }),
       }),
-    connect: (id: string) => request<QrCodeDto>(`/numbers/${id}/connect`, { method: 'POST' }),
+    transfer: (id: string, sellerId: string) =>
+      request<NumberResponse>(`/numbers/${id}/transfer`, {
+        method: 'POST',
+        body: JSON.stringify({ sellerId }),
+      }),
     banPermanent: (id: string) =>
       request<NumberResponse>(`/numbers/${id}/ban-permanent`, { method: 'POST' }),
+  },
+  // O número nasce do WhatsApp que leu o QR, nunca de um campo digitado.
+  pairings: {
+    start: (sellerId: string) =>
+      request<PairingSessionDto>(`/sellers/${sellerId}/pairings`, { method: 'POST' }),
+    status: (id: string) => request<PairingSessionDto>(`/pairings/${id}`),
+    confirm: (id: string) => request<PairingSessionDto>(`/pairings/${id}/confirm`, { method: 'POST' }),
+    cancel: (id: string) => request<PairingSessionDto>(`/pairings/${id}/cancel`, { method: 'POST' }),
   },
   reports: {
     seller: (id: string, range: DateRange, fresh = false) =>

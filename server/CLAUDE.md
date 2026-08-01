@@ -34,6 +34,19 @@ com ProblemDetails padrão e sem autenticação, por decisão explícita do usu�
 Ao editar código aqui, siga a estrutura desta seção; não introduzir
 controllers, mediator ou Keycloak por causa do hook.
 
+## Critérios técnicos (valem para tudo)
+
+1. **O banco da Evolution não é fonte de verdade — só o nosso.** Ela é transporte:
+   qualquer instância pode ser deletada sem perda, porque o que importa já está
+   em `messages`/`conversations`/`contacts`. Nenhuma consulta de produto pode
+   depender de dado que só existe lá.
+2. **O número de um WhatsApp é sempre o `wuid` verificado**, nunca o digitado.
+   Guardado como dígitos com DDI (`5511912344567`), exibido como
+   `+55 11 91234-4567` (`PhoneNumber.Format` / `fmtPhone` no front).
+3. **O vendedor de um dado é o carimbado nele**, não o dono atual do número.
+4. **Ban permanente é decisão manual e não se desfaz sozinho**: sair dele exige
+   confirmação explícita de quem opera.
+
 ## Produto — decisões fechadas
 
 O app monitora desempenho de vendedores que vendem via WhatsApp. Dados vêm da
@@ -78,12 +91,85 @@ vendedor.
    `MessageUpsertHandler` (Contact/Conversation/Message + janela 15d),
    `MessageUpdateHandler` (acks entregue/lida), `ConnectionUpdateHandler`
    (status + `number_status_events`), `LabelsEditHandler`/`LabelsAssociationHandler`
-   (venda). Falha incrementa `Attempts` (máx. 5) sem travar a fila.
+   (venda). Falha incrementa `Attempts` (máx. 5) sem travar a fila, e o evento é
+   tentado **uma vez por passada** — o laço repescava o que acabara de falhar e
+   queimava as 5 tentativas em sequência, sem intervalo (mesmo bug que já tinha
+   sido corrigido no `ContactShareSender`; regressão em `WebhookProcessorTests`).
 3. `ReconciliationService` (gated `Reconciliation:Enabled`) compara
    `connectionState` e `findMessages` da Evolution com o banco e **sintetiza
    WebhookEvents** para o que faltar — mesmo pipeline, mesma idempotência.
    Ver "Marca d'água da reconciliação" abaixo.
 4. Relatórios: ver "Arquitetura de leitura das métricas" abaixo.
+
+## Pareamento por QR (`Features/Numbers`, `PairingSession`)
+
+O número **não é digitado**. Implementado em 2026-08-01, depois de constatar que
+a Evolution grava `Instance.number` (o que informamos) e `Instance.ownerJid` (o
+que pareou) **sem nunca compará-los** — dava para cadastrar um número e escanear
+com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
+
+- **Fluxo**: `POST /sellers/{id}/pairings` cria a instância com nome **opaco**
+  (`mv-{guid}`), configura o webhook e devolve o QR. Ao conectar, o
+  `connection.update` traz `wuid` — é dele que o número sai, via
+  `PhoneNumber.FromJid`. O nome é opaco porque a instância nasce antes de
+  sabermos o número e **a Evolution não renomeia instância**; recriar com o nome
+  "certo" custaria um novo pareamento.
+- **Uma sessão por vez em todo o sistema**: `PairingSession.Active` (`true`
+  enquanto viva, NULL ao terminar) com índice único parcial. Duas pessoas
+  pareando ao mesmo tempo criariam duas instâncias e uma sessão órfã; o segundo
+  pedido leva **409**.
+- **Resolução** (número normalizado por `PhoneNumber.ComparisonKey`, que ignora
+  DDI e o 9º dígito):
+
+  | Situação | Ação |
+  |---|---|
+  | Livre | cria o `WhatsappNumber`; a instância nova fica |
+  | Já **conectado** | instância nova apagada; erro com o nome do dono |
+  | Já existe, **mesmo vendedor**, desconectado | instância nova apagada; avisa que já existe e manda usar "Reconectar" — **nada é apagado** |
+  | Já existe, **outro vendedor** | `AwaitingConfirmation`; confirmar transfere |
+  | Já existe **banido** | idem, com aviso do ban; confirmar reativa |
+
+- **O registro é reaproveitado, nunca duplicado**: na transferência, o
+  `WhatsappNumber` existente troca de vendedor e passa a apontar para a instância
+  nova (a antiga é deletada). Criar outro deixaria o histórico do número órfão no
+  registro velho.
+- **Quarentena**: enquanto a sessão não é confirmada, todo evento da instância é
+  **descartado** — inclusive o despejo de histórico que o WhatsApp faz ao
+  conectar. Concluída a sessão, os eventos crus daquela instância recebidos a
+  partir de `QuarantineFrom` **voltam para a fila** (`ProcessedAt = NULL`) e são
+  reprocessados agora que o número tem dono; `LastReconciledAt` também volta para
+  `QuarantineFrom`, para o que nem chegou por webhook vir na varredura.
+  **Reenfileirar é obrigatório**: o dedupe por `key.id` impede a reconciliação de
+  sintetizar de novo um evento que já existe na tabela, então sem isso o descarte
+  era definitivo (bug corrigido; regressão em `PairingLifecycleTests`).
+- **Faxina** (`PairingCleanupService`, 30 s): sessão expirada
+  (`Pairing:ExpirationMinutes`, 5) tem a instância apagada e a vaga liberada — QR
+  aberto e esquecido não pode travar o sistema nem deixar sessão viva sem dono.
+- **Repareamento divergente**: instância **já cadastrada** que conecta com `wuid`
+  diferente vira `NumberStatus.WrongNumber`, com `logout` imediato. Os handlers
+  de mensagem, ack e etiqueta descartam tudo de número nesse estado.
+
+## Vínculo vendedor↔número é histórico
+
+`Conversation.SellerId` e `Message.SellerId` são gravados **na escrita**, e
+`DailyNumberMetrics.SellerId` guarda o dono do dia. Antes disso o vendedor era
+derivado de `WhatsappNumber.SellerId` na hora da consulta — transferir um número
+movia **todo o passado** junto, e o ranking de um mês fechado mudava depois de
+fechado.
+
+- `ReportQueries` chaveia por **`NumberSeller` (número + vendedor)**: um número
+  transferido rende um par por dono, cada um com o seu tempo. `GetRankingAsync`
+  agrupa os pares por vendedor; `GetSellerReportAsync` inclui os números que já
+  foram dele e produziram dado no período.
+- **Downtime, uptime e ban ficam com o dono vigente** — descrevem o canal, não o
+  atendimento. Rateá-los contaria o mesmo ban duas vezes.
+- **`POST /numbers/{id}/transfer`** troca o dono a partir de agora; a contagem de
+  bans (`CountBanTransitions`) segue contando as transições **do período**, então
+  o ban de julho continua com quem era dono em julho e some das contagens futuras
+  quando o número volta ou muda de mãos.
+- `SellerId` no agregado **não entra na chave**: a troca vale a partir do dia
+  seguinte, então cada (número, dia) tem um dono só. Na chave, o mesmo dia
+  poderia ser gravado duas vezes e a soma contaria em dobro.
 
 ## Marca d'água da reconciliação (`WhatsappNumber.LastReconciledAt`)
 
@@ -476,9 +562,11 @@ resposta não soma** — o agregado guarda um **histograma** (`FirstResponseBuck
 faixas estreitas até 30 min, larga na cauda) e a mediana é estimada por
 interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exata**.
 
-**Endpoints**: `POST/GET/PUT /api/v1/sellers`, `POST/GET /sellers/{id}/numbers`,
+**Endpoints**: `POST/GET/PUT /api/v1/sellers`, `GET /sellers/{id}/numbers`,
 `GET /numbers` (todos, com vendedor),
-`POST /numbers/{id}/connect` (novo QR), `POST /numbers/{id}/ban-permanent`,
+`POST /sellers/{id}/pairings` + `GET /pairings/{id}` + `/confirm` + `/cancel`,
+`POST /numbers/{id}/connect` (novo QR; `?confirmBanned=true` para número banido),
+`POST /numbers/{id}/transfer`, `POST /numbers/{id}/ban-permanent` (desloga),
 `POST /webhooks/evolution/{secret}`, `POST/GET/DELETE /holidays`,
 `GET/POST/PUT/DELETE /outcome-types` (+ `/{code}/terms`),
 `GET /outcome-labels/suggestions`, `GET /contacts`, `GET /contacts/export`,
@@ -541,7 +629,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 220 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 406 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -596,6 +684,31 @@ server/
   isso, o matcher singleton serviria dados de outro teste.
 - Testes de performance ficam em `Performance/` com `[Trait("Category","benchmark")]`
   e **não rodam** na suíte normal (`--filter "Category!=benchmark"`).
+- **Os serviços em background ficam desligados** para o teste dirigir o pipeline
+  na mão. O laço de cada um (o que roda em produção) é exercido em
+  `Infrastructure/BackgroundLoopTests` + `WebhookProcessorTests` +
+  `AiJobRunnerTests` + `PairingLifecycleTests`, instanciando o `BackgroundService`
+  e esperando a condição — sem isso, um erro no laço só apareceria no ar.
+
+### Cobertura
+
+`dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
+Code Coverage" --settings coverlet.runsettings`.
+
+Estado em 2026-08-01 (406 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+testes de integração (233) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
+38,7% — ver a nota sobre a estratégia abaixo.
+
+- **`CompilerGeneratedAttribute` não pode entrar no `ExcludeByAttribute`**: a
+  máquina de estado de `async` é marcada assim, e excluí-la apaga da medição o
+  corpo de quase todo método do projeto. Com ela na lista o número dizia 97% de
+  linhas; sem ela, os mesmos testes davam 90%.
+- A suíte é **deliberadamente de integração** (endpoints, EF, handlers e jobs
+  contra Postgres real): os unitários cobrem a lógica pura
+  (`MetricsCalculator`, `BusinessHoursCalendar`, `TranscriptBuilder`,
+  `PhoneNumber`, `WebhookPayload`, `ChartInjector`, writers), e é lá que se mede
+  a cobertura deles — o número "só unitários" sobre o projeto inteiro é baixo por
+  construção, não por falta de teste.
 
 ## Build, Run & Test
 

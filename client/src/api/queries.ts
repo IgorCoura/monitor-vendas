@@ -226,18 +226,50 @@ export function useUpdateSeller() {
   })
 }
 
-export function useCreateNumber() {
-  const client = useQueryClient()
+export function useConnectNumber() {
   return useMutation({
-    mutationFn: ({ sellerId, phone }: { sellerId: string; phone: string }) =>
-      api.numbers.create(sellerId, phone),
-    onSuccess: (_, { sellerId }) =>
-      client.invalidateQueries({ queryKey: ['numbers', sellerId] }),
+    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
+      api.numbers.connect(id, confirmBanned),
   })
 }
 
-export function useConnectNumber() {
-  return useMutation({ mutationFn: api.numbers.connect })
+// Pareamento: o número vem do WhatsApp que leu o QR. Enquanto a sessão está
+// viva, a tela pergunta o estado a cada 2s — é o servidor que descobre o número.
+export function useStartPairing() {
+  return useMutation({ mutationFn: (sellerId: string) => api.pairings.start(sellerId) })
+}
+
+export function usePairingStatus(id: string | null) {
+  const client = useQueryClient()
+  return useQuery({
+    queryKey: ['pairing', id],
+    queryFn: async () => {
+      const session = await api.pairings.status(id!)
+      if (session.status === 'Completed') {
+        void client.invalidateQueries({ queryKey: ['numbers'] })
+        void client.invalidateQueries({ queryKey: ['sellers'] })
+      }
+      return session
+    },
+    enabled: !!id,
+    refetchInterval: (query) => (query.state.data?.status === 'AwaitingScan' ? 2000 : false),
+  })
+}
+
+export function useConfirmPairing() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.pairings.confirm(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+export function useCancelPairing() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.pairings.cancel(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
 }
 
 export function useBanPermanent() {

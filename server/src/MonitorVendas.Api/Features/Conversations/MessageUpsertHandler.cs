@@ -38,7 +38,17 @@ public sealed class MessageUpsertHandler(
         var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.InstanceName == evt.InstanceName, ct);
         if (number is null)
         {
-            logger.LogWarning("Instância {Instance} não cadastrada; mensagem ignorada.", evt.InstanceName);
+            // Instância sem cadastro é, em regra, uma tentativa de pareamento em
+            // curso: o WhatsApp despeja o histórico assim que conecta, e isso não
+            // pode virar dado antes de sabermos de quem é o número.
+            logger.LogDebug("Instância {Instance} não cadastrada; mensagem ignorada.", evt.InstanceName);
+            return;
+        }
+
+        // Quarentena: o número conectou com outro WhatsApp e está em revisão.
+        if (number.Status == NumberStatus.WrongNumber)
+        {
+            logger.LogWarning("Número {Phone} está em quarentena; mensagem descartada.", number.Phone);
             return;
         }
 
@@ -86,6 +96,7 @@ public sealed class MessageUpsertHandler(
             {
                 Id = Guid.NewGuid(),
                 WhatsappNumberId = number.Id,
+                SellerId = number.SellerId,
                 ContactId = contact.Id,
                 StartedByContact = !fromMe,
                 StartedAt = timestamp,
@@ -103,6 +114,7 @@ public sealed class MessageUpsertHandler(
             Id = Guid.NewGuid(),
             ConversationId = conversation.Id,
             WhatsappNumberId = number.Id,
+            SellerId = number.SellerId,
             WaMessageId = waMessageId,
             Direction = fromMe ? MessageDirection.Outbound : MessageDirection.Inbound,
             Type = WebhookPayload.GetString(data, "messageType") ?? "unknown",

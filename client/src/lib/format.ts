@@ -87,3 +87,24 @@ export const periodOptions: { value: Period; label: string }[] = [
 export function rangeForPeriod(period: Period, now: Date = new Date()): { from: string; to: string } {
   return period === 'hoje' ? todayRange(now) : periodRange(period, now)
 }
+
+// Telefone na forma que o usuário lê: +55 11 91234-4567. O banco guarda só
+// dígitos com DDI; a máscara é só aqui, para nenhuma tela inventar a sua.
+// O que não couber no formato brasileiro sai como veio — inventar formato para
+// número estrangeiro seria pior que não formatar.
+export function fmtPhone(value: string | null | undefined): string {
+  const digits = (value ?? '').replace(/\D/g, '')
+  if (digits.length === 0) return '—'
+
+  const national = digits.startsWith('55') && (digits.length === 12 || digits.length === 13)
+    ? digits.slice(2)
+    : digits
+
+  if (national.length !== 10 && national.length !== 11) return digits
+
+  const area = national.slice(0, 2)
+  const subscriber = national.slice(2)
+  const cut = subscriber.length === 9 ? 5 : 4
+
+  return `+55 ${area} ${subscriber.slice(0, cut)}-${subscriber.slice(cut)}`
+}

@@ -94,6 +94,7 @@ public static class NumbersEndpoints
         // Reconexão (pós logout/ban temporário): gera um novo QR para o mesmo número.
         group.MapPost("/numbers/{id:guid}/connect", async (
             Guid id,
+            bool? confirmBanned,
             AppDbContext db,
             EvolutionApiClient evolution,
             CancellationToken ct) =>
@@ -101,6 +102,15 @@ public static class NumbersEndpoints
             var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
             if (number is null)
                 return Results.NotFound();
+
+            // Ban permanente é decisão manual de quem opera; reconectar por engano
+            // apagaria essa decisão em silêncio. Exige um "sim" explícito.
+            if (number.Status == NumberStatus.BannedPermanent && confirmBanned != true)
+                return Results.Conflict(new
+                {
+                    error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
+                    requiresConfirmation = true,
+                });
 
             try
             {
@@ -113,13 +123,54 @@ public static class NumbersEndpoints
             }
         });
 
-        // Promoção manual a ban permanente: o WhatsApp não distingue ban temporário
-        // de permanente no statusReason; quem confirma a perda definitiva é o operador.
-        group.MapPost("/numbers/{id:guid}/ban-permanent", async (Guid id, AppDbContext db, CancellationToken ct) =>
+        // Transferência de número entre vendedores. O passado NÃO se move: as
+        // conversas e mensagens já carimbadas continuam do vendedor antigo, e o
+        // novo dono responde pelo que vier daqui para frente.
+        group.MapPost("/numbers/{id:guid}/transfer", async (
+            Guid id,
+            TransferNumberRequest request,
+            AppDbContext db,
+            CancellationToken ct) =>
         {
             var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
             if (number is null)
                 return Results.NotFound();
+
+            var seller = await db.Set<Seller>().FirstOrDefaultAsync(s => s.Id == request.SellerId, ct);
+            if (seller is null)
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["sellerId"] = ["Vendedor não encontrado."],
+                });
+
+            if (number.SellerId == request.SellerId)
+                return Results.Ok(NumberResponse.From(number));
+
+            number.SellerId = request.SellerId;
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(NumberResponse.From(number));
+        });
+
+        // Promoção manual a ban permanente: o WhatsApp não distingue ban temporário
+        // de permanente no statusReason; quem confirma a perda definitiva é o operador.
+        group.MapPost("/numbers/{id:guid}/ban-permanent", async (
+            Guid id,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            // Número declarado perdido não pode continuar conectado: seguiria
+            // recebendo mensagem e contando uptime como se estivesse no ar. O
+            // logout é best-effort — Evolution fora ou sessão já caída não pode
+            // impedir o registro da decisão.
+            if (!await evolution.LogoutAsync(number.InstanceName, ct))
+                logger.LogWarning("Ban permanente de {Instance}: logout não confirmado pela Evolution.", number.InstanceName);
 
             number.Status = NumberStatus.BannedPermanent;
             db.Add(new NumberStatusEvent

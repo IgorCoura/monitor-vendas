@@ -148,7 +148,11 @@ client/src/
 │   │               #   Sem IA e sem job: o botão é um <a> para
 │   │               #   `api.reports.exportUrl(filters)` e o navegador baixa.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
-│   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
+│   ├── registry/   # CRUD vendedores + conexão de WhatsApp. NÃO existe campo de
+│   │               #   telefone: "Conectar WhatsApp" abre uma sessão de pareamento
+│   │               #   (PairingDialog) e o número vem do aparelho que leu o QR.
+│   │               #   O dialog conduz as confirmações (transferir de vendedor,
+│   │               #   reativar banido) e mostra o motivo quando o servidor recusa.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,
@@ -172,7 +176,9 @@ client/src/
   o catálogo é editado na tela `/labels`. `sale` já aparece como "Vendas" nos
   campos fixos, então é filtrado da lista dinâmica para não duplicar.
 - Erros da API: `ApiError` carrega o `error`/`title` do corpo — exibir a
-  mensagem, não engolir. Na tela `/ai` isso vale para o **409** (já existe rodada
+  mensagem, não engolir.
+- **Telefone sempre por `fmtPhone`** (`lib/format.ts`): `+55 11 91234-4567`. O
+  banco guarda só dígitos com DDI; nenhuma tela inventa a própria máscara. Na tela `/ai` isso vale para o **409** (já existe rodada
   em andamento) e o **422** (sem saldo): as duas frases vêm do servidor.
 - **O trabalho de IA é 100% do servidor.** A tela nunca acompanha progresso —
   `useAiStatus` pergunta o estado da vaga única (5 s enquanto houver rodada) e é
