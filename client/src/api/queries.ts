@@ -1,7 +1,7 @@
-import type { MutableRefObject } from 'react'
+import { useRef, type MutableRefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type DateRange } from './client'
-import type { AiAnalysisFilters, ContactFilters, ReportExportFilters } from './types'
+import type { AiAnalysisFilters, ContactFilters } from './types'
 
 export function useSellers() {
   return useQuery({ queryKey: ['sellers'], queryFn: api.sellers.list })
@@ -88,36 +88,6 @@ export function useExportMetrics() {
   return useQuery({ queryKey: ['export-metrics'], queryFn: api.reports.exportMetrics })
 }
 
-export function useAiBudget(enabled = true) {
-  return useQuery({ queryKey: ['ai-budget'], queryFn: api.ai.budget, enabled })
-}
-
-export function useEstimateExport() {
-  return useMutation({ mutationFn: (filters: ReportExportFilters) => api.reports.estimateExport(filters) })
-}
-
-export function useCreateExport() {
-  const client = useQueryClient()
-  return useMutation({
-    mutationFn: (filters: ReportExportFilters) => api.reports.createExport(filters),
-    // A exportação consome saldo de IA: o valor exibido precisa acompanhar.
-    onSuccess: () => client.invalidateQueries({ queryKey: ['ai-budget'] }),
-  })
-}
-
-// Acompanha o job até terminar; concluído ou falho, o polling para.
-export function useExportStatus(id: string | null) {
-  return useQuery({
-    queryKey: ['export-status', id],
-    queryFn: () => api.reports.exportStatus(id!),
-    enabled: !!id,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      return status === 'Pending' || status === 'Running' ? 2000 : false
-    },
-  })
-}
-
 export function useAiAnalyses(filters: AiAnalysisFilters, page: number, pageSize = 50) {
   return useQuery({
     queryKey: ['ai-analyses', filters, page, pageSize],
@@ -135,39 +105,58 @@ export function useAiLossReasons() {
 }
 
 export function useRunAiAnalyses() {
+  const client = useQueryClient()
   return useMutation({
     mutationFn: ({ filters, conversationIds, includeAudio }: {
       filters: AiAnalysisFilters
       conversationIds: string[]
       includeAudio?: boolean
     }) => api.ai.runAnalyses(filters, conversationIds, includeAudio),
+    // A rodada nasce ocupando a vaga: a tela precisa travar os botões na hora.
+    onSuccess: () => client.invalidateQueries({ queryKey: ['ai-status'] }),
   })
 }
 
 export function useRunAiSyntheses() {
-  return useMutation({ mutationFn: (filters: AiAnalysisFilters) => api.ai.runSyntheses(filters) })
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (filters: AiAnalysisFilters) => api.ai.runSyntheses(filters),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['ai-status'] }),
+  })
 }
 
-// Terminado o job, as listas são invalidadas: a tela precisa mostrar o resultado
-// sem o usuário ter que recarregar.
-export function useAiJob(id: string | null) {
+export function useAiEstimate() {
+  return useMutation({
+    mutationFn: ({ kind, filters, includeAudio }: {
+      kind: 'Analyze' | 'Synthesize'
+      filters: AiAnalysisFilters
+      includeAudio?: boolean
+    }) => api.ai.estimate(kind, filters, includeAudio),
+  })
+}
+
+// O estado da vaga única. Enquanto houver rodada em andamento a tela pergunta de
+// novo a cada 5s; terminada, as listas são invalidadas para o resultado aparecer
+// sem o usuário recarregar.
+export function useAiStatus() {
   const client = useQueryClient()
+  const wasRunning = useRef(false)
+
   return useQuery({
-    queryKey: ['ai-job', id],
+    queryKey: ['ai-status'],
     queryFn: async () => {
-      const job = await api.ai.job(id!)
-      if (job.status === 'Completed' || job.status === 'Failed') {
+      const status = await api.ai.status()
+      const running = status.running !== null
+
+      if (wasRunning.current && !running) {
         void client.invalidateQueries({ queryKey: ['ai-analyses'] })
         void client.invalidateQueries({ queryKey: ['ai-syntheses'] })
-        void client.invalidateQueries({ queryKey: ['ai-budget'] })
       }
-      return job
+
+      wasRunning.current = running
+      return status
     },
-    enabled: !!id,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      return status === 'Pending' || status === 'Running' ? 2000 : false
-    },
+    refetchInterval: (query) => (query.state.data?.running ? 5000 : false),
   })
 }
 

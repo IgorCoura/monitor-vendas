@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using MonitorVendas.Api.Features.Ai.Analysis;
+using MonitorVendas.Api.Features.Ai.Export;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.ReportExport;
 
@@ -24,29 +25,18 @@ public class ReportWorkbookWriterTests
             [new OutcomeMetricDto("sale", "Vendas", sales, null, null),
              new OutcomeMetricDto("lost", "Clientes perdidos", 1, null, null)]);
 
-    private static ReportExportData Data(
-        IReadOnlyList<AiConversationRow>? aiRows = null,
-        IReadOnlyList<SellerSynthesis>? syntheses = null) =>
+    private static ReportExportData Data() =>
         new(From, To,
             [
                 new RankingEntryDto(Guid.NewGuid(), "Ana", Metrics(10, 10, 4, median: 3)),
                 new RankingEntryDto(Guid.NewGuid(), "Bruno", Metrics(90, 0)),
             ],
-            [],
-            aiRows ?? [],
-            syntheses ?? [],
-            null);
+            []);
 
     private static XLWorkbook Open(byte[] bytes) => new(new MemoryStream(bytes));
 
-    private static AiConversationRow AiRow(string? realOutcome, string? aiStatus, bool divergent, double? confidence = 0.9) =>
-        new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), From,
-            "Ana", "5511900001111", "Maria", "5511977776666", From, To,
-            realOutcome, aiStatus, confidence, divergent, "vou pagar amanhã", "preco",
-            true, false, "achou caro", true, "prometeu e sumiu", "oi!", "kit", "resumo", null, null);
-
-    // A seleção da tela decide as abas: sem IA marcada, a planilha não ganha abas
-    // de IA; com gráficos, ganha a aba deles.
+    // A seleção da tela decide as abas: com gráficos marcados, a planilha ganha a
+    // aba deles.
     [Fact]
     public void Build_CreatesOnlyTheSelectedSheets()
     {
@@ -57,7 +47,6 @@ public class ReportWorkbookWriterTests
         Assert.True(workbook.Worksheets.Contains("Resumo"));
         Assert.True(workbook.Worksheets.Contains("Ranking"));
         Assert.True(workbook.Worksheets.Contains("Gráficos"));
-        Assert.False(workbook.Worksheets.Contains("IA — Conversas"));
     }
 
     // Escolher métricas restringe as colunas do ranking — é o filtro do usuário
@@ -106,73 +95,17 @@ public class ReportWorkbookWriterTests
         Assert.Equal("—", row.Cell(2).GetString());
     }
 
-    // A coluna de divergência é o que justifica a aba: IA dizendo perdida onde
-    // ninguém etiquetou precisa saltar aos olhos.
-    [Fact]
-    public void Build_FlagsDivergenceBetweenLabelAndAi()
-    {
-        var request = ReportExportRequest.Empty(From, To) with { IncludeAi = true };
-        var data = Data([
-            AiRow("Vendas", "Vendas", divergent: false),
-            AiRow(null, "Clientes perdidos", divergent: true),
-        ]);
-
-        using var workbook = Open(ReportWorkbookWriter.Build(data, request, SaoPaulo));
-        var sheet = workbook.Worksheet("IA — Conversas");
-
-        Assert.Equal("Divergência", sheet.Cell(1, 10).GetString());
-        Assert.Equal("Não", sheet.Cell(2, 10).GetString());
-        Assert.Equal("Sim", sheet.Cell(3, 10).GetString());
-        Assert.Equal("—", sheet.Cell(3, 7).GetString());
-        Assert.Equal("Preço", sheet.Cell(3, 12).GetString());
-    }
-
-    // Conversa sem análise não some da planilha: sai com a observação do motivo.
-    [Fact]
-    public void Build_KeepsConversationsThatCouldNotBeAnalyzed()
-    {
-        var request = ReportExportRequest.Empty(From, To) with { IncludeAi = true };
-        var skipped = AiRow(null, null, divergent: false, confidence: null) with
-        {
-            NotAnalyzedReason = "Saldo de IA insuficiente.",
-        };
-
-        using var workbook = Open(ReportWorkbookWriter.Build(Data([skipped]), request, SaoPaulo));
-        var sheet = workbook.Worksheet("IA — Conversas");
-
-        Assert.Equal("—", sheet.Cell(2, 8).GetString());
-        Assert.Equal("Saldo de IA insuficiente.", sheet.Cell(2, 22).GetString());
-    }
-
-    // A síntese por vendedor sai como texto legível, com as evidências abaixo do nome.
-    [Fact]
-    public void Build_WritesSellerSynthesis()
-    {
-        var request = ReportExportRequest.Empty(From, To) with { IncludeAi = true };
-        var synthesis = new SellerSynthesis(Guid.NewGuid(), "Ana", "amostra pequena",
-            ["responde rápido"], ["não pede a venda"], "preço", "treinar fechamento", 0.01m, null);
-
-        using var workbook = Open(ReportWorkbookWriter.Build(Data(syntheses: [synthesis]), request, SaoPaulo));
-        var sheet = workbook.Worksheet("IA — Vendedores");
-
-        Assert.Equal("Ana", sheet.Cell(1, 1).GetString());
-        Assert.Equal("amostra pequena", sheet.Cell(2, 2).GetString());
-        Assert.Equal("responde rápido", sheet.Cell(3, 2).GetString());
-        Assert.Equal("não pede a venda", sheet.Cell(4, 2).GetString());
-    }
-
-    // A planilha completa, com gráficos e abas de IA, precisa passar no validador
-    // do OpenXML — senão o Excel acusa arquivo corrompido.
+    // A planilha completa, com gráficos, precisa passar no validador do OpenXML —
+    // senão o Excel acusa arquivo corrompido.
     [Fact]
     public void Build_ProducesASchemaValidFile()
     {
         var request = ReportExportRequest.Empty(From, To) with
         {
             Charts = ["sales", "conversationsStarted"],
-            IncludeAi = true,
         };
 
-        var bytes = ReportWorkbookWriter.Build(Data([AiRow("Vendas", "Vendas", false)]), request, SaoPaulo);
+        var bytes = ReportWorkbookWriter.Build(Data(), request, SaoPaulo);
 
         using var stream = new MemoryStream(bytes);
         using var document = SpreadsheetDocument.Open(stream, false);

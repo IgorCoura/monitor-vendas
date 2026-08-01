@@ -85,16 +85,16 @@ Monorepo com dois projetos independentes — `server/` (API) e `client/`
 
 ```mermaid
 flowchart LR
-    WA["WhatsApp<br/>(vendedores)"] <--> EVO["Evolution API<br/>:8081"]
+    WA["WhatsApp<br/>(vendedores)"] <--> EVO["Evolution API<br/>:8201"]
     EVO -- "webhook (push)" --> API
     API -- "findMessages / connectionState<br/>(reconciliação)" --> EVO
     API -- "sendText" --> EVO
 
     subgraph Browser
-      UI["React 19 + Vite<br/>nginx :3000"]
+      UI["React 19 + Vite<br/>nginx :8203"]
     end
 
-    UI -- "/api/v1/*" --> API["MonitorVendas.Api<br/>.NET 10 Minimal API<br/>:8080"]
+    UI -- "/api/v1/*" --> API["MonitorVendas.Api<br/>.NET 10 Minimal API<br/>:8200"]
     API <--> PG[("PostgreSQL 17<br/>:5432")]
     API -- "IAiProvider<br/>(análise das conversas)" --> LLM["LLM<br/>Gemini por padrão"]
 ```
@@ -348,9 +348,9 @@ docker compose up --build
 
 | Serviço | URL |
 |---|---|
-| Front-end | http://localhost:3000 |
-| API | http://localhost:8080 |
-| Evolution API | http://localhost:8081 |
+| Front-end | http://localhost:8203 |
+| API | http://localhost:8200 |
+| Evolution API | http://localhost:8201 |
 | PostgreSQL | `localhost:5433` (5432 no container) |
 
 > **Volume novo?** A Evolution usa um banco separado no mesmo Postgres. Crie-o
@@ -360,7 +360,7 @@ docker compose up --build
 > ```
 
 **Smoke test:** `GET /health` (checa o banco), `GET /api/v1/ping` e
-`GET :8081/` (Evolution respondendo).
+`GET :8201/` (Evolution respondendo).
 
 > A porta **5433** no host é proposital: a máquina de desenvolvimento tem um
 > PostgreSQL local ocupando a 5432.
@@ -374,17 +374,19 @@ docker compose up -d postgres evolution
 docker compose exec postgres psql -U postgres -c "CREATE DATABASE evolution;"
 
 # 2. API (roda MigrateAsync no startup — o Postgres precisa estar de pé)
-dotnet run --project src/MonitorVendas.Api --urls http://localhost:8080
+dotnet run --project src/MonitorVendas.Api --urls http://0.0.0.0:8200
 
-# 3. front (proxy /api → localhost:8080)
+# 3. front em :8202 (proxy /api → localhost:8200)
 cd ../client
 npm install
 npm run dev
 ```
 
 Com a API rodando no host, aponte `Webhook:PublicBaseUrl` para
-`http://host.docker.internal:8080` — é assim que o container da Evolution
-alcança a API para entregar os webhooks.
+`http://host.docker.internal:8200` — é assim que o container da Evolution
+alcança a API para entregar os webhooks. **Bindar em `0.0.0.0` não é
+opcional**: com `--urls http://localhost:8200` o .NET escuta só no loopback e o
+container não alcança a API — os webhooks somem sem erro nenhum.
 
 ### Primeiros passos no app
 

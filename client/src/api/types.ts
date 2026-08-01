@@ -177,6 +177,7 @@ export interface AiAnalysisRowDto {
   analysisId: string
   sellerId: string | null
   sellerName: string
+  sellerNumber: string
   contactName: string
   contactPhone: string
   startedAt: string
@@ -200,6 +201,10 @@ export interface AiAnalysisRowDto {
   model: string
   analyzedAt: string
   versions: number
+  // Áudios da conversa e quantos o modelo ouviu: `attached < expected` é leitura
+  // incompleta, e a tela precisa avisar em vez de parecer completa.
+  audioExpected: number
+  audioAttached: number
 }
 
 export interface AiAnalysisPageDto {
@@ -238,6 +243,25 @@ export interface AiJobDto {
   completedAt: string | null
 }
 
+// O estado que decide se os botões da tela de IA ficam disponíveis. Vem do
+// banco, então continua valendo depois de recarregar a página.
+export interface AiStatusDto {
+  running: AiJobDto | null
+  lastAnalysis: AiJobDto | null
+  lastSynthesis: AiJobDto | null
+}
+
+export interface AiEstimate {
+  conversations: number
+  cached: number
+  sellers: number
+  estimatedBrl: number
+  available: number
+  affordable: boolean
+  budgetEnabled: boolean
+  truncated: boolean
+}
+
 export interface AiLossReason {
   code: string
   label: string
@@ -253,15 +277,6 @@ export interface AiAnalysisFilters {
   recontact: '' | 'true' | 'false'
 }
 
-export interface AiBudgetStatus {
-  enabled: boolean
-  limit: number
-  committed: number
-  available: number
-  windowStart: string
-  windowEnd: string
-}
-
 export interface ReportMetricOption {
   key: string
   label: string
@@ -274,36 +289,4 @@ export interface ReportExportFilters {
   metrics: string[]
   charts: string[]
   includeNumbers: boolean
-  includeAi: boolean
-  includeAudio: boolean
-}
-
-export interface ReportExportEstimate {
-  conversations: number
-  cached: number
-  toAnalyze: number
-  estimatedBrl: number
-  available: number
-  affordable: boolean
-  truncated: boolean
-}
-
-export type ReportExportStatus = 'Pending' | 'Running' | 'Completed' | 'Failed'
-
-export interface ReportExportDto {
-  id: string
-  from: string
-  to: string
-  status: ReportExportStatus
-  totalConversations: number
-  analyzedConversations: number
-  cachedConversations: number
-  skippedConversations: number
-  costBrl: number
-  phase: string | null
-  error: string | null
-  fileName: string | null
-  fileAvailable: boolean
-  createdAt: string
-  completedAt: string | null
 }

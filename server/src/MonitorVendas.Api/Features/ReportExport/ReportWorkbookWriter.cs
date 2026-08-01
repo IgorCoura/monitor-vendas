@@ -33,9 +33,6 @@ public static class ReportWorkbookWriter
             if (request.IncludeNumbers && data.SellerReports.Count > 0)
                 WriteNumbers(workbook, data, metrics);
 
-            if (request.IncludeAi)
-                AiSheetsWriter.Write(workbook, data, timeZone);
-
             workbook.SaveAs(stream);
 
             if (charts.Count > 0)
@@ -91,31 +88,6 @@ public static class ReportWorkbookWriter
             }
 
             row++;
-        }
-
-        if (data.AiSummary is { } ai)
-        {
-            row++;
-            sheet.Cell(row, 1).Value = "Análise por IA";
-            sheet.Cell(row, 1).Style.Font.Bold = true;
-            row++;
-            foreach (var (label, value) in new (string, string)[]
-                     {
-                         ("Modelo", ai.Model),
-                         ("Conversas analisadas agora", ai.Analyzed.ToString()),
-                         ("Reaproveitadas do cache", ai.FromCache.ToString()),
-                         ("Sem análise", ai.NotAnalyzed.ToString()),
-                         ("Custo (R$)", ai.CostBrl.ToString("0.0000")),
-                     })
-            {
-                sheet.Cell(row, 1).Value = label;
-                sheet.Cell(row, 2).Value = value;
-                row++;
-            }
-
-            sheet.Cell(row + 1, 1).Value =
-                "As abas de IA são estimativa de um modelo de linguagem, não medição. O desfecho oficial continua sendo o da etiqueta.";
-            sheet.Cell(row + 1, 1).Style.Font.Italic = true;
         }
 
         sheet.Column(1).Width = 34;

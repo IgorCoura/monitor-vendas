@@ -1,43 +1,8 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MonitorVendas.Api.Common;
 using MonitorVendas.Api.Data;
 
 namespace MonitorVendas.Api.Features.ReportExport;
-
-public sealed record ReportExportRequestBody(
-    DateTime? From,
-    DateTime? To,
-    IReadOnlyList<Guid>? SellerIds,
-    IReadOnlyList<string>? Metrics,
-    IReadOnlyList<string>? Charts,
-    bool? IncludeNumbers,
-    bool? IncludeAi,
-    bool? IncludeAudio);
-
-public sealed record ReportExportDto(
-    Guid Id,
-    DateTime From,
-    DateTime To,
-    string Status,
-    int TotalConversations,
-    int AnalyzedConversations,
-    int CachedConversations,
-    int SkippedConversations,
-    decimal CostBrl,
-    string? Phase,
-    string? Error,
-    string? FileName,
-    bool FileAvailable,
-    DateTime CreatedAt,
-    DateTime? CompletedAt)
-{
-    public static ReportExportDto Of(ReportExport export) =>
-        new(export.Id, export.From, export.To, export.Status.ToString(),
-            export.TotalConversations, export.AnalyzedConversations, export.CachedConversations,
-            export.SkippedConversations, export.CostBrl, export.Phase, export.Error, export.FileName,
-            export.File is not null, export.CreatedAt, export.CompletedAt);
-}
 
 public static class ReportExportEndpoints
 {
@@ -57,95 +22,61 @@ public static class ReportExportEndpoints
                 .Select(m => new { m.Key, m.Label }));
         });
 
-        // Prévia de custo: é o que permite a tela mostrar "R$ 2,40 de R$ 47,60"
-        // antes de o usuário confirmar.
-        group.MapPost("/reports/export/estimate", async (
-            ReportExportRequestBody body,
-            IReportExportRunner runner,
+        // Download direto, como o de contatos: a planilha sai das métricas já
+        // calculadas e leva milissegundos — não há o que esperar em background.
+        group.MapGet("/reports/export", async (
+            DateTime? from,
+            DateTime? to,
+            string? sellerIds,
+            string? metrics,
+            string? charts,
+            bool? includeNumbers,
+            ReportExportBuilder builder,
             CancellationToken ct) =>
         {
-            var request = Build(body);
+            var request = Build(from, to, sellerIds, metrics, charts, includeNumbers);
             if (request is null)
-                return InvalidRange();
-
-            return Results.Ok(await runner.EstimateAsync(request, ct));
-        });
-
-        group.MapPost("/reports/export", async (
-            ReportExportRequestBody body,
-            AppDbContext db,
-            CancellationToken ct) =>
-        {
-            var request = Build(body);
-            if (request is null)
-                return InvalidRange();
-
-            var export = new ReportExport
-            {
-                Id = Guid.NewGuid(),
-                From = request.From,
-                To = request.To,
-                // Os filtros ficam congelados: o que roda em background é o que foi
-                // confirmado na tela, mesmo que a seleção mude depois.
-                FiltersJson = JsonSerializer.Serialize(request),
-                Status = ReportExportStatus.Pending,
-                CreatedAt = DateTime.UtcNow,
-            };
-
-            db.Add(export);
-            await db.SaveChangesAsync(ct);
-
-            return Results.Accepted($"/api/v1/reports/export/{export.Id}", ReportExportDto.Of(export));
-        });
-
-        group.MapGet("/reports/export/{id:guid}", async (Guid id, AppDbContext db, CancellationToken ct) =>
-        {
-            var export = await db.Set<ReportExport>().AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct);
-            return export is null ? Results.NotFound() : Results.Ok(ReportExportDto.Of(export));
-        });
-
-        group.MapGet("/reports/export/{id:guid}/file", async (Guid id, AppDbContext db, CancellationToken ct) =>
-        {
-            var export = await db.Set<ReportExport>().AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct);
-            if (export is null)
-                return Results.NotFound();
-
-            if (export.File is null)
-                return Results.Conflict(new
+                return Results.ValidationProblem(new Dictionary<string, string[]>
                 {
-                    error = export.Status == ReportExportStatus.Failed
-                        ? export.Error ?? "A exportação falhou."
-                        : "A planilha ainda não está pronta.",
+                    ["from"] = ["'from' precisa ser anterior a 'to'."],
                 });
 
-            return Results.File(export.File, ReportWorkbookWriter.ContentType, export.FileName ?? "relatorio.xlsx");
+            var (file, fileName) = await builder.BuildAsync(request, ct);
+
+            return Results.File(file, ReportWorkbookWriter.ContentType, fileName);
         });
 
         return group;
     }
 
-    private static ReportExportRequest? Build(ReportExportRequestBody body)
+    private static ReportExportRequest? Build(
+        DateTime? from,
+        DateTime? to,
+        string? sellerIds,
+        string? metrics,
+        string? charts,
+        bool? includeNumbers)
     {
-        var to = UtcDates.ToUtc(body.To) ?? DateTime.UtcNow;
-        var from = UtcDates.ToUtc(body.From) ?? to.AddDays(-30);
-        if (from >= to)
+        var toUtc = UtcDates.ToUtc(to) ?? DateTime.UtcNow;
+        var fromUtc = UtcDates.ToUtc(from) ?? toUtc.AddDays(-30);
+        if (fromUtc >= toUtc)
             return null;
 
         return new ReportExportRequest(
-            from,
-            to,
-            body.SellerIds ?? [],
-            body.Metrics ?? [],
-            body.Charts ?? [],
-            body.IncludeNumbers ?? true,
-            body.IncludeAi ?? false,
-            // Áudio só com IA ligada: sozinho não teria para onde ir.
-            (body.IncludeAudio ?? false) && (body.IncludeAi ?? false));
+            fromUtc,
+            toUtc,
+            [.. Items(sellerIds)
+                .Select(id => Guid.TryParse(id, out var parsed) ? parsed : (Guid?)null)
+                .Where(id => id is not null)
+                .Select(id => id!.Value)],
+            Items(metrics),
+            Items(charts),
+            includeNumbers ?? true);
     }
 
-    private static IResult InvalidRange() =>
-        Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["from"] = ["'from' precisa ser anterior a 'to'."],
-        });
+    // Listas vêm separadas por vírgula, como nos filtros de contatos.
+    private static List<string> Items(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : [.. value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
 }

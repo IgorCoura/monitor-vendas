@@ -5,5 +5,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/MonitorVendas.Tests/MonitorVendas.Tests.csproj" />
   </Folder>
-  <Project Path="docker-compose.dcproj" />
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
 </Solution>

@@ -1,13 +1,7 @@
 using System.Net;
-using System.Net.Http.Json;
-using System.Text.Json;
 using ClosedXML.Excel;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using MonitorVendas.Api.Features.Ai;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
-using MonitorVendas.Api.Features.ReportExport;
 using MonitorVendas.Api.Features.Sellers;
 using MonitorVendas.Tests.Infrastructure;
 
@@ -19,24 +13,8 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
     private static readonly DateTime PeriodStart = PeriodEnd.AddDays(-7);
 
     private static readonly Guid SellerId = Guid.Parse("5e11e000-0000-0000-0000-000000000001");
+    private static readonly Guid OtherSellerId = Guid.Parse("5e11e000-0000-0000-0000-000000000002");
     private static readonly Guid NumberId = Guid.Parse("f0a10000-0000-0000-0000-000000000001");
-
-    private static readonly string AiAnswer = JsonSerializer.Serialize(new
-    {
-        status = "lost",
-        confidence = 0.9,
-        evidence = "achei caro",
-        lossReason = "preco",
-        askedForSale = false,
-        ignoredBuyingSignal = true,
-        objections = new[] { "preço alto" },
-        shouldRecontact = true,
-        recontactReason = "reclamou do preço",
-        suggestedMessage = "consigo melhorar a condição",
-        interest = "kit",
-        summary = "cliente achou caro e sumiu",
-        conductAlert = (string?)null,
-    });
 
     private async Task SeedAsync(int conversations = 2)
     {
@@ -103,17 +81,6 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
         });
     }
 
-    private object Body(bool includeAi = false, string[]? charts = null, Guid[]? sellerIds = null) => new
-    {
-        from = PeriodStart,
-        to = PeriodEnd,
-        charts = charts ?? [],
-        sellerIds = sellerIds ?? [],
-        includeAi,
-    };
-
-    private static readonly Guid OtherSellerId = Guid.Parse("5e11e000-0000-0000-0000-000000000002");
-
     private async Task SeedOtherSellerAsync()
     {
         await SeedAsync(db =>
@@ -159,39 +126,46 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
         });
     }
 
-    private async Task<int> RunAsync()
-    {
-        using var scope = Factory.Services.CreateScope();
-        return await scope.ServiceProvider.GetRequiredService<IReportExportRunner>().ProcessPendingAsync();
-    }
+    private static string Url(string? charts = null, string? sellerIds = null) =>
+        $"/api/v1/reports/export?from={PeriodStart:O}&to={PeriodEnd:O}" +
+        (charts is null ? string.Empty : $"&charts={charts}") +
+        (sellerIds is null ? string.Empty : $"&sellerIds={sellerIds}");
 
     private static async Task<XLWorkbook> WorkbookOf(HttpResponseMessage response) =>
         new(new MemoryStream(await response.Content.ReadAsByteArrayAsync()));
 
-    // O pedido responde na hora com 202 e o arquivo fica pronto na passada do
-    // serviço em background.
+    // A planilha sai na própria resposta: sem job, sem polling, sem id para
+    // buscar depois. O nome do arquivo vem no Content-Disposition.
     [Fact]
-    public async Task Export_IsAcceptedAndProducesTheFile()
+    public async Task Export_ReturnsTheSpreadsheetInTheResponse()
     {
         await SeedAsync();
 
-        var response = await Client.PostAsJsonAsync("/api/v1/reports/export", Body(charts: ["sales"]));
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        var created = await response.Content.ReadFromJsonAsync<ReportExportDto>();
-        Assert.Equal("Pending", created!.Status);
+        var response = await Client.GetAsync(Url(charts: "sales"));
 
-        Assert.Equal(1, await RunAsync());
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(
+            "relatorio-2026-07-23-a-2026-07-30.xlsx",
+            response.Content.Headers.ContentDisposition?.FileNameStar);
 
-        var status = await Client.GetFromJsonAsync<ReportExportDto>($"/api/v1/reports/export/{created.Id}");
-        Assert.Equal("Completed", status!.Status);
-        Assert.True(status.FileAvailable);
-        Assert.Equal("relatorio-2026-07-23-a-2026-07-30.xlsx", status.FileName);
-
-        var file = await Client.GetAsync($"/api/v1/reports/export/{created.Id}/file");
-        file.EnsureSuccessStatusCode();
-        using var workbook = await WorkbookOf(file);
+        using var workbook = await WorkbookOf(response);
         Assert.True(workbook.Worksheets.Contains("Ranking"));
+        Assert.True(workbook.Worksheets.Contains("Gráficos"));
         Assert.Equal("Ana", workbook.Worksheet("Ranking").Cell(2, 1).GetString());
+    }
+
+    // A análise por IA saiu do relatório: a planilha do painel é só métrica
+    // medida, e a leitura do modelo vive na tela de análises.
+    [Fact]
+    public async Task Export_HasNoAiSheets()
+    {
+        await SeedAsync();
+
+        using var workbook = await WorkbookOf(await Client.GetAsync(Url()));
+
+        Assert.DoesNotContain(workbook.Worksheets, sheet => sheet.Name.StartsWith("IA"));
+        var summary = workbook.Worksheet("Resumo");
+        Assert.DoesNotContain(summary.RowsUsed(), row => row.Cell(1).GetString() == "Análise por IA");
     }
 
     // Regressão: filtrar por vendedor derrubava a exportação com 500. O Contains
@@ -203,253 +177,22 @@ public class ReportExportTests(IntegrationTestWebAppFactory factory) : BaseInteg
         await SeedAsync();
         await SeedOtherSellerAsync();
 
-        var estimate = await Client.PostAsJsonAsync("/api/v1/reports/export/estimate", Body(includeAi: true, sellerIds: [SellerId]));
-        estimate.EnsureSuccessStatusCode();
-        var cost = await estimate.Content.ReadFromJsonAsync<ReportExportEstimate>();
-        Assert.Equal(2, cost!.Conversations);
+        var response = await Client.GetAsync(Url(sellerIds: SellerId.ToString()));
 
-        var created = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body(sellerIds: [SellerId])))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-        await RunAsync();
-
-        var status = await Client.GetFromJsonAsync<ReportExportDto>($"/api/v1/reports/export/{created!.Id}");
-        Assert.Equal("Completed", status!.Status);
-
-        using var workbook = await WorkbookOf(await Client.GetAsync($"/api/v1/reports/export/{created.Id}/file"));
+        response.EnsureSuccessStatusCode();
+        using var workbook = await WorkbookOf(response);
         var ranking = workbook.Worksheet("Ranking");
         Assert.Equal("Ana", ranking.Cell(2, 1).GetString());
         Assert.True(ranking.Cell(3, 1).IsEmpty());
     }
 
-    // Baixar antes de a planilha existir devolve 409 com o motivo, não um arquivo
-    // vazio que o usuário abriria sem entender.
-    [Fact]
-    public async Task File_BeforeItIsReady_Returns409()
-    {
-        await SeedAsync();
-        var created = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body()))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-
-        var response = await Client.GetAsync($"/api/v1/reports/export/{created!.Id}/file");
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-    }
-
-    // Período invertido é recusado antes de virar job.
+    // Período invertido é recusado antes de montar planilha nenhuma.
     [Fact]
     public async Task Export_WithInvertedRange_Returns400()
     {
-        var response = await Client.PostAsJsonAsync("/api/v1/reports/export", new { from = PeriodEnd, to = PeriodStart });
+        var response = await Client.GetAsync(
+            $"/api/v1/reports/export?from={PeriodEnd:O}&to={PeriodStart:O}");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    // Com IA ligada, cada conversa vira uma linha com o status lido pelo modelo e a
-    // divergência em relação à etiqueta — aqui não há etiqueta e a IA diz perdida.
-    [Fact]
-    public async Task Export_WithAi_FillsTheAnalysisSheet()
-    {
-        await SeedAsync();
-        FakeAi.Always(AiAnswer);
-
-        var created = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-        await RunAsync();
-
-        var file = await Client.GetAsync($"/api/v1/reports/export/{created!.Id}/file");
-        using var workbook = await WorkbookOf(file);
-        var sheet = workbook.Worksheet("IA — Conversas");
-
-        Assert.Equal("Clientes perdidos", sheet.Cell(2, 8).GetString());
-        Assert.Equal("—", sheet.Cell(2, 7).GetString());
-        Assert.Equal("Sim", sheet.Cell(2, 10).GetString());
-        Assert.Equal("Preço", sheet.Cell(2, 12).GetString());
-        Assert.Equal("Não", sheet.Cell(2, 13).GetString());
-
-        var status = await Client.GetFromJsonAsync<ReportExportDto>($"/api/v1/reports/export/{created.Id}");
-        Assert.Equal(2, status!.AnalyzedConversations);
-        Assert.True(status.CostBrl > 0);
-    }
-
-    // Saldo estourado no meio não invalida a planilha: ela sai com o que deu, e as
-    // conversas restantes aparecem com o motivo em vez de sumirem.
-    [Fact]
-    public async Task Export_WhenBudgetRunsOut_StillDeliversTheSpreadsheet()
-    {
-        await SeedAsync();
-        FakeAi.Always(AiAnswer);
-        using (var scope = Factory.Services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<AiBudget>().TryReserveAsync("teste", "fake-model", 1m);
-
-        var created = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-        await RunAsync();
-
-        var file = await Client.GetAsync($"/api/v1/reports/export/{created!.Id}/file");
-        file.EnsureSuccessStatusCode();
-        using var workbook = await WorkbookOf(file);
-        var sheet = workbook.Worksheet("IA — Conversas");
-
-        Assert.Equal("—", sheet.Cell(2, 8).GetString());
-        Assert.Equal("Saldo de IA insuficiente.", sheet.Cell(2, 22).GetString());
-        Assert.Equal(0, FakeAi.CallCount);
-    }
-
-    // Regressão: com a cota do provedor estourada a fase de IA ficava minutos em
-    // 429 e a planilha nunca chegava — o usuário desistia achando que travou.
-    // Agora a fase tem prazo: estourado, o arquivo sai com o que deu e o que
-    // faltou vai marcado (reportado ao testar a tela em 30/07/2026).
-    [Fact]
-    public async Task Export_WhenAiTakesTooLong_DeliversTheSpreadsheetAnyway()
-    {
-        await SeedAsync();
-        // Toda chamada devolve 429 pedindo espera: sem prazo, o job ficaria preso.
-        for (var i = 0; i < 20; i++)
-            FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests, """
-                {"error":{"code":429,"message":"quota","details":[{"retryDelay":"1s"}]}}
-                """);
-
-        using var host = Factory.WithWebHostBuilder(b => b.UseSetting("ReportExport:AiDeadlineSeconds", "5"));
-        var client = host.CreateClient();
-
-        var created = await (await client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-
-        using (var scope = host.Services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<IReportExportRunner>().ProcessPendingAsync();
-
-        var status = await client.GetFromJsonAsync<ReportExportDto>($"/api/v1/reports/export/{created!.Id}");
-        Assert.Equal("Completed", status!.Status);
-        Assert.True(status.FileAvailable);
-        Assert.Null(status.Phase);
-
-        using var workbook = await WorkbookOf(await client.GetAsync($"/api/v1/reports/export/{created.Id}/file"));
-        var sheet = workbook.Worksheet("IA — Conversas");
-        // A conversa fica na planilha, com o motivo — nunca some em silêncio.
-        Assert.Equal("—", sheet.Cell(2, 8).GetString());
-        Assert.False(string.IsNullOrWhiteSpace(sheet.Cell(2, 22).GetString()));
-    }
-
-    // Regressão: a fila era serial e uma exportação com IA presa em limite de cota
-    // segurava as outras. Medido em 30/07/2026: a planilha sem IA levava 0,2s para
-    // ser gerada, mas ficou 64s parada atrás de um job de 202s.
-    [Fact]
-    public async Task Export_SlowJob_DoesNotBlockTheOthers()
-    {
-        await SeedAsync();
-        // Toda chamada de IA espera e falha: o job com IA fica lento de propósito.
-        for (var i = 0; i < 30; i++)
-            FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests, """
-                {"error":{"code":429,"message":"quota","details":[{"retryDelay":"2s"}]}}
-                """);
-
-        var lento = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-        var rapido = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body()))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-
-        await RunAsync();
-
-        // Os dois terminam na mesma passada; o rápido não espera o lento acabar.
-        foreach (var id in new[] { lento!.Id, rapido!.Id })
-        {
-            var status = await Client.GetFromJsonAsync<ReportExportDto>($"/api/v1/reports/export/{id}");
-            Assert.Equal("Completed", status!.Status);
-            Assert.True(status.FileAvailable);
-        }
-    }
-
-    // A prévia diz quanto vai custar e quantas conversas já estão analisadas — sem
-    // isso o usuário confirma no escuro.
-    [Fact]
-    public async Task Estimate_ReportsCostAndCacheReuse()
-    {
-        await SeedAsync();
-        FakeAi.Always(AiAnswer);
-
-        var before = await (await Client.PostAsJsonAsync("/api/v1/reports/export/estimate", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportEstimate>();
-
-        Assert.Equal(2, before!.Conversations);
-        Assert.Equal(0, before.Cached);
-        Assert.True(before.EstimatedBrl > 0);
-        Assert.True(before.Affordable);
-
-        var created = await (await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportDto>();
-        await RunAsync();
-
-        var after = await (await Client.PostAsJsonAsync("/api/v1/reports/export/estimate", Body(includeAi: true)))
-            .Content.ReadFromJsonAsync<ReportExportEstimate>();
-
-        Assert.Equal(2, after!.Cached);
-        Assert.Equal(0, after.ToAnalyze);
-        Assert.NotNull(created);
-    }
-
-    // Reexportar o mesmo período não paga a IA de novo — nem as conversas nem a
-    // síntese. A síntese é chaveada pelo conjunto de análises que a alimentou, e
-    // não pelo período: o painel manda `to` = agora, que muda a cada minuto.
-    [Fact]
-    public async Task Export_TwiceInARow_DoesNotPayTwice()
-    {
-        await SeedAsync();
-        FakeAi.Always(AiAnswer);
-
-        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
-        await RunAsync();
-        var callsAfterFirst = FakeAi.CallCount;
-
-        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
-        await RunAsync();
-
-        // Zero chamadas novas: nada mudou, então nada é recalculado nem cobrado.
-        Assert.Equal(callsAfterFirst, FakeAi.CallCount);
-        Assert.Equal(2, await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.ConversationAiAnalysis>().CountAsync()));
-        Assert.Equal(1, await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>().CountAsync()));
-    }
-
-    // Reanalisar uma conversa muda o conjunto que alimenta a síntese, e ela é
-    // refeita sozinha — sem isso a síntese ficaria descrevendo leituras velhas.
-    [Fact]
-    public async Task Synthesis_WhenAnAnalysisChanges_IsRebuilt()
-    {
-        await SeedAsync();
-        FakeAi.Always(AiAnswer);
-
-        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
-        await RunAsync();
-        var hashBefore = await InDbAsync(db =>
-            db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>().Select(s => s.InputsHash).SingleAsync());
-
-        // Uma conversa recebe mensagem nova: a análise dela é refeita no próximo export.
-        await SeedAsync(db =>
-        {
-            var conversation = db.Set<Conversation>().OrderBy(c => c.StartedAt).First();
-            conversation.LastMessageAt = conversation.LastMessageAt.AddMinutes(5);
-            db.Add(new Message
-            {
-                Id = Guid.NewGuid(),
-                ConversationId = conversation.Id,
-                WhatsappNumberId = NumberId,
-                WaMessageId = "novo-1",
-                Direction = MessageDirection.Inbound,
-                Type = "conversation",
-                Text = "ainda está disponível?",
-                Timestamp = conversation.LastMessageAt,
-            });
-            return Task.CompletedTask;
-        });
-
-        await Client.PostAsJsonAsync("/api/v1/reports/export", Body(includeAi: true));
-        await RunAsync();
-
-        // Entra uma entrada nova no cache; a antiga continua valendo para o
-        // conjunto de leituras que a gerou.
-        var syntheses = await InDbAsync(db => db.Set<Api.Features.Ai.Analysis.SellerAiSynthesis>()
-            .OrderBy(s => s.CreatedAt).ToListAsync());
-        Assert.Equal(2, syntheses.Count);
-        Assert.Equal(hashBefore, syntheses[0].InputsHash);
-        Assert.NotEqual(hashBefore, syntheses[1].InputsHash);
     }
 }

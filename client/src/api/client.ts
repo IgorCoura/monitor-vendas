@@ -1,9 +1,10 @@
 import type {
   AiAnalysisFilters,
   AiAnalysisPageDto,
-  AiBudgetStatus,
+  AiEstimate,
   AiJobDto,
   AiLossReason,
+  AiStatusDto,
   AiSynthesisDto,
   ContactFilters,
   ContactPageDto,
@@ -17,8 +18,6 @@ import type {
   OutcomeTypeDto,
   QrCodeDto,
   RankingEntryDto,
-  ReportExportDto,
-  ReportExportEstimate,
   ReportExportFilters,
   ReportMetricOption,
   SellerReportDto,
@@ -29,7 +28,17 @@ import type {
 // /api para a API, sem CORS. Uma URL absoluta aqui é gravada no bundle e vale
 // para aquele build — para trocar o destino sem rebuild, use API_URL no
 // container do front, que é lido pelo nginx a cada start.
-const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
+//
+// Regressão (31/07/2026): com `??`, a string vazia passava. O Dockerfile faz
+// `ENV VITE_API_BASE_URL=$VITE_API_BASE_URL` e, sem build-arg, isso define a
+// variável como "" — o bundle saía chamando `/reports/ranking` em vez de
+// `/api/v1/reports/ranking`, o nginx devolvia o index.html e a tela recebia
+// HTML onde esperava JSON, com status 200. Vazio aqui é ausência.
+export function resolveApiBase(configured?: string): string {
+  return configured?.trim() ? configured : '/api/v1'
+}
+
+const BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 
 export class ApiError extends Error {
   readonly status: number
@@ -92,6 +101,16 @@ function analysisQuery(filters: AiAnalysisFilters): URLSearchParams {
   return params
 }
 
+// Listas vão como CSV, no mesmo formato dos filtros de contatos.
+function exportQuery(filters: ReportExportFilters): URLSearchParams {
+  const params = new URLSearchParams({ from: filters.from, to: filters.to })
+  if (filters.sellerIds.length > 0) params.set('sellerIds', filters.sellerIds.join(','))
+  if (filters.metrics.length > 0) params.set('metrics', filters.metrics.join(','))
+  if (filters.charts.length > 0) params.set('charts', filters.charts.join(','))
+  if (!filters.includeNumbers) params.set('includeNumbers', 'false')
+  return params
+}
+
 function runBody(filters: AiAnalysisFilters, conversationIds: string[], includeAudio = false) {
   return {
     from: filters.from,
@@ -128,20 +147,11 @@ export const api = {
     ranking: (range: DateRange, fresh = false) =>
       request<RankingEntryDto[]>(`/reports/ranking?from=${range.from}&to=${range.to}`, { fresh }),
     exportMetrics: () => request<ReportMetricOption[]>('/reports/export/metrics'),
-    estimateExport: (filters: ReportExportFilters) =>
-      request<ReportExportEstimate>('/reports/export/estimate', {
-        method: 'POST',
-        body: JSON.stringify(filters),
-      }),
-    createExport: (filters: ReportExportFilters) =>
-      request<ReportExportDto>('/reports/export', { method: 'POST', body: JSON.stringify(filters) }),
-    exportStatus: (id: string) => request<ReportExportDto>(`/reports/export/${id}`),
     // Igual à exportação de contatos: o navegador baixa e o nome do arquivo vem
     // do Content-Disposition.
-    exportFileUrl: (id: string) => `${BASE}/reports/export/${id}/file`,
+    exportUrl: (filters: ReportExportFilters) => `${BASE}/reports/export?${exportQuery(filters)}`,
   },
   ai: {
-    budget: () => request<AiBudgetStatus>('/ai/budget'),
     lossReasons: () => request<AiLossReason[]>('/ai/loss-reasons'),
     analyses: (filters: AiAnalysisFilters, page: number, pageSize: number) => {
       const params = analysisQuery(filters)
@@ -151,8 +161,19 @@ export const api = {
     },
     syntheses: (sellerId: string) =>
       request<AiSynthesisDto[]>(`/ai/syntheses${sellerId ? `?sellerId=${sellerId}` : ''}`),
-    // Os dois botões da tela: reler as conversas do filtro, ou refazer a síntese
-    // a partir das leituras correntes.
+    // O download é do navegador, como o de contatos: exporta as leituras que já
+    // existem, sem chamar a IA.
+    analysesExportUrl: (filters: AiAnalysisFilters) =>
+      `${BASE}/ai/analyses/export?${analysisQuery(filters)}`,
+    status: () => request<AiStatusDto>('/ai/status'),
+    // Quanto a rodada vai custar, antes de confirmar.
+    estimate: (kind: 'Analyze' | 'Synthesize', filters: AiAnalysisFilters, includeAudio = false) =>
+      request<AiEstimate>('/ai/estimate', {
+        method: 'POST',
+        body: JSON.stringify({ kind, ...runBody(filters, [], includeAudio) }),
+      }),
+    // Sem `force`: o servidor refaz só o que mudou. Reprocessar tudo existe na
+    // API, mas a tela não pede — pagar de novo pela mesma leitura não compensa.
     runAnalyses: (filters: AiAnalysisFilters, conversationIds: string[], includeAudio = false) =>
       request<AiJobDto>('/ai/analyses/run', {
         method: 'POST',
@@ -160,7 +181,6 @@ export const api = {
       }),
     runSyntheses: (filters: AiAnalysisFilters) =>
       request<AiJobDto>('/ai/syntheses/run', { method: 'POST', body: JSON.stringify(runBody(filters, [])) }),
-    job: (id: string) => request<AiJobDto>(`/ai/jobs/${id}`),
   },
   outcomeTypes: {
     list: () => request<OutcomeTypeDto[]>('/outcome-types'),

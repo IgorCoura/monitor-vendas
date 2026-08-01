@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **docker-compose** para o stack local (client + API + Postgres).
 - **Front-end**: `../client` (React 19 + Vite + Tailwind v4 + Recharts, tema
   rosa talco) — tem `CLAUDE.md` próprio. Serviço `client` no compose (nginx
-  :3000 com proxy `/api` → api:8080). A API tem CORS default policy lendo
+  :8203 com proxy `/api` → api:8080). A API tem CORS default policy lendo
   `Cors:AllowedOrigins` (Development com lista vazia libera qualquer origem).
 
 **Nota sobre os hooks/skills DDD**: hooks de política (`api-codegen-ddd-dotnet`
@@ -58,12 +58,13 @@ vendedor.
   vendedor não é punido por canal fora do ar. O calendário é montado por
   relatório no `ReportQueries` (feriados vêm do banco — não registrar como
   singleton).
-- **Sem backfill**: monitora daqui para frente. A reconciliação recupera
-  apenas a janela recente (`Reconciliation:LookbackHours`).
+- **Sem backfill**: monitora daqui para frente. A reconciliação recupera desde a
+  última varredura de cada número, com teto em `Reconciliation:MaxLookbackHours`.
 - **Texto das mensagens é armazenado** (decisão explícita do usuário).
 - Coleta: **webhook** (push da Evolution → `POST /api/v1/webhooks/evolution/{secret}`)
-  como via primária; job de reconciliação como safety-net (desabilitado por
-  default — ligar `Reconciliation:Enabled` quando houver Evolution real).
+  como via primária; job de reconciliação como safety-net, **ligado por
+  default** — sem ele, uma queda da API ou da Evolution perde mensagem em
+  silêncio.
 - **Ban permanente é decisão manual** (`POST /numbers/{id}/ban-permanent`);
   403 marca `BannedTemporary`, reconexão volta a `Active`.
 
@@ -81,7 +82,29 @@ vendedor.
 3. `ReconciliationService` (gated `Reconciliation:Enabled`) compara
    `connectionState` e `findMessages` da Evolution com o banco e **sintetiza
    WebhookEvents** para o que faltar — mesmo pipeline, mesma idempotência.
+   Ver "Marca d'água da reconciliação" abaixo.
 4. Relatórios: ver "Arquitetura de leitura das métricas" abaixo.
+
+## Marca d'água da reconciliação (`WhatsappNumber.LastReconciledAt`)
+
+A reconciliação varre **desde a última varredura bem-sucedida daquele número**,
+não uma janela fixa. Implementado em 2026-07-31.
+
+- **O problema da janela**: com `LookbackHours = 2`, qualquer parada maior que
+  2 h (da API **ou** da Evolution) perdia o excedente **em silêncio** — o corte
+  por `timestamp` descartava e ninguém ficava sabendo.
+- `LastReconciledAt` é o piso da varredura; `LookbackHours` vale só no primeiro
+  ciclo de um número (quando a marca ainda é nula). `MaxLookbackHours` (72 h) é
+  o teto: número parado há semanas não puxa o histórico inteiro numa tacada.
+- **A marca só avança quando a Evolution respondeu.** Avançá-la numa falha
+  declararia varrido um trecho que ninguém leu, e o buraco viraria permanente.
+  Por isso ela é gravada **dentro** do `try`, e o `catch (HttpRequestException)`
+  deixa o número intocado para o próximo ciclo.
+- O valor gravado é o instante **anterior** às chamadas: mensagem que chega
+  durante a varredura fica para o ciclo seguinte, em vez de cair no vão.
+- **Rodar no startup é de graça**: o `BackgroundService` executa uma passada
+  antes do primeiro `Task.Delay`, então subir a API já reconcilia. Se a Evolution
+  estiver fora nessa hora, a marca não anda e o ciclo seguinte recupera tudo.
 
 ## Catálogo de desfechos (etiquetas configuráveis por tipo)
 
@@ -178,23 +201,23 @@ Mesma lista da tela de contatos, mandada por WhatsApp como texto
   `MaxAttempts`. Nos testes o serviço fica desligado e o delay é 0 —
   `IContactShareSender.ProcessPendingAsync()` é chamado direto.
 
-## Relatório em Excel com análise por IA (`Features/ReportExport` + `Features/Ai`)
+## Relatório em Excel (`Features/ReportExport`)
 
-As métricas do painel em planilha, com abas de leitura feita por LLM. Implementado
-em 2026-07-30.
+As métricas do painel em planilha. **Download direto** (`GET /reports/export`),
+sem job nem IA — reescrito em 2026-07-31.
 
-- **Nenhuma métrica é recalculada**: o writer consome `ReportQueries.GetRankingAsync`
-  / `GetSellerReportAsync`, o mesmo caminho da tela (cache, agregado, horário
-  comercial). Cálculo próprio aqui divergiria da tela sem ninguém perceber.
-- **A etiqueta é a verdade; a IA é auditoria.** Conversão, vendas e ranking nunca
-  olham para a IA. A leitura do modelo vive nas abas `IA — Conversas` e
-  `IA — Vendedores`, com a coluna **Divergência** (IA ≠ etiqueta) destacada —
-  é ela que expõe etiquetagem esquecida.
+- **Nenhuma métrica é recalculada**: o `ReportExportBuilder` consome
+  `ReportQueries.GetRankingAsync` / `GetSellerReportAsync`, o mesmo caminho da
+  tela (cache, agregado, horário comercial). Cálculo próprio aqui divergiria da
+  tela sem ninguém perceber.
 - **Abas**: `Resumo` (totais do time por `TeamTotals`, mesmas regras do
   DashboardPage: contagens somam, taxas recalculadas das somas, espera ponderada
   por `ResponseSamplesCount`; o que não é reconstruível — mediana, leitura,
   follow-up, tempo até fechar — sai como `—`, nunca zero), `Ranking`,
-  `Gráficos`, `Por número` e as duas de IA.
+  `Gráficos` e `Por número`.
+- **Sem background**: a planilha leva ~0,2 s para ser montada e sai na própria
+  resposta, como a de contatos. A tabela `report_exports`, o runner, a retenção
+  e o polling existiam só por causa da IA e foram removidos com ela.
 - **`ChartInjector`**: gráficos **nativos**, ligados às células da aba `Ranking`
   (barra e linha), com a paleta do painel na ordem fixa e legenda só a partir de
   2 séries. O `<drawing>` tem lugar no schema da aba (depois de `pageSetup`,
@@ -203,29 +226,25 @@ em 2026-07-30.
   frescura de schema.
 - **`GET /reports/export/metrics`** alimenta os filtros da tela — tipo de
   desfecho novo vira coluna e opção de gráfico sem código no front.
-- **Job em background** no molde do `ContactShare`: `POST /reports/export` grava
-  os filtros **congelados** em `report_exports` e responde 202; o
-  `ReportExportRunner` (gated `ReportExport:Enabled`) monta a planilha e guarda
-  os bytes na própria linha (apagados por `RetentionHours` — planilha é
-  descartável, não merece volume no compose).
-- **Saldo estourado não invalida o arquivo**: a planilha sai com o que deu e as
-  conversas restantes aparecem com "Saldo de IA insuficiente" na coluna
-  Observação. Meia planilha aqui é melhor que nenhuma (ao contrário do
-  `ContactShare`, onde meia lista é pior).
-- **A fase de IA tem prazo** (`ReportExport:AiDeadlineSeconds`, 120s). Esperar a
-  cota do provedor liberar pode levar minutos por vendedor; passado o prazo, o
-  que faltou sai marcado e a planilha é entregue. O relatório em si já está
-  pronto — ninguém deve esperar por um extra.
-- **`ReportExport.Phase`** ("Analisando conversas" / "Sintetizando vendedores")
-  existe para a tela não parecer travada durante essas esperas. Sem isso o
-  usuário desiste achando que quebrou — foi o que aconteceu no primeiro teste.
-- **A fila é paralela** (`MaxConcurrentExports`, 3). Era serial e uma exportação
-  com IA presa em cota segurava as outras: medido em 30/07/2026, a planilha
-  **sem IA leva 0,2 s** para ser montada, mas ficou **64 s na fila** atrás de um
-  job de 202 s. O custo do relatório é a IA, nunca o Excel.
-- `Ai:MaxTotalRetryWaitSeconds` limita a espera **somada** de uma chamada. Sem
-  ele, 3 tentativas de ~60 s faziam uma única análise estourar sozinha o prazo da
-  exportação (120 s viraram 202 s).
+- Listas na query string vão **separadas por vírgula** (`metrics`, `charts`,
+  `sellerIds`), no mesmo formato dos filtros de contatos.
+
+## Exportação das análises de IA (`Features/Ai/Export`)
+
+`GET /ai/analyses/export` devolve o `.xlsx` das leituras **já feitas**, com os
+mesmos 7 filtros da tela `/ai`. **Nenhuma chamada de IA acontece aqui** — é o que
+está em `conversation_ai_analyses` virando arquivo, então é grátis e instantâneo.
+
+- Abas **`Análises`** (uma linha por leitura corrente, com a coluna
+  **Divergência** destacada — IA ≠ etiqueta é etiquetagem esquecida) e
+  **`Sínteses`** (por vendedor, marcada `Desatualizada` quando as leituras
+  mudaram depois dela).
+- **`AiAnalysisQueries` é a fonte única**: a tela pagina e a exportação leva tudo
+  (teto de `MaxRows`, 50.000, com `X-Truncated: true` acima disso), mas o filtro
+  e a regra da divergência são o mesmo código. Duas consultas para a mesma
+  pergunta seria garantir que um dia divergissem.
+- **A etiqueta continua sendo a verdade; a IA é auditoria.** Conversão, vendas e
+  ranking nunca olham para a IA.
 
 ### Análise por conversa (`Features/Ai/Analysis`)
 
@@ -255,7 +274,24 @@ em 2026-07-30.
   30 minutos valeria ~57 mil tokens sozinho. O que passa do teto fica só como
   marcador.
 - **`IncludedAudio` entra na chave do cache**: ligar o áudio invalida a leitura
-  surda anterior, senão a tela serviria a análise que não ouviu nada.
+  surda anterior, senão a tela serviria a análise que não ouviu nada. O mesmo
+  vale para `AudioAttached`: leitura que ouviu 3 de 5 não serve quando os 5
+  ficam disponíveis.
+- **O prompt precisa apresentar o áudio** (corrigido em 2026-07-31). Mandar o
+  `inline_data` não basta: a transcrição numera os anexos (`[áudio 2 de 45s]`,
+  na ordem em que vão na chamada), o user prompt anuncia quantos são, e a regra
+  dos marcadores distingue conteúdo **removido** de conteúdo **anexado**. Antes
+  disso o system prompt mandava "não comente" sobre conteúdo não textual — e um
+  cliente pedindo a venda em áudio sumia da análise. Por isso os áudios são
+  baixados **antes** de a transcrição ser montada: sem saber quais vieram, não
+  há como numerar. Áudio que falhou fica sem número, porque o modelo não o
+  recebeu.
+- **`AudioExpected`/`AudioAttached`**: quantos áudios a conversa tem e quantos o
+  modelo ouviu. O download degrada em silêncio de propósito (a conversa segue
+  valendo pelo texto), e sem esse par a leitura surda ficava idêntica à completa
+  na tela — foi o que fez uma Evolution fora do ar passar por "a IA não entendeu
+  o áudio". A tela mostra "3 de 5 áudios não lidos" e a planilha traz a coluna
+  "Áudios ouvidos" destacada.
 - **O status vem do catálogo de desfechos**, não de uma lista fixa: os tipos
   ativos + o embutido `open` ("Em andamento"). Conversa parada além de
   `Metrics:FollowUpGapBusinessHours` **perde o `open` do próprio schema** — onde
@@ -290,12 +326,63 @@ em 2026-07-30.
 - `GET /ai/analyses` (paginado, filtros de período, vendedor, status, motivo,
   divergência e recontato), `GET /ai/syntheses`, `GET /ai/loss-reasons`.
 - **Dois botões, dois jobs** (`ai_jobs`, `AiJobRunner`): `POST /ai/analyses/run`
-  relê as conversas do filtro **ignorando o cache** (`ConversationAnalysisInput.Force`)
-  e `POST /ai/syntheses/run` refaz só a síntese. Separados porque refazer a
-  síntese é barato e não deveria obrigar a repagar a leitura das conversas.
+  e `POST /ai/syntheses/run`. Separados porque refazer a síntese é barato e não
+  deveria obrigar a repagar a leitura das conversas.
+- **Os dois só refazem o que mudou** (`AiJobFilters.Force = false` por default):
+  conversa sem mensagem nova volta do cache, e vendedor cujo conjunto de leituras
+  não mudou também. Rodar duas vezes seguidas custa **zero**.
+- **`force: true` continua na API, sem botão na tela**: relê e recobra tudo. É o
+  caminho para reprocessar à mão quando o prompt ou o modelo mudam — pagar de
+  novo pela mesma leitura não é coisa para ficar a um clique de distância.
+- **A regra do cache mora em um lugar por camada**:
+  `ConversationAiAnalysis.StillServes(input)` para a conversa (usada pelo
+  `ConversationAnalyzer` para decidir se chama a IA e pelo `AiJobEstimator` para
+  decidir se cobra) e `SellerAiSynthesis.HashOf` para a síntese. Se as duas
+  respostas divergirem, a estimativa vira ficção.
 - A síntese vem marcada **`Stale`** quando o conjunto de leituras correntes do
   vendedor já não é o que a gerou — parecer descrevendo dado velho, sem aviso, é
   pior que não ter parecer.
+
+### Uma rodada por vez (`AiJob.Active`)
+
+Desde 2026-07-31 o trabalho é **100% em background** e existe **uma vaga só**:
+análise e síntese se bloqueiam porque disputam a mesma cota do provedor.
+
+- **`AiJob.Active`** é `true` enquanto o job está `Pending`/`Running` e **`NULL`**
+  quando termina. O **índice único parcial** (`WHERE "Active"`) é o que garante a
+  vaga: no Postgres vários NULL convivem, mas só existe um `true`. Dois cliques
+  simultâneos não furam — o segundo bate em `23505` e vira **409**.
+- A flag é liberada em `finally`: job que falha e deixa a flag de pé travaria a
+  tela até alguém mexer no banco.
+- **`GET /ai/status`** devolve `running` + o último job de cada tipo. É de lá que
+  a tela decide travar os botões e mostrar as datas da última análise e da última
+  síntese, **separadas**. Como vem do banco, sobrevive a recarregar a página.
+- **`ReleaseStuckJobsAsync`** roda na largada do `AiJobBackgroundService`: job
+  `Running` é de um processo que morreu no meio (só existe um runner), vira
+  `Failed` e devolve a vaga. Sem isso a vaga ficaria ocupada para sempre.
+- **Sem prazo**: o job roda até acabar. O antigo `AiDeadlineSeconds` existia
+  porque a tela esperava a planilha; agora ninguém espera, e cortar no meio só
+  deixaria metade das conversas lidas.
+- Config no bloco **`AiJob`** (`Enabled`, `IntervalSeconds`,
+  `MaxConversationsPerRun`).
+
+### Recusa por saldo (`AiJobEstimator`)
+
+Uma implementação de estimativa, três usos: a tela mostra, o endpoint recusa e o
+runner confere. Estimativa que divergisse do que é cobrado seria pior que não ter
+estimativa.
+
+- **`POST /ai/estimate`** (`kind` + filtros) devolve custo estimado, saldo e
+  `affordable` — é o que o diálogo de confirmação da tela mostra antes de gastar.
+- **Duas barreiras**: `POST /ai/analyses|syntheses/run` devolve **422** com
+  "Análise/Síntese não realizada por falta de saldo." e **não grava job nenhum**;
+  o runner confere de novo antes do primeiro token, porque entre o clique e a vez
+  do job a janela pode ter virado. Nos dois casos a frase é a mesma
+  (`AiJobEstimator.NoBudgetMessage`).
+- **A conta segue o `force`**: no default só entram as conversas que o analisador
+  realmente reanalisaria e os vendedores cuja síntese mudaria — por isso a
+  estimativa dá **R$ 0,00** quando nada mudou. Com `force: true` tudo custa.
+- `AiBudget:Enabled=false` não bloqueia nada — o freio desligado não vira trava.
 
 ### Saldo de IA em reais (`Features/Ai`)
 
@@ -397,8 +484,10 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `GET /outcome-labels/suggestions`, `GET /contacts`, `GET /contacts/export`,
 `POST /contacts/share` + `GET /contacts/share/{id}`,
 `POST /reports/rebuild`, `GET /ai/budget`,
-`GET /reports/export/metrics`, `POST /reports/export/estimate`,
-`POST /reports/export` + `GET /reports/export/{id}` + `/file`,
+`GET /reports/export/metrics`, `GET /reports/export` (arquivo),
+`GET /ai/analyses` + `/export`, `GET /ai/syntheses`, `GET /ai/loss-reasons`,
+`GET /ai/status`, `POST /ai/estimate`,
+`POST /ai/analyses/run`, `POST /ai/syntheses/run`, `GET /ai/jobs/{id}`,
 `GET /reports/sellers/{id}?from&to`, `GET /reports/ranking?from&to`,
 `GET /health`, `GET /api/v1/ping`.
 
@@ -421,17 +510,20 @@ condição para fechar o número por dia), vendas, conversão
 ```
 server/
 ├── MonitorVendas.slnx                     # formato novo de solution do SDK 10
-├── docker-compose.yml                     # api (porta 8080) + postgres:17 (5432)
+├── docker-compose.yml                     # api (:8200) + evolution (:8201) + client (:8203) + postgres:17 (:5433)
 ├── docker-compose.dcproj                  # projeto Container Tools (VS); dotnet CLI ignora no build
 ├── src/MonitorVendas.Api/
 │   ├── Program.cs                         # composição DI + MigrateAsync no startup
 │   ├── Dockerfile                         # multi-stage, contexto = raiz do server/
 │   ├── Features/
 │   │   ├── Ai/                            #   AiUsage + AiBudget (janela/reserva/acerto) + AiBudgetEndpoints,
-│   │   │   └── Analysis/                  #   ConversationAiAnalysis (cache), TranscriptBuilder (mascaramento),
-│   │   │                                  #   AiAnalysisSchema (prompt + schema fechado), ConversationAnalyzer, SellerSynthesizer
-│   │   ├── ReportExport/                  #   ReportExport (job) + Runner + Endpoints, ReportWorkbookWriter,
-│   │   │                                  #   AiSheetsWriter, ChartInjector (gráfico nativo), ReportMetricCatalog, TeamTotals
+│   │   │                                  #   AiJob (vaga única via Active) + Runner + Estimator + AiJobOptions,
+│   │   │                                  #   AiAnalysisQueries (tela e exportação), AiAnalysisEndpoints
+│   │   │   ├── Analysis/                  #   ConversationAiAnalysis (cache), TranscriptBuilder (mascaramento),
+│   │   │   │                              #   AiAnalysisSchema (prompt + schema fechado), ConversationAnalyzer, SellerSynthesizer
+│   │   │   └── Export/                    #   AiAnalysisWorkbookWriter (abas Análises/Sínteses), AiRowMapper, AiConversationRow
+│   │   ├── ReportExport/                  #   ReportExportBuilder + Endpoints (download direto), ReportWorkbookWriter,
+│   │   │                                  #   ChartInjector (gráfico nativo), ReportMetricCatalog, TeamTotals
 │   │   ├── Sellers/                       #   Seller + CRUD endpoints
 │   │   ├── Numbers/                       #   WhatsappNumber, NumberStatusEvent, ConnectionUpdateHandler, endpoints (create/connect/ban-permanent)
 │   │   ├── Webhooks/                      #   WebhookEvent (fila bruta), endpoint de recepção, WebhookProcessor + IWebhookEventHandler, WebhookOptions
@@ -445,11 +537,11 @@ server/
 │   │                                      #   ReportCache + ReportCacheVersion, Holiday + HolidaysEndpoints,
 │   │                                      #   DailyNumberMetrics / DirtyMetricsDay / FirstResponseBuckets,
 │   │                                      #   MetricsSnapshot (forma somável), DailyMetricsBuilder (+background), DirtyDayTracker
-│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (8) + DesignTimeDbContextFactory
+│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (22) + DesignTimeDbContextFactory
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 201 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 220 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -468,12 +560,13 @@ server/
   `Model`, `MaxOutputTokens`, `ThinkingBudgetTokens`, `MaxConcurrency`,
   `MaxAttempts`, `RetryBackoffSeconds`, `UsdBrlRate` e a tabela `Pricing` por
   modelo em USD/1M tokens), `AiBudget` (`Enabled`, `AmountPerWindow`,
-  `WindowHours`, `MarginPercent`) e `ReportExport` (`Enabled`,
-  `IntervalSeconds`, `RetentionHours`, `MaxConversationsPerExport`);
+  `WindowHours`, `MarginPercent`) e `AiJob` (`Enabled`, `IntervalSeconds`,
+  `MaxConversationsPerRun`);
   bloco `ContactShare` (ver seção do envio);
   `Evolution:BaseUrl` (barra final!) e `ApiKey`;
   `Webhook:Secret`/`PublicBaseUrl`/`ProcessorEnabled`/`ProcessorIntervalSeconds`;
-  `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`; bloco `Metrics`
+  `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`/`MaxLookbackHours`;
+  bloco `Metrics`
   (timezone, horas úteis seg–sex, sábado
   `SaturdayEnabled`/`SaturdayStartHour`/`SaturdayEndHour`, etiqueta de venda,
   janelas de conversa/resposta/follow-up, `CacheSeconds`,
@@ -482,14 +575,14 @@ server/
 - Todo `DateTime` persistido é UTC (Npgsql timestamptz); horário comercial é
   convertido para `Metrics:TimeZone` só dentro do `BusinessHoursCalendar`.
 - Testes de integração: `IntegrationTestWebAppFactory` desliga os background
-  services (webhook, reconciliação, agregação, envio de contatos, exportação)
+  services (webhook, reconciliação, agregação, envio de contatos, jobs de IA)
   **e o cache** (`CacheSeconds=0`,
   senão resultado vazaria entre testes) e substitui a Evolution por
   `FakeEvolutionHandler`; o pipeline é dirigido deterministicamente via
   `IWebhookProcessor.ProcessPendingAsync()`, `IReconciliationService.RunOnceAsync()`,
   `DailyMetricsBuilder.ProcessDirtyDaysAsync()`,
   `IContactShareSender.ProcessPendingAsync()` e
-  `IReportExportRunner.ProcessPendingAsync()`. Para testar com config
+  `IAiJobRunner.ProcessPendingAsync()`. Para testar com config
   diferente sem recriar o Postgres: `Factory.WithWebHostBuilder(b => b.UseSetting(...))`.
   A IA é substituída pelo `FakeAiHandler` (`Enqueue`/`Always`/`EnqueueStatus`/
   `EnqueueTimeout`), com preço redondo na factory: US$ 1,00/1M tokens e câmbio
@@ -509,11 +602,11 @@ server/
 - Build: `dotnet build MonitorVendas.slnx`
 - Testes: `dotnet test MonitorVendas.slnx`
 - Rodar local: `docker compose up -d postgres evolution` + `dotnet run --project
-  src/MonitorVendas.Api --urls http://localhost:8080` (o startup roda
+  src/MonitorVendas.Api --urls http://0.0.0.0:8200` (o startup roda
   `MigrateAsync`, então o Postgres precisa estar de pé). **Postgres publica na
   porta 5433 do host** (a máquina de dev tem um PostgreSQL 12 local na 5432).
-- Stack completo: `docker compose up --build` (client :3000, API :8080,
-  Evolution :8081)
+- Stack completo: `docker compose up --build` (client :8203, API :8200,
+  Evolution :8201)
 - **Evolution API local**: serviço `evolution` no compose
   (`evoapicloud/evolution-api`, porta 8081, `AUTHENTICATION_API_KEY` casa com
   `Evolution:ApiKey`), usando o mesmo container Postgres num banco separado

@@ -76,6 +76,10 @@ public class ConversationAnalyzerTests(IntegrationTestWebAppFactory factory) : B
         new(ConversationId, messageCount, lastMessageAt ?? new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
             "Cliente (20/07 09:00): quanto custa?\nVendedor (20/07 09:05): R$ 200", true);
 
+    // O corpo enviado é JSON, que escapa não-ASCII ("áudio"). Desescapar
+    // deixa o assert legível e evita comparar contra a forma escapada.
+    private static string Readable(string json) => System.Text.RegularExpressions.Regex.Unescape(json);
+
     private async Task<AnalysisOutcome> AnalyzeAsync(ConversationAnalysisInput input)
     {
         using var scope = Factory.Services.CreateScope();
@@ -163,6 +167,110 @@ public class ConversationAnalyzerTests(IntegrationTestWebAppFactory factory) : B
         var repetido = await AnalyzeAsync(Input() with
         {
             Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10)],
+        });
+        Assert.Equal(AnalysisResultKind.Cached, repetido.Kind);
+        Assert.Equal(2, FakeAi.CallCount);
+    }
+
+    // Regressão (31/07/2026): o áudio ia como inline_data mas o prompt não dizia
+    // que ele existia — e ainda mandava não comentar conteúdo não textual. Cliente
+    // pedindo a venda em áudio sumia da análise. O corpo enviado tem de trazer o
+    // áudio E a instrução para ouvi-lo.
+    [Fact]
+    public async Task Analyze_WithAudio_TellsTheModelToListenToIt()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        await AnalyzeAsync(Input() with
+        {
+            Transcript = "Cliente (20/07 09:00): [áudio 1 de 45s]",
+            Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 45)],
+        });
+
+        var body = Readable(Assert.Single(FakeAi.Requests));
+        // O áudio vai na chamada...
+        Assert.Contains("inline_data", body);
+        Assert.Contains("audio/ogg", body);
+        // ...e o prompt liga o anexo ao trecho marcado na transcrição.
+        Assert.Contains("1 áudio anexado a esta mensagem", body);
+        Assert.Contains("[áudio 1", body);
+    }
+
+    // Sem áudio o prompt não anuncia anexo nenhum: mandar ouvir o que não foi
+    // enviado só confunde o modelo.
+    [Fact]
+    public async Task Analyze_WithoutAudio_DoesNotMentionAttachments()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        await AnalyzeAsync(Input());
+
+        var body = Readable(Assert.Single(FakeAi.Requests));
+        Assert.DoesNotContain("inline_data", body);
+        Assert.DoesNotContain("anexado a esta mensagem", body);
+    }
+
+    // Áudio que não pôde ser baixado deixa a leitura incompleta, e isso fica
+    // registrado: sem o par esperado/ouvido, análise surda e análise completa
+    // ficam idênticas na tela.
+    [Fact]
+    public async Task Analyze_RecordsHowManyAudiosTheModelHeard()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        // A conversa tem 3 áudios, mas só 1 foi baixado com sucesso.
+        var outcome = await AnalyzeAsync(Input() with
+        {
+            Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10)],
+            AudioExpected = 3,
+        });
+
+        Assert.Equal(3, outcome.Analysis!.AudioExpected);
+        Assert.Equal(1, outcome.Analysis.AudioAttached);
+        Assert.True(outcome.Analysis.IncludedAudio);
+    }
+
+    // Leitura que ouviu 1 de 3 áudios não serve quando os 3 ficam disponíveis:
+    // faltou conversa, não faltou modelo.
+    [Fact]
+    public async Task Analyze_WhenMoreAudiosBecomeAvailable_DoesNotReuseTheIncompleteReading()
+    {
+        await SeedConversationAsync();
+        FakeAi.Always(GoodAnswer);
+
+        var parcial = Input() with
+        {
+            Attachments = [new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10)],
+            AudioExpected = 3,
+        };
+        await AnalyzeAsync(parcial);
+
+        var completo = await AnalyzeAsync(parcial with
+        {
+            Attachments =
+            [
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10),
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "REVG", 8),
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "R0hJ", 5),
+            ],
+        });
+
+        Assert.Equal(AnalysisResultKind.Analyzed, completo.Kind);
+        Assert.Equal(3, completo.Analysis!.AudioAttached);
+        Assert.Equal(2, FakeAi.CallCount);
+
+        // E com o mesmo conjunto completo, aí sim reusa.
+        var repetido = await AnalyzeAsync(parcial with
+        {
+            Attachments =
+            [
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "QUJD", 10),
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "REVG", 8),
+                new MonitorVendas.Api.Integrations.Ai.AiAttachment("audio/ogg", "R0hJ", 5),
+            ],
         });
         Assert.Equal(AnalysisResultKind.Cached, repetido.Kind);
         Assert.Equal(2, FakeAi.CallCount);

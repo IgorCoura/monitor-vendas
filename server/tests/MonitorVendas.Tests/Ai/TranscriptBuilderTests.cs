@@ -84,6 +84,37 @@ public class TranscriptBuilderTests
         Assert.Contains("[áudio de 45s]", transcript);
     }
 
+    // Regressão (31/07/2026): áudio enviado ao modelo ia como blob solto e a
+    // transcrição dizia só "[áudio de 45s]" — sem saber a qual trecho cada anexo
+    // pertencia, o modelo tratava tudo como conteúdo não textual e ignorava. O
+    // número liga o marcador à ordem dos anexos na chamada.
+    [Fact]
+    public void Build_NumbersTheAudiosThatWereAttached()
+    {
+        var transcript = TranscriptBuilder.Build(
+            [
+                new TranscriptMessage(MessageDirection.Inbound, Start, null, "audioMessage", 45, AudioIndex: 1),
+                new TranscriptMessage(MessageDirection.Inbound, Start.AddMinutes(5), null, "pttMessage", 12, AudioIndex: 2),
+            ],
+            null, null, SaoPaulo, true, 0);
+
+        Assert.Contains("[áudio 1 de 45s]", transcript);
+        Assert.Contains("[áudio 2 de 12s]", transcript);
+    }
+
+    // Áudio que não pôde ser baixado continua sem número: o modelo não recebeu
+    // aquele trecho e não deve procurar por um anexo que não existe.
+    [Fact]
+    public void Build_LeavesUnattachedAudioWithoutNumber()
+    {
+        var transcript = TranscriptBuilder.Build(
+            [new TranscriptMessage(MessageDirection.Inbound, Start, null, "audioMessage", 45)],
+            null, null, SaoPaulo, true, 0);
+
+        Assert.Contains("[áudio de 45s]", transcript);
+        Assert.DoesNotContain("[áudio 1", transcript);
+    }
+
     // Sem duração conhecida (mensagem antiga, payload sem o campo) o rótulo
     // continua funcionando — nunca vira "[áudio de s]".
     [Fact]
@@ -91,6 +122,7 @@ public class TranscriptBuilderTests
     {
         Assert.Equal("[áudio]", TranscriptBuilder.MediaLabel("audioMessage"));
         Assert.Equal("[áudio]", TranscriptBuilder.MediaLabel("audioMessage", 0));
+        Assert.Equal("[áudio 3]", TranscriptBuilder.MediaLabel("audioMessage", null, 3));
         Assert.Equal("[imagem]", TranscriptBuilder.MediaLabel("imageMessage", 45));
     }
 
