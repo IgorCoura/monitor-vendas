@@ -120,6 +120,16 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   `WebhookOptions.SubscribedEvents`, tratado pelo `QrCodeUpdatedHandler`, que só
   aceita sessão viva em `AwaitingScan`). Sem isso o `GET` devolvia `qr` nulo e o
   diálogo ficava no spinner para sempre — o QR nunca aparecia na tela.
+- **Código de pareamento é a alternativa ao QR** (`POST /pairings/{id}/pairing-code`,
+  corpo `{phone}`): quem abre o painel no próprio celular não tem uma segunda
+  câmera para ler o QR da tela. O telefone informado serve só para o WhatsApp
+  saber **a quem mandar o código** — o cadastro continua saindo do `wuid`, então
+  pedir o código com um número e conectar outro cai na mesma resolução de sempre.
+- **O código só sai na CRIAÇÃO da instância** (confirmado contra a v2.3.7):
+  `instance/connect/{name}?number=` devolve `pairingCode: null` quando a
+  instância nasceu sem número. Por isso o pedido **recria a instância** da sessão
+  com o número informado (nome novo, webhook reconfigurado) e apaga a anterior —
+  como nada conectou ainda, o custo é só o QR antigo deixar de valer.
 - **Vendedor inativo não recebe WhatsApp**: `POST /sellers/{id}/pairings` responde
   **409**. Quem foi desativado saiu do time, e o número conectado nele ficaria
   fora de todo relatório.
@@ -584,7 +594,7 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 
 **Endpoints**: `POST/GET/PUT /api/v1/sellers`, `GET /sellers/{id}/numbers`,
 `GET /numbers` (todos, com vendedor),
-`POST /sellers/{id}/pairings` + `GET /pairings/{id}` + `/confirm` + `/cancel`,
+`POST /sellers/{id}/pairings` + `GET /pairings/{id}` + `/confirm` + `/cancel` + `/pairing-code`,
 `POST /numbers/{id}/connect` (novo QR; `?confirmBanned=true` para número banido),
 `POST /numbers/{id}/transfer`, `POST /numbers/{id}/ban-permanent` (desloga),
 `POST /webhooks/evolution/{secret}`, `POST/GET/DELETE /holidays`,
@@ -645,11 +655,11 @@ server/
 │   │                                      #   ReportCache + ReportCacheVersion, Holiday + HolidaysEndpoints,
 │   │                                      #   DailyNumberMetrics / DirtyMetricsDay / FirstResponseBuckets,
 │   │                                      #   MetricsSnapshot (forma somável), DailyMetricsBuilder (+background), DirtyDayTracker
-│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (26) + DesignTimeDbContextFactory
+│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (27) + DesignTimeDbContextFactory
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 412 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 416 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -715,7 +725,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (412 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (416 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

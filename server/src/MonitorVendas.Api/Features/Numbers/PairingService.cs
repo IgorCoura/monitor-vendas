@@ -169,6 +169,55 @@ public sealed class PairingService(
     public async Task CancelAsync(PairingSession session, string reason, CancellationToken ct) =>
         await FinishAsync(session, PairingStatus.Rejected, reason, ct);
 
+    // Alternativa ao QR para quem abre o painel no próprio celular: o WhatsApp
+    // manda um código para o número informado. O número é usado SÓ para esse
+    // pedido — o cadastro continua saindo do `wuid`, então digitar um e conectar
+    // outro cai na mesma verificação de sempre.
+    public async Task<PairingResult> RequestPairingCodeAsync(PairingSession session, string? phone, CancellationToken ct)
+    {
+        if (session.Active is not true || session.Status != PairingStatus.AwaitingScan)
+            return new PairingResult(null, "Esta sessão não está mais esperando a leitura.", Conflict: true);
+
+        var digits = PhoneNumber.ToStorage(phone);
+        if (digits.Length < 12)
+            return new PairingResult(null, "Informe o número com DDD, por exemplo 11 91234-4567.");
+
+        // A instância precisa NASCER com o número: pedir o código depois, em
+        // `connect?number=`, devolve nulo quando ela nasceu sem (confirmado
+        // contra a v2.3.7). Como nada conectou ainda, trocar a instância da
+        // sessão não custa nada — o QR antigo simplesmente deixa de valer.
+        var previousInstance = session.InstanceName;
+        var instanceName = $"mv-{Guid.NewGuid():N}"[..20];
+
+        try
+        {
+            var qr = await evolution.CreateInstanceAsync(instanceName, digits, ct);
+            if (qr is null || string.IsNullOrWhiteSpace(qr.PairingCode))
+            {
+                await evolution.DeleteInstanceAsync(instanceName, ct);
+                return new PairingResult(null, "A Evolution não devolveu um código de pareamento para este número.");
+            }
+
+            await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+
+            session.InstanceName = instanceName;
+            session.PairingCode = qr.PairingCode;
+            session.QrCode = qr.Code;
+            session.QrBase64 = qr.Base64;
+            await db.SaveChangesAsync(ct);
+        }
+        catch (HttpRequestException)
+        {
+            await evolution.DeleteInstanceAsync(instanceName, ct);
+            return new PairingResult(null, "Falha ao comunicar com a Evolution API.");
+        }
+
+        // A instância anterior não serve mais e só acumularia lixo na Evolution.
+        await evolution.DeleteInstanceAsync(previousInstance, ct);
+
+        return new PairingResult(session, null);
+    }
+
     // Sinal de vida da tela: enquanto alguém está olhando o QR, o prazo anda para
     // frente. É o que distingue "ainda esperando o celular" de "fechou a aba" —
     // sem isso, recarregar a página deixava a vaga única presa até o prazo vencer.

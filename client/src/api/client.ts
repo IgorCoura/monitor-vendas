@@ -153,6 +153,13 @@ export const api = {
     status: (id: string) => request<PairingSessionDto>(`/pairings/${id}`),
     confirm: (id: string) => request<PairingSessionDto>(`/pairings/${id}/confirm`, { method: 'POST' }),
     cancel: (id: string) => request<PairingSessionDto>(`/pairings/${id}/cancel`, { method: 'POST' }),
+    // O telefone só diz ao WhatsApp para quem mandar o código; o cadastro
+    // continua vindo do aparelho que conectar.
+    pairingCode: (id: string, phone: string) =>
+      request<PairingSessionDto>(`/pairings/${id}/pairing-code`, {
+        method: 'POST',
+        body: JSON.stringify({ phone }),
+      }),
   },
   reports: {
     seller: (id: string, range: DateRange, fresh = false) =>

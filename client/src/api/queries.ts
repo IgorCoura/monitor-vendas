@@ -270,6 +270,15 @@ export function useConfirmPairing() {
   })
 }
 
+export function useRequestPairingCode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, phone }: { id: string; phone: string }) => api.pairings.pairingCode(id, phone),
+    // O código volta pela sessão, que é o que a tela mostra.
+    onSuccess: (session) => client.setQueryData(['pairing', session.id], session),
+  })
+}
+
 export function useCancelPairing() {
   const client = useQueryClient()
   return useMutation({

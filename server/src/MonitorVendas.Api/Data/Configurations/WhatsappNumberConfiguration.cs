@@ -35,6 +35,7 @@ public class PairingSessionConfiguration : IEntityTypeConfiguration<PairingSessi
         // tamanho fixo. Truncar aqui daria um QR ilegível em vez de um erro.
         builder.Property(s => s.QrCode);
         builder.Property(s => s.QrBase64);
+        builder.Property(s => s.PairingCode).HasMaxLength(16);
         builder.HasIndex(s => s.InstanceName).IsUnique();
         builder.HasOne<Seller>().WithMany().HasForeignKey(s => s.SellerId);
 

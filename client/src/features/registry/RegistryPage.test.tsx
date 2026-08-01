@@ -148,6 +148,43 @@ describe('RegistryPage', () => {
     expect(await screen.findByText('Já existe um pareamento em andamento.')).toBeInTheDocument()
   })
 
+  // Quem abre o painel no próprio celular não tem uma segunda câmera para ler o
+  // QR da tela: pede o código de pareamento informando o número. O número aqui é
+  // só o destinatário do código, não o cadastro.
+  it('gera o código de pareamento como alternativa ao QR', async () => {
+    const user = await openPairing(session())
+
+    await user.type(await screen.findByLabelText('Número para o código de pareamento'), '11968608425')
+
+    mswServer.use(
+      http.post(`/api/v1/pairings/${SESSION_ID}/pairing-code`, () =>
+        HttpResponse.json(session({ qr: { code: 'QR2', base64: null, pairingCode: 'WZTK-9RQ2' } })),
+      ),
+    )
+    await user.click(screen.getByRole('button', { name: 'Gerar código' }))
+
+    expect(await screen.findByTestId('pairing-code')).toHaveTextContent('WZTK-9RQ2')
+    expect(
+      screen.getByText(/Use o código de pareamento em WhatsApp → Aparelhos conectados/),
+    ).toBeInTheDocument()
+  })
+
+  // Número sem DDD não gera código, e o motivo vem do servidor.
+  it('mostra o motivo quando o número do código é inválido', async () => {
+    const user = await openPairing(session())
+
+    mswServer.use(
+      http.post(`/api/v1/pairings/${SESSION_ID}/pairing-code`, () =>
+        HttpResponse.json({ error: 'Informe o número com DDD, por exemplo 11 91234-4567.' }, { status: 400 }),
+      ),
+    )
+    await user.click(await screen.findByRole('button', { name: 'Gerar código' }))
+
+    expect(
+      await screen.findByText('Informe o número com DDD, por exemplo 11 91234-4567.'),
+    ).toBeInTheDocument()
+  })
+
   // Vendedor inativo tem o card esmaecido; o botão precisa estar desativado de
   // verdade. (Regressão: parecia indisponível e mesmo assim conectava.)
   it('não deixa conectar WhatsApp em vendedor inativo', async () => {

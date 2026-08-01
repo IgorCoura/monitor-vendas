@@ -177,6 +177,85 @@ public class PairingTests(IntegrationTestWebAppFactory factory) : BaseIntegratio
         Assert.Equal("QR", stored.QrCode);
     }
 
+    // Código de pareamento: alternativa ao QR para quem abre o painel no mesmo
+    // celular que vai conectar. O número informado vai para a Evolution só para o
+    // WhatsApp saber a quem mandar o código.
+    [Fact]
+    public async Task PairingCode_IsRequestedWithTheNumberAndServedByTheStatus()
+    {
+        // Registrado ANTES do seed: o fake responde pela primeira rota que casa.
+        // O código de pareamento sai da CRIAÇÃO da instância, não do connect.
+        FakeEvolution.When(HttpMethod.Post, "/instance/create",
+            """{"qrcode":{"code":"QR-2","base64":"data:image/png;base64,BBB","pairingCode":"WZTK-9RQ2"}}""");
+        await SeedSellersAsync();
+
+        var session = await StartAsync(AnaId);
+        var response = await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/pairing-code",
+            new { phone = "(11) 96860-8425" });
+        response.EnsureSuccessStatusCode();
+
+        var status = await StatusAsync(session.Id);
+        Assert.Equal("WZTK-9RQ2", status.Qr!.PairingCode);
+        // O QR novo veio junto: manter o antigo deixaria na tela um código morto.
+        Assert.Equal("QR-2", status.Qr.Code);
+
+        // O número foi para a criação da instância nova, e a antiga foi apagada.
+        Assert.Contains(FakeEvolution.Requests, r =>
+            r.Path.Contains("/instance/create", StringComparison.OrdinalIgnoreCase) &&
+            (r.Body ?? string.Empty).Contains("5511968608425"));
+        Assert.Contains(FakeEvolution.Requests, r => r.Method == HttpMethod.Delete);
+    }
+
+    // Mesmo pedindo o código com um número, quem manda no cadastro continua sendo
+    // o aparelho que conectou: digitar um e parear outro não passa.
+    [Fact]
+    public async Task PairingCode_DoesNotDecideWhichNumberIsRegistered()
+    {
+        // Registrado ANTES do seed: o fake responde pela primeira rota que casa.
+        // O código de pareamento sai da CRIAÇÃO da instância, não do connect.
+        FakeEvolution.When(HttpMethod.Post, "/instance/create",
+            """{"qrcode":{"code":"QR-2","base64":"data:image/png;base64,BBB","pairingCode":"WZTK-9RQ2"}}""");
+        await SeedSellersAsync();
+
+        var session = await StartAsync(AnaId);
+        await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/pairing-code",
+            new { phone = "11999998888" });
+
+        // Conectou outro aparelho, diferente do digitado.
+        await ConnectAsync(SessionInstance(session.Id), Phone);
+
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync());
+        Assert.Equal(Phone, number.Phone);
+    }
+
+    // Número sem DDD não gera código: o WhatsApp não teria para onde mandá-lo.
+    [Fact]
+    public async Task PairingCode_WithoutAUsableNumber_IsRefused()
+    {
+        await SeedSellersAsync();
+        var session = await StartAsync(AnaId);
+
+        var response = await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/pairing-code",
+            new { phone = "96860" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("DDD", await response.Content.ReadAsStringAsync());
+    }
+
+    // Sessão já encerrada não gera código novo: a instância dela nem existe mais.
+    [Fact]
+    public async Task PairingCode_OnAFinishedSession_Returns409()
+    {
+        await SeedSellersAsync();
+        var session = await StartAsync(AnaId);
+        await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/cancel", new { });
+
+        var response = await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/pairing-code",
+            new { phone = "11968608425" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     // Duas pessoas pareando ao mesmo tempo criariam duas instâncias e uma sessão
     // órfã: o banco decide quem chegou primeiro.
     [Fact]

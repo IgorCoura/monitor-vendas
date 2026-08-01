@@ -53,7 +53,10 @@ public sealed class EvolutionApiClient(HttpClient http)
     // `number` é OMITIDO quando não se sabe o telefone — mandá-lo vazio faz a
     // Evolution recusar com 400 ("number does not match pattern"). É o caso do
     // pareamento por QR, em que o número só aparece depois de conectar.
-    public async Task CreateInstanceAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
+    // Devolve o QR da criação — e é AQUI que sai o código de pareamento: pedi-lo
+    // depois, em `instance/connect/{name}?number=`, devolve `pairingCode: null`
+    // quando a instância nasceu sem número (confirmado contra a v2.3.7).
+    public async Task<QrCode?> CreateInstanceAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
     {
         object body = string.IsNullOrWhiteSpace(phone)
             ? new { instanceName, qrcode = true, integration = "WHATSAPP-BAILEYS" }
@@ -62,6 +65,12 @@ public sealed class EvolutionApiClient(HttpClient http)
         var response = await http.PostAsJsonAsync("instance/create", body, cancellationToken);
 
         response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!doc.RootElement.TryGetProperty("qrcode", out var qr) || qr.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return new QrCode(GetString(qr, "code"), GetString(qr, "base64"), GetString(qr, "pairingCode"));
     }
 
     // Derruba a sessão sem apagar a instância: o número pode voltar depois pelo
@@ -106,9 +115,17 @@ public sealed class EvolutionApiClient(HttpClient http)
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task<QrCode> ConnectAsync(string instanceName, CancellationToken cancellationToken = default)
+    // Com `phone`, a Evolution devolve também o **código de pareamento** — é a
+    // saída de quem abre o painel no próprio celular e não tem uma segunda câmera
+    // para ler o QR da tela. O número aqui serve só para o WhatsApp saber a quem
+    // mandar o código; quem manda no cadastro continua sendo o `wuid` da conexão.
+    public async Task<QrCode> ConnectAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
     {
-        var response = await http.GetAsync($"instance/connect/{instanceName}", cancellationToken);
+        var path = string.IsNullOrWhiteSpace(phone)
+            ? $"instance/connect/{instanceName}"
+            : $"instance/connect/{instanceName}?number={Uri.EscapeDataString(phone)}";
+
+        var response = await http.GetAsync(path, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));

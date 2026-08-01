@@ -41,7 +41,7 @@ public static class NumbersEndpoints
             {
                 await evolution.CreateInstanceAsync(instanceName, phone, ct);
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
-                qr = await evolution.ConnectAsync(instanceName, ct);
+                qr = await evolution.ConnectAsync(instanceName, phone, ct);
             }
             catch (HttpRequestException)
             {
@@ -114,7 +114,9 @@ public static class NumbersEndpoints
 
             try
             {
-                var qr = await evolution.ConnectAsync(number.InstanceName, ct);
+                // Com o número conhecido, a Evolution devolve o código de pareamento
+                // junto — é a alternativa de quem reconecta pelo próprio celular.
+                var qr = await evolution.ConnectAsync(number.InstanceName, number.Phone, ct);
                 return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode));
             }
             catch (HttpRequestException)

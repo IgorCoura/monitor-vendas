@@ -47,6 +47,12 @@ public class PairingSession
     public string? QrCode { get; set; }
     public string? QrBase64 { get; set; }
 
+    // Alternativa ao QR para quem abre o painel no próprio celular: o WhatsApp
+    // manda este código para o número informado. **O número pedido aqui não vira
+    // cadastro** — ele só diz ao WhatsApp para quem mandar o código; o cadastro
+    // continua saindo do `wuid` de quem realmente conectou.
+    public string? PairingCode { get; set; }
+
     // Número já cadastrado que esta sessão vai reaproveitar (transferência ou
     // reativação). Nunca se cria registro novo para um número que já existe: o
     // histórico dele ficaria órfão.

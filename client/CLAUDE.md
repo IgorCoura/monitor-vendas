@@ -158,6 +158,11 @@ client/src/
 │   │               #   (PairingDialog) e o número vem do aparelho que leu o QR.
 │   │               #   O dialog conduz as confirmações (transferir de vendedor,
 │   │               #   reativar banido) e mostra o motivo quando o servidor recusa.
+│   │               #   Alternativa ao QR para quem abre o painel no próprio
+│   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
+│   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
+│   │               #   número é só o destinatário do código — o cadastro segue
+│   │               #   vindo do aparelho que conectar.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,

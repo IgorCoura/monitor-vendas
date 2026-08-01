@@ -7,6 +7,7 @@ import {
   useCreateSeller,
   useNumbers,
   usePairingStatus,
+  useRequestPairingCode,
   useSellers,
   useStartPairing,
   useUpdateSeller,
@@ -86,10 +87,36 @@ function PairingDialog({
   const { data: session } = usePairingStatus(sessionId)
   const confirmPairing = useConfirmPairing()
   const cancelPairing = useCancelPairing()
+  const requestCode = useRequestPairingCode()
 
   const qr = session?.qr
   const base64 = qr?.base64
   const src = base64 ? (base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`) : null
+  const pairingCode = qr?.pairingCode ?? null
+
+  const [phone, setPhone] = useState('')
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  async function askForCode() {
+    if (!session) return
+    setCodeError(null)
+    try {
+      await requestCode.mutateAsync({ id: session.id, phone })
+    } catch (err) {
+      setCodeError(err instanceof ApiError ? err.message : 'Não foi possível gerar o código.')
+    }
+  }
+
+  async function copyCode() {
+    if (!pairingCode) return
+    try {
+      await navigator.clipboard.writeText(pairingCode)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
 
   async function close() {
     // Sessão ainda viva ao fechar: cancela para não deixar instância órfã na
@@ -141,6 +168,58 @@ function PairingDialog({
             WhatsApp → Aparelhos conectados → Conectar aparelho. O número é lido do próprio
             aparelho: <strong>não é possível cadastrar um número e conectar outro</strong>.
           </p>
+
+          {/* Quem abre o painel pelo celular está com o telefone na mão — não tem
+              uma segunda câmera para ler o QR da própria tela. O número pedido
+              aqui só diz ao WhatsApp para quem mandar o código; o cadastro
+              continua saindo do aparelho que conectar. */}
+          <div className="rounded-lg bg-surface p-3">
+            {pairingCode ? (
+              <>
+                <p className="text-xs font-medium text-ink-muted">
+                  No mesmo aparelho? Use o código de pareamento em WhatsApp → Aparelhos conectados →
+                  Conectar com número de telefone.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <code
+                    data-testid="pairing-code"
+                    className="flex-1 text-base font-semibold tracking-widest"
+                  >
+                    {pairingCode}
+                  </code>
+                  <Button variant="ghost" onClick={copyCode} className="shrink-0">
+                    {copied ? 'Copiado' : 'Copiar'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-ink-muted">
+                  No mesmo aparelho? Informe o número para receber um código de pareamento em vez do
+                  QR. O número serve só para o WhatsApp saber a quem mandar o código — o cadastro
+                  continua sendo o do aparelho que conectar.
+                </p>
+                <div className="mt-2 flex items-end gap-2 max-md:flex-col max-md:items-stretch">
+                  <Input
+                    aria-label="Número para o código de pareamento"
+                    placeholder="11 91234-4567"
+                    inputMode="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                  <Button
+                    variant="ghost"
+                    onClick={askForCode}
+                    disabled={requestCode.isPending}
+                    className="shrink-0"
+                  >
+                    Gerar código
+                  </Button>
+                </div>
+                {codeError && <p className="mt-2 text-xs text-danger">{codeError}</p>}
+              </>
+            )}
+          </div>
         </div>
       )}
 

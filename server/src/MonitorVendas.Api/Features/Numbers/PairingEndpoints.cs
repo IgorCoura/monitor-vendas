@@ -31,6 +31,9 @@ public sealed record PairingSessionDto(
             currentOwner, session.ExpiresAt, qr);
 }
 
+// O telefone aqui é só o destinatário do código no WhatsApp — não é cadastro.
+public sealed record PairingCodeRequest(string? Phone);
+
 public static class PairingEndpoints
 {
     public static RouteGroupBuilder MapPairingEndpoints(this RouteGroupBuilder group)
@@ -55,7 +58,7 @@ public static class PairingEndpoints
 
             try
             {
-                var qr = await evolution.ConnectAsync(result.Session.InstanceName, ct);
+                var qr = await evolution.ConnectAsync(result.Session.InstanceName, cancellationToken: ct);
 
                 // Guardado na sessão porque a tela lê o QR pelo polling, e porque a
                 // Evolution troca o código a cada ~30 s (chega por QRCODE_UPDATED).
@@ -114,6 +117,28 @@ public static class PairingEndpoints
             return Results.Ok(await DescribeAsync(session, db, ct));
         });
 
+        // Código de pareamento: alternativa ao QR para quem está com o painel
+        // aberto no mesmo celular que vai conectar.
+        group.MapPost("/pairings/{id:guid}/pairing-code", async (
+            Guid id,
+            PairingCodeRequest body,
+            AppDbContext db,
+            PairingService pairing,
+            CancellationToken ct) =>
+        {
+            var session = await db.Set<PairingSession>().FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (session is null)
+                return Results.NotFound();
+
+            var result = await pairing.RequestPairingCodeAsync(session, body.Phone, ct);
+            if (result.Session is null)
+                return result.Conflict
+                    ? Results.Conflict(new { error = result.Error })
+                    : Results.BadRequest(new { error = result.Error });
+
+            return Results.Ok(await DescribeAsync(session, db, ct));
+        });
+
         group.MapPost("/pairings/{id:guid}/cancel", async (
             Guid id,
             AppDbContext db,
@@ -160,7 +185,7 @@ public static class PairingEndpoints
     }
 
     private static QrCodeDto? QrOf(PairingSession session) =>
-        session.QrCode is null && session.QrBase64 is null
+        session.QrCode is null && session.QrBase64 is null && session.PairingCode is null
             ? null
-            : new QrCodeDto(session.QrCode, session.QrBase64, null);
+            : new QrCodeDto(session.QrCode, session.QrBase64, session.PairingCode);
 }
