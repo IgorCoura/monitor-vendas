@@ -66,6 +66,80 @@ public class BanAndReconnectTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal(NumberStatus.BannedPermanent, number.Status);
     }
 
+    // O código de pareamento da reconexão sai de uma instância RECRIADA com o
+    // número. (Regressão: `connect?number=` devolvia o código de uma sessão antiga
+    // em cache, que o WhatsApp recusa — o código nunca funcionava.)
+    [Fact]
+    public async Task PairingCode_RecreatesTheInstanceWithTheNumber()
+    {
+        FakeEvolution.When(HttpMethod.Post, "/instance/create",
+            """{"qrcode":{"code":"QR-NOVO","base64":"data:image/png;base64,BBB","pairingCode":"ZLKPFRXL"}}""");
+        FakeEvolution.When(HttpMethod.Post, "/webhook/set/", "{}");
+        FakeEvolution.When(HttpMethod.Delete, "/instance/delete/", "{}");
+        await SeedAsync(NumberStatus.Disconnected);
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/pairing-code", null);
+        response.EnsureSuccessStatusCode();
+
+        var qr = await response.Content.ReadFromJsonAsync<QrCodeDto>();
+        Assert.Equal("ZLKPFRXL", qr!.PairingCode);
+        Assert.Equal("QR-NOVO", qr.Code);
+
+        // A instância nova nasceu com o número e a velha foi apagada — e é para a
+        // nova que o cadastro passa a apontar, senão os webhooks deste número
+        // chegariam para uma instância que não existe mais.
+        Assert.Contains(FakeEvolution.Requests, r =>
+            r.Path.Contains("/instance/create", StringComparison.OrdinalIgnoreCase) &&
+            (r.Body ?? string.Empty).Contains("5511900001111"));
+        Assert.Contains(FakeEvolution.Requests, r =>
+            r.Method == HttpMethod.Delete && r.Path.Contains($"/instance/delete/{Instance}", StringComparison.OrdinalIgnoreCase));
+
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().SingleAsync(n => n.Id == NumberId));
+        Assert.NotEqual(Instance, number.InstanceName);
+        Assert.StartsWith("mv-", number.InstanceName);
+    }
+
+    // Reconexão simples não traz código nenhum: o que a Evolution devolveria ali é
+    // o de uma sessão vencida, e mostrá-lo faria o usuário perder tempo tentando.
+    [Fact]
+    public async Task Connect_DoesNotServeAStalePairingCode()
+    {
+        FakeEvolution.When(HttpMethod.Get, "/instance/connect/",
+            """{"code":"QR","base64":"data:image/png;base64,AAA","pairingCode":"VELHO123"}""");
+        await SeedAsync(NumberStatus.Disconnected);
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/connect", null);
+
+        var qr = await response.Content.ReadFromJsonAsync<QrCodeDto>();
+        Assert.Null(qr!.PairingCode);
+        Assert.Equal("QR", qr.Code);
+    }
+
+    // Número conectado não recria instância: derrubaria a sessão viva de quem está
+    // trabalhando.
+    [Fact]
+    public async Task PairingCode_OnAConnectedNumber_IsRefused()
+    {
+        await SeedAsync();
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/pairing-code", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Method == HttpMethod.Delete);
+    }
+
+    // Número banido permanente também exige confirmação para gerar o código: é a
+    // mesma decisão manual da reconexão.
+    [Fact]
+    public async Task PairingCode_OnPermanentlyBannedNumber_RequiresConfirmation()
+    {
+        await SeedAsync(NumberStatus.BannedPermanent);
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/pairing-code", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     // Ban permanente é decisão manual: reconectar sem confirmar apagaria essa
     // decisão em silêncio, então o QR nem é gerado.
     [Fact]

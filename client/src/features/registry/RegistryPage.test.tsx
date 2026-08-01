@@ -185,6 +185,48 @@ describe('RegistryPage', () => {
     ).toBeInTheDocument()
   })
 
+  // Na reconexão o código não vem junto do QR: ele é pedido no clique, porque
+  // gerá-lo recria a instância na Evolution. (Regressão: vinha automático, de uma
+  // sessão antiga em cache, e o WhatsApp recusava.)
+  it('só gera o código da reconexão quando pedido', async () => {
+    const ana = seller('Ana')
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () =>
+        HttpResponse.json([
+          {
+            id: 'n1',
+            sellerId: ana.id,
+            phone: '5511968608425',
+            instanceName: 'mv-1',
+            status: 'Disconnected',
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      ),
+      http.post('/api/v1/numbers/n1/connect', () =>
+        HttpResponse.json({ code: 'QRDATA', base64: null, pairingCode: null }),
+      ),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Reconectar' }))
+
+    // Abriu o QR e nenhum código veio junto.
+    expect(await screen.findByRole('button', { name: 'Gerar código' })).toBeInTheDocument()
+    expect(screen.queryByTestId('pairing-code')).not.toBeInTheDocument()
+
+    mswServer.use(
+      http.post('/api/v1/numbers/n1/pairing-code', () =>
+        HttpResponse.json({ code: 'QR2', base64: null, pairingCode: 'ZLKPFRXL' }),
+      ),
+    )
+    await user.click(screen.getByRole('button', { name: 'Gerar código' }))
+
+    expect(await screen.findByTestId('pairing-code')).toHaveTextContent('ZLKPFRXL')
+  })
+
   // Vendedor inativo tem o card esmaecido; o botão precisa estar desativado de
   // verdade. (Regressão: parecia indisponível e mesmo assim conectava.)
   it('não deixa conectar WhatsApp em vendedor inativo', async () => {

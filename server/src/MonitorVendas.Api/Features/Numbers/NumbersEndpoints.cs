@@ -114,9 +114,72 @@ public static class NumbersEndpoints
 
             try
             {
-                // Com o número conhecido, a Evolution devolve o código de pareamento
-                // junto — é a alternativa de quem reconecta pelo próprio celular.
-                var qr = await evolution.ConnectAsync(number.InstanceName, number.Phone, ct);
+                // Sem número: `connect?number=` devolve o código de pareamento de uma
+                // sessão antiga em cache, que o WhatsApp já recusa. Código válido só
+                // sai de instância recém-criada — é o /pairing-code abaixo.
+                var qr = await evolution.ConnectAsync(number.InstanceName, cancellationToken: ct);
+                return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, null));
+            }
+            catch (HttpRequestException)
+            {
+                return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        // Código de pareamento para reconectar sem ler QR (mesmo aparelho). A
+        // instância é RECRIADA com o número: pedir o código a uma instância que já
+        // existe devolve o de uma sessão antiga em cache, que o WhatsApp recusa —
+        // era o motivo de o código da reconexão nunca funcionar.
+        group.MapPost("/numbers/{id:guid}/pairing-code", async (
+            Guid id,
+            bool? confirmBanned,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            IOptions<WebhookOptions> webhookOptions,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            if (number.Status == NumberStatus.BannedPermanent && confirmBanned != true)
+                return Results.Conflict(new
+                {
+                    error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
+                    requiresConfirmation = true,
+                });
+
+            // Recriar derruba a sessão viva; para o número conectado não há o que
+            // reconectar de qualquer forma.
+            if (number.Status == NumberStatus.Active)
+                return Results.Conflict(new { error = "Este número já está conectado." });
+
+            // Instância NOVA, não a mesma recriada: apagar e recriar com o mesmo
+            // nome dá corrida na Evolution e a criação volta sem QR nenhum.
+            var previousInstance = number.InstanceName;
+            var instanceName = $"mv-{Guid.NewGuid():N}"[..20];
+
+            try
+            {
+                var qr = await evolution.CreateInstanceAsync(instanceName, number.Phone, ct);
+                if (qr is null || string.IsNullOrWhiteSpace(qr.PairingCode))
+                {
+                    await evolution.DeleteInstanceAsync(instanceName, ct);
+                    return Results.Problem(
+                        title: "A Evolution não devolveu um código de pareamento para este número.",
+                        statusCode: StatusCodes.Status502BadGateway);
+                }
+
+                await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+
+                // O cadastro passa a apontar para a instância nova: é por ela que os
+                // webhooks deste número vão chegar daqui para frente.
+                await db.Set<WhatsappNumber>()
+                    .Where(n => n.Id == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(n => n.InstanceName, instanceName), ct);
+
+                await evolution.DeleteInstanceAsync(previousInstance, ct);
+
                 return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode));
             }
             catch (HttpRequestException)

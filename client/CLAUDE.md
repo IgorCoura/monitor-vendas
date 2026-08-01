@@ -162,7 +162,10 @@ client/src/
 │   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
 │   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
 │   │               #   número é só o destinatário do código — o cadastro segue
-│   │               #   vindo do aparelho que conectar.
+│   │               #   vindo do aparelho que conectar. Na RECONEXÃO de um número
+│   │               #   já cadastrado o código sai só no clique em "Gerar código"
+│   │               #   (recria a instância na Evolution; vir junto do QR daria um
+│   │               #   código de sessão vencida, que o WhatsApp recusa).
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,

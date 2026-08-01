@@ -138,6 +138,11 @@ export const api = {
       request<QrCodeDto>(`/numbers/${id}/connect${confirmBanned ? '?confirmBanned=true' : ''}`, {
         method: 'POST',
       }),
+    // Só sob pedido: recria a instância com o número para o código nascer válido.
+    pairingCode: (id: string, confirmBanned = false) =>
+      request<QrCodeDto>(`/numbers/${id}/pairing-code${confirmBanned ? '?confirmBanned=true' : ''}`, {
+        method: 'POST',
+      }),
     transfer: (id: string, sellerId: string) =>
       request<NumberResponse>(`/numbers/${id}/transfer`, {
         method: 'POST',

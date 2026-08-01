@@ -127,9 +127,16 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   pedir o código com um número e conectar outro cai na mesma resolução de sempre.
 - **O código só sai na CRIAÇÃO da instância** (confirmado contra a v2.3.7):
   `instance/connect/{name}?number=` devolve `pairingCode: null` quando a
-  instância nasceu sem número. Por isso o pedido **recria a instância** da sessão
-  com o número informado (nome novo, webhook reconfigurado) e apaga a anterior —
-  como nada conectou ainda, o custo é só o QR antigo deixar de valer.
+  instância nasceu sem número — e, quando ela nasceu **com** número, devolve o
+  código de uma sessão antiga em cache, que o WhatsApp recusa. Por isso todo
+  pedido de código **recria a instância** com o número e apaga a anterior.
+- O mesmo vale na **reconexão de número já cadastrado**:
+  `POST /numbers/{id}/pairing-code` recria a instância (mesmo nome) e devolve um
+  código válido; `POST /numbers/{id}/connect` devolve **só o QR**. A tela pede o
+  código no clique, nunca junto do QR: gerá-lo derruba a instância, e quem só
+  queria escanear perderia a sessão. Recusa **409** em número `Active` (não há o
+  que reconectar, e recriar mataria a sessão viva) e exige `confirmBanned` no
+  banido permanente, como a reconexão.
 - **Vendedor inativo não recebe WhatsApp**: `POST /sellers/{id}/pairings` responde
   **409**. Quem foi desativado saiu do time, e o número conectado nele ficaria
   fora de todo relatório.
@@ -596,6 +603,7 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `GET /numbers` (todos, com vendedor),
 `POST /sellers/{id}/pairings` + `GET /pairings/{id}` + `/confirm` + `/cancel` + `/pairing-code`,
 `POST /numbers/{id}/connect` (novo QR; `?confirmBanned=true` para número banido),
+`POST /numbers/{id}/pairing-code` (código de pareamento, recria a instância),
 `POST /numbers/{id}/transfer`, `POST /numbers/{id}/ban-permanent` (desloga),
 `POST /webhooks/evolution/{secret}`, `POST/GET/DELETE /holidays`,
 `GET/POST/PUT/DELETE /outcome-types` (+ `/{code}/terms`),
@@ -659,7 +667,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 416 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 420 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -725,7 +733,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (416 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (420 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

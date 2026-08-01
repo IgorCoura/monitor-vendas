@@ -270,6 +270,14 @@ export function useConfirmPairing() {
   })
 }
 
+// Código de pareamento de um número JÁ cadastrado (reconexão).
+export function useNumberPairingCode() {
+  return useMutation({
+    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
+      api.numbers.pairingCode(id, confirmBanned),
+  })
+}
+
 export function useRequestPairingCode() {
   const client = useQueryClient()
   return useMutation({
