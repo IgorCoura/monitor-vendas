@@ -252,7 +252,13 @@ export function usePairingStatus(id: string | null) {
       return session
     },
     enabled: !!id,
-    refetchInterval: (query) => (query.state.data?.status === 'AwaitingScan' ? 2000 : false),
+    // A consulta é o sinal de vida da sessão no servidor: parar de perguntar
+    // libera a vaga. Por isso vale também enquanto espera a confirmação — sem
+    // isso a sessão morreria embaixo de quem está lendo o aviso de transferência.
+    refetchInterval: (query) =>
+      query.state.data?.status === 'AwaitingScan' || query.state.data?.status === 'AwaitingConfirmation'
+        ? 2000
+        : false,
   })
 }
 

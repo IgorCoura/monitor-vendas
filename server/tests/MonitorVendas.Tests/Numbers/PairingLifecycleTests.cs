@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Reconciliation;
@@ -91,15 +92,16 @@ public class PairingLifecycleTests(IntegrationTestWebAppFactory factory) : BaseI
         Assert.Null(session.Active);
     }
 
-    // QR expirado e esquecido não pode segurar a vaga única: a faxina encerra a
-    // sessão vencida e apaga a instância que ficou pendurada na Evolution.
+    // Tela que parou de responder (aba fechada, página recarregada) não pode
+    // segurar a vaga única: a faxina encerra a sessão e apaga a instância que
+    // ficou pendurada na Evolution.
     [Fact]
     public async Task Cleanup_EndsExpiredSessionsAndDeletesTheirInstances()
     {
         await SeedSellerAsync();
         var session = await StartAsync();
 
-        // Empurra o vencimento para trás, como se o QR tivesse ficado aberto.
+        // Sem sinal de vida: é o que acontece quando ninguém mais está olhando.
         await SeedAsync(async db =>
         {
             var stored = await db.Set<PairingSession>().SingleAsync(s => s.Id == session.Id);
@@ -108,6 +110,7 @@ public class PairingLifecycleTests(IntegrationTestWebAppFactory factory) : BaseI
 
         var cleanup = new PairingCleanupService(
             Factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new PairingOptions { CleanupIntervalSeconds = 1 }),
             Factory.Services.GetRequiredService<ILogger<PairingCleanupService>>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -124,11 +127,50 @@ public class PairingLifecycleTests(IntegrationTestWebAppFactory factory) : BaseI
 
         var expired = await SessionAsync(session.Id);
         Assert.Equal(PairingStatus.Rejected, expired.Status);
-        Assert.Contains("QR code", expired.Error);
+        Assert.Contains("parou de responder", expired.Error);
         Assert.Contains(FakeEvolution.Requests, r =>
             r.Method == HttpMethod.Delete && r.Path.Contains(expired.InstanceName, StringComparison.OrdinalIgnoreCase));
 
         // Com a vaga liberada, a próxima tentativa entra normalmente.
+        var next = await Client.PostAsJsonAsync($"/api/v1/sellers/{AnaId}/pairings", new { });
+        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
+    }
+
+    // Consultar o status é o sinal de vida da tela: enquanto ela pergunta, o prazo
+    // anda para frente e quem está com o diálogo aberto tem o tempo que precisar
+    // para pegar o celular.
+    [Fact]
+    public async Task Status_PushesTheDeadlineForward()
+    {
+        await SeedSellerAsync();
+        var session = await StartAsync();
+        var before = (await SessionAsync(session.Id)).ExpiresAt;
+
+        await Task.Delay(1100);
+        await Client.GetAsync($"/api/v1/pairings/{session.Id}");
+
+        var after = (await SessionAsync(session.Id)).ExpiresAt;
+        Assert.True(after > before, $"prazo não avançou: {before:O} → {after:O}");
+    }
+
+    // Sessão encerrada não ressuscita por consulta: a tela pode continuar
+    // perguntando por um instante depois de a faxina ter liberado a vaga, e isso
+    // não pode devolver o `Active` que outra pessoa já tomou.
+    [Fact]
+    public async Task Status_OnAFinishedSession_DoesNotReviveIt()
+    {
+        await SeedSellerAsync();
+        var session = await StartAsync();
+        await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/cancel", new { });
+        var cancelledAt = (await SessionAsync(session.Id)).ExpiresAt;
+
+        await Client.GetAsync($"/api/v1/pairings/{session.Id}");
+
+        var stored = await SessionAsync(session.Id);
+        Assert.Null(stored.Active);
+        Assert.Equal(cancelledAt, stored.ExpiresAt);
+
+        // E a vaga continua livre para quem chegar depois.
         var next = await Client.PostAsJsonAsync($"/api/v1/sellers/{AnaId}/pairings", new { });
         Assert.Equal(HttpStatusCode.OK, next.StatusCode);
     }

@@ -73,10 +73,22 @@ public static class PairingEndpoints
             }
         });
 
-        group.MapGet("/pairings/{id:guid}", async (Guid id, AppDbContext db, CancellationToken ct) =>
+        // Consultar o status É o sinal de vida da tela: enquanto ela pergunta, a
+        // sessão continua viva. Parou de perguntar (aba fechada, página
+        // recarregada), a faxina libera a vaga em segundos.
+        group.MapGet("/pairings/{id:guid}", async (
+            Guid id,
+            AppDbContext db,
+            PairingService pairing,
+            CancellationToken ct) =>
         {
-            var session = await db.Set<PairingSession>().AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
-            return session is null ? Results.NotFound() : Results.Ok(await DescribeAsync(session, db, ct));
+            var session = await db.Set<PairingSession>().FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (session is null)
+                return Results.NotFound();
+
+            await pairing.HeartbeatAsync(session, ct);
+
+            return Results.Ok(await DescribeAsync(session, db, ct));
         });
 
         // Confirma transferência de vendedor e/ou reativação de número banido.

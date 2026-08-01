@@ -148,9 +148,20 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   **Reenfileirar é obrigatório**: o dedupe por `key.id` impede a reconciliação de
   sintetizar de novo um evento que já existe na tabela, então sem isso o descarte
   era definitivo (bug corrigido; regressão em `PairingLifecycleTests`).
-- **Faxina** (`PairingCleanupService`, 30 s): sessão expirada
-  (`Pairing:ExpirationMinutes`, 5) tem a instância apagada e a vaga liberada — QR
-  aberto e esquecido não pode travar o sistema nem deixar sessão viva sem dono.
+- **A sessão vive de sinal de vida, não de prazo fixo**: cada `GET /pairings/{id}`
+  (a tela pergunta a cada 2 s) empurra `ExpiresAt` para
+  `agora + Pairing:ExpirationSeconds` (30). Quem está com o diálogo aberto tem o
+  tempo que precisar para pegar o celular; quem **recarregou a página ou fechou a
+  aba** para de perguntar e a vaga é liberada em ~30 s. Antes era prazo fixo de 5
+  minutos, e recarregar a página travava o pareamento do sistema inteiro por todo
+  esse tempo. O batimento só vale para sessão viva (`Active`): consulta a uma
+  sessão encerrada não a ressuscita.
+- Por isso a tela **continua consultando em `AwaitingConfirmation`** — sem isso a
+  sessão morreria embaixo de quem está lendo o aviso de transferência.
+- **Faxina** (`PairingCleanupService`, `Pairing:CleanupIntervalSeconds`, 5 s):
+  sessão sem sinal de vida tem a instância apagada e a vaga liberada. O intervalo
+  precisa ser bem menor que o prazo, senão a vaga fica presa por até um ciclo
+  inteiro depois de vencida.
 - **Repareamento divergente**: instância **já cadastrada** que conecta com `wuid`
   diferente vira `NumberStatus.WrongNumber`, com `logout` imediato. Os handlers
   de mensagem, ack e etiqueta descartam tudo de número nesse estado.
@@ -635,7 +646,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 409 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 411 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -701,7 +712,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (409 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (411 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

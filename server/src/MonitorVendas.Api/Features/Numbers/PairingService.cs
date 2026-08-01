@@ -36,7 +36,7 @@ public sealed class PairingService(
             Active = true,
             CreatedAt = now,
             QuarantineFrom = now,
-            ExpiresAt = now.AddMinutes(Math.Max(1, options.Value.ExpirationMinutes)),
+            ExpiresAt = now.AddSeconds(Math.Max(5, options.Value.ExpirationSeconds)),
         };
 
         db.Add(session);
@@ -163,6 +163,18 @@ public sealed class PairingService(
     public async Task CancelAsync(PairingSession session, string reason, CancellationToken ct) =>
         await FinishAsync(session, PairingStatus.Rejected, reason, ct);
 
+    // Sinal de vida da tela: enquanto alguém está olhando o QR, o prazo anda para
+    // frente. É o que distingue "ainda esperando o celular" de "fechou a aba" —
+    // sem isso, recarregar a página deixava a vaga única presa até o prazo vencer.
+    public async Task HeartbeatAsync(PairingSession session, CancellationToken ct)
+    {
+        if (session.Active is not true)
+            return;
+
+        session.ExpiresAt = DateTime.UtcNow.AddSeconds(Math.Max(5, options.Value.ExpirationSeconds));
+        await db.SaveChangesAsync(ct);
+    }
+
     // Instância cadastrada que reconectou com outro WhatsApp: derruba a sessão na
     // hora. A instância NÃO é apagada — o número certo volta por ela depois de o
     // operador reconectar.
@@ -240,14 +252,18 @@ public sealed class PairingService(
     }
 }
 
-// QR aberto e esquecido deixaria uma instância viva na Evolution e a vaga única
-// tomada para sempre. A faxina fecha as duas coisas.
+// QR aberto e esquecido — ou a página recarregada no meio — deixaria uma
+// instância viva na Evolution e a vaga única tomada. A faxina fecha as duas
+// coisas assim que a tela para de dar sinal de vida.
 public sealed class PairingCleanupService(
     IServiceScopeFactory scopeFactory,
+    IOptions<PairingOptions> options,
     ILogger<PairingCleanupService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var interval = TimeSpan.FromSeconds(Math.Max(1, options.Value.CleanupIntervalSeconds));
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -262,8 +278,8 @@ public sealed class PairingCleanupService(
 
                 foreach (var session in expired)
                 {
-                    await pairing.CancelAsync(session, "O tempo para ler o QR code acabou.", stoppingToken);
-                    logger.LogInformation("Sessão de pareamento {Id} expirou e foi encerrada.", session.Id);
+                    await pairing.CancelAsync(session, "A tela parou de responder; a conexão foi cancelada.", stoppingToken);
+                    logger.LogInformation("Sessão de pareamento {Id} ficou sem sinal de vida e foi encerrada.", session.Id);
                 }
             }
             catch (OperationCanceledException)
@@ -276,7 +292,7 @@ public sealed class PairingCleanupService(
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                await Task.Delay(interval, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -289,7 +305,14 @@ public sealed class PairingOptions
 {
     public const string Section = "Pairing";
 
-    // Tempo para alguém escanear o QR e confirmar. Passado isso, a instância é
-    // apagada e a vaga liberada — QR aberto e esquecido não pode travar o sistema.
-    public int ExpirationMinutes { get; set; } = 5;
+    // Quanto tempo a sessão sobrevive SEM sinal de vida da tela. Cada consulta de
+    // status empurra o prazo para frente, então quem está com o diálogo aberto
+    // tem o tempo que precisar para pegar o celular; quem fechou a aba ou
+    // recarregou a página perde a vaga em segundos, em vez de travar o sistema
+    // inteiro até o prazo antigo de 5 minutos vencer.
+    public int ExpirationSeconds { get; set; } = 30;
+
+    // A faxina precisa rodar bem mais rápido que o prazo, senão a vaga fica presa
+    // por até um ciclo inteiro depois de vencida.
+    public int CleanupIntervalSeconds { get; set; } = 5;
 }
