@@ -31,6 +31,10 @@ public class PairingSessionConfiguration : IEntityTypeConfiguration<PairingSessi
         builder.Property(s => s.DetectedPhone).HasMaxLength(20);
         builder.Property(s => s.DetectedProfileName).HasMaxLength(120);
         builder.Property(s => s.Error).HasMaxLength(300);
+        // Sem limite: o base64 do PNG passa de 4 KB e o `code` do WhatsApp não tem
+        // tamanho fixo. Truncar aqui daria um QR ilegível em vez de um erro.
+        builder.Property(s => s.QrCode);
+        builder.Property(s => s.QrBase64);
         builder.HasIndex(s => s.InstanceName).IsUnique();
         builder.HasOne<Seller>().WithMany().HasForeignKey(s => s.SellerId);
 

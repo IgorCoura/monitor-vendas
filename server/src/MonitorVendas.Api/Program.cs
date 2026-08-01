@@ -54,6 +54,7 @@ builder.Services.AddSingleton<IWebhookProcessor, WebhookProcessor>();
 builder.Services.AddScoped<IWebhookEventHandler, MessageUpsertHandler>();
 builder.Services.AddScoped<IWebhookEventHandler, MessageUpdateHandler>();
 builder.Services.AddScoped<IWebhookEventHandler, ConnectionUpdateHandler>();
+builder.Services.AddScoped<IWebhookEventHandler, QrCodeUpdatedHandler>();
 builder.Services.AddScoped<IWebhookEventHandler, LabelsEditHandler>();
 builder.Services.AddScoped<IWebhookEventHandler, LabelsAssociationHandler>();
 if (builder.Configuration.GetValue("Webhook:ProcessorEnabled", true))

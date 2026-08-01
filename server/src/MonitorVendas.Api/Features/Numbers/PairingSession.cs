@@ -40,6 +40,13 @@ public class PairingSession
     public string? DetectedPhone { get; set; }
     public string? DetectedProfileName { get; set; }
 
+    // O QR fica guardado aqui porque a tela o lê pelo polling da sessão, não pela
+    // resposta da criação: a Evolution **regenera** o código a cada ~30 s e manda
+    // o novo por `QRCODE_UPDATED`. Servir só o primeiro deixaria na tela um QR já
+    // vencido — que o WhatsApp recusa sem dizer por quê.
+    public string? QrCode { get; set; }
+    public string? QrBase64 { get; set; }
+
     // Número já cadastrado que esta sessão vai reaproveitar (transferência ou
     // reativação). Nunca se cria registro novo para um número que já existe: o
     // histórico dele ficaria órfão.

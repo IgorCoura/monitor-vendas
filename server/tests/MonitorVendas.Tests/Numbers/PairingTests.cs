@@ -113,6 +113,70 @@ public class PairingTests(IntegrationTestWebAppFactory factory) : BaseIntegratio
         Assert.Equal(NumberStatus.Active, number.Status);
     }
 
+    // O QR tem que vir também no polling da sessão, não só na resposta da criação:
+    // é de lá que a tela o lê. (Regressão: `GET /pairings/{id}` devolvia `qr` nulo
+    // e o diálogo ficava no spinner para sempre — o QR nunca aparecia.)
+    [Fact]
+    public async Task Status_WhileAwaitingScan_CarriesTheQrCode()
+    {
+        await SeedSellersAsync();
+        var session = await StartAsync(AnaId);
+
+        var status = await StatusAsync(session.Id);
+
+        Assert.Equal("AwaitingScan", status.Status);
+        Assert.Equal("QR", status.Qr!.Code);
+        Assert.Equal("data:image/png;base64,AAA", status.Qr.Base64);
+    }
+
+    // A Evolution troca o QR a cada ~30 s e avisa por `QRCODE_UPDATED`. Servir o
+    // primeiro para sempre deixaria na tela um código que o WhatsApp já recusa.
+    [Fact]
+    public async Task QrCodeUpdated_ReplacesWhatTheScreenShows()
+    {
+        await SeedSellersAsync();
+        var session = await StartAsync(AnaId);
+        var instance = SessionInstance(session.Id);
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            @event = "qrcode.updated",
+            instance,
+            data = new { qrcode = new { code = "QR-NOVO", @base64 = "data:image/png;base64,BBB" } },
+        });
+        await Client.PostAsync($"/api/v1/webhooks/evolution/{IntegrationTestWebAppFactory.WebhookSecret}",
+            new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+        await ProcessAsync();
+
+        var status = await StatusAsync(session.Id);
+        Assert.Equal("QR-NOVO", status.Qr!.Code);
+        Assert.Equal("data:image/png;base64,BBB", status.Qr.Base64);
+    }
+
+    // QR que chega depois de a sessão terminar não ressuscita a tela: a instância
+    // pode continuar emitindo enquanto a Evolution não a apaga.
+    [Fact]
+    public async Task QrCodeUpdated_AfterTheSessionEnded_IsIgnored()
+    {
+        await SeedSellersAsync();
+        var session = await StartAsync(AnaId);
+        var instance = SessionInstance(session.Id);
+        await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/cancel", new { });
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            @event = "qrcode.updated",
+            instance,
+            data = new { code = "QR-TARDIO", @base64 = "data:image/png;base64,CCC" },
+        });
+        await Client.PostAsync($"/api/v1/webhooks/evolution/{IntegrationTestWebAppFactory.WebhookSecret}",
+            new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+        await ProcessAsync();
+
+        var stored = await InDbAsync(db => db.Set<PairingSession>().AsNoTracking().SingleAsync(s => s.Id == session.Id));
+        Assert.Equal("QR", stored.QrCode);
+    }
+
     // Duas pessoas pareando ao mesmo tempo criariam duas instâncias e uma sessão
     // órfã: o banco decide quem chegou primeiro.
     [Fact]

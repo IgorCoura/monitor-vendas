@@ -39,6 +39,7 @@ public static class PairingEndpoints
         // acontece depois que o WhatsApp diz qual número é.
         group.MapPost("/sellers/{sellerId:guid}/pairings", async (
             Guid sellerId,
+            AppDbContext db,
             PairingService pairing,
             EvolutionApiClient evolution,
             CancellationToken ct) =>
@@ -55,6 +56,13 @@ public static class PairingEndpoints
             try
             {
                 var qr = await evolution.ConnectAsync(result.Session.InstanceName, ct);
+
+                // Guardado na sessão porque a tela lê o QR pelo polling, e porque a
+                // Evolution troca o código a cada ~30 s (chega por QRCODE_UPDATED).
+                result.Session.QrCode = qr.Code;
+                result.Session.QrBase64 = qr.Base64;
+                await db.SaveChangesAsync(ct);
+
                 return Results.Ok(PairingSessionDto.Of(
                     result.Session, new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode)));
             }
@@ -115,6 +123,11 @@ public static class PairingEndpoints
     // as duas — e de quem é o número hoje.
     private static async Task<PairingSessionDto> DescribeAsync(PairingSession session, AppDbContext db, CancellationToken ct)
     {
+        // Enquanto espera a leitura, a tela precisa do QR **corrente** — é por este
+        // caminho que ela o recebe, não pela resposta da criação.
+        if (session.Status == PairingStatus.AwaitingScan)
+            return PairingSessionDto.Of(session, QrOf(session));
+
         if (session.Status != PairingStatus.AwaitingConfirmation || session.ExistingNumberId is not { } numberId)
             return PairingSessionDto.Of(session);
 
@@ -133,4 +146,9 @@ public static class PairingEndpoints
             requiresBanned: existing.Status == NumberStatus.BannedPermanent,
             currentOwner: owner);
     }
+
+    private static QrCodeDto? QrOf(PairingSession session) =>
+        session.QrCode is null && session.QrBase64 is null
+            ? null
+            : new QrCodeDto(session.QrCode, session.QrBase64, null);
 }
