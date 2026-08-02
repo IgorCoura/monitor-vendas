@@ -167,8 +167,8 @@ client/src/
 │   │               #   e as ações raras (transferir, ban) num menu "⋯" — com as
 │   │               #   cinco visíveis a linha virava um bloco no celular.
 │   │               #   Desconectar pede confirmação (tira o vendedor do ar);
-│   │               #   reiniciar não desvincula, então vai direto — com
-│   │               #   ProgressCircle por >=1s, senão o clique parece não ter
+│   │               #   reiniciar não desvincula, então vai direto — com o
+│   │               #   círculo segurado por >=1s, senão o clique parece não ter
 │   │               #   feito nada (o socket sobe rápido demais).
 │   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
 │   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
@@ -199,6 +199,22 @@ client/src/
   (`outcome:<code>`) automaticamente — **não adicionar tipo hardcoded aqui**;
   o catálogo é editado na tela `/labels`. `sale` já aparece como "Vendas" nos
   campos fixos, então é filtrado da lista dinâmica para não duplicar.
+- **OBRIGATÓRIO — toda chamada de API disparada pelo usuário mostra o círculo de
+  progresso.** Nenhum clique que fala com o servidor pode ficar sem resposta
+  visual: sem isso o usuário clica de novo, e num POST isso é ação duplicada.
+  Na prática: `<Button loading={mutation.isPending}>`, que troca o rótulo pelo
+  `ProgressCircle`, trava o botão e marca `aria-busy`. **Nunca** usar
+  `disabled={mutation.isPending}` sozinho — botão que só apaga parece quebrado.
+  - O rótulo continua no DOM (`sr-only`) e o círculo dentro do botão é
+    **decorativo**: `role="status"` ali dentro entraria no nome acessível
+    ("Processando Enviar") e quebraria leitor de tela e teste.
+  - Resposta rápida demais para ser vista? Segure o círculo por ~1s
+    (`Promise.all([mutação, delay(1000)])`), como no "Reiniciar" do registry.
+  - Quando o controle some com o clique (item de menu, dialog que fecha), o
+    círculo vai no elemento que fica.
+  - **Exceção**: busca em segundo plano (polling de `useRanking`, `useAiStatus`,
+    status do pareamento) **não** leva círculo — a UI ficaria piscando sozinha.
+    O sinal dessas é o ícone girando do `UpdateControls`.
 - Erros da API: `ApiError` carrega o `error`/`title` do corpo — exibir a
   mensagem, não engolir.
 - **Telefone sempre por `fmtPhone`** (`lib/format.ts`): `+55 11 91234-4567`. O

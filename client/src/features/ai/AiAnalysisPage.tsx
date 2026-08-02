@@ -414,12 +414,8 @@ export function AiAnalysisPage() {
               </Button>
               <Button
                 onClick={start}
-                disabled={
-                  estimate.isPending ||
-                  estimate.data?.affordable === false ||
-                  runAnalyses.isPending ||
-                  runSyntheses.isPending
-                }
+                loading={estimate.isPending || runAnalyses.isPending || runSyntheses.isPending}
+                disabled={estimate.data?.affordable === false}
               >
                 Confirmar
               </Button>

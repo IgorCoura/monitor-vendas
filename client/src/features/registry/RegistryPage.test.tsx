@@ -386,15 +386,18 @@ describe('RegistryPage', () => {
     const user = userEvent.setup()
     await user.click(await screen.findByRole('button', { name: 'Reiniciar' }))
 
-    // Some o rótulo, entra o círculo — e o botão fica travado enquanto isso.
-    const spinner = await screen.findByRole('status', { name: 'Reiniciando' })
-    expect(spinner).toBeInTheDocument()
+    // Entra o círculo e o botão trava — mas o nome acessível segue "Reiniciar":
+    // o círculo é decorativo e quem anuncia o estado é o aria-busy.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Reiniciar' })).toHaveAttribute('aria-busy', 'true'),
+    )
     expect(screen.getByRole('button', { name: 'Reiniciar' })).toBeDisabled()
 
     // Passado o tempo, volta ao normal mesmo com a resposta tendo chegado antes.
-    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), {
-      timeout: 3000,
-    })
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: 'Reiniciar' })).not.toHaveAttribute('aria-busy'),
+      { timeout: 3000 },
+    )
     expect(screen.getByRole('button', { name: 'Reiniciar' })).toBeEnabled()
   })
 

@@ -51,7 +51,7 @@ export function ShareDialog({
     }
   }
 
-  const sendDisabled = createShare.isPending || destination.replace(/\D/g, '').length < 10
+  const sendDisabled = destination.replace(/\D/g, '').length < 10
 
   return (
     <Dialog
@@ -66,7 +66,7 @@ export function ShareDialog({
             <Button variant="ghost" onClick={close}>
               Cancelar
             </Button>
-            <Button onClick={send} disabled={sendDisabled}>
+            <Button onClick={send} disabled={sendDisabled} loading={createShare.isPending}>
               Enviar
             </Button>
           </div>

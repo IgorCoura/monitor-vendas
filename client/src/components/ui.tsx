@@ -25,6 +25,28 @@ export function Card({ children, className, ...rest }: HTMLAttributes<HTMLDivEle
   )
 }
 
+// Círculo de progresso do tamanho de uma linha de texto, para dentro de botão.
+// O `Spinner` abaixo é outra coisa: ocupa a área toda enquanto a página carrega.
+// `decorative` para uso DENTRO de botão: lá o rótulo do próprio botão já diz o
+// que está acontecendo, e um `role="status"` a mais entraria no nome acessível
+// ("Processando Reiniciar"). Quem anuncia o estado é o `aria-busy` do botão.
+export function ProgressCircle({
+  label = 'Processando',
+  decorative = false,
+}: {
+  label?: string
+  decorative?: boolean
+}) {
+  return (
+    <span
+      role={decorative ? undefined : 'status'}
+      aria-label={decorative ? undefined : label}
+      aria-hidden={decorative || undefined}
+      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-edge border-t-primary align-middle"
+    />
+  )
+}
+
 type ButtonVariant = 'primary' | 'ghost' | 'danger'
 
 // `min-h-11` (44px) só abaixo do `md`: é o alvo mínimo de toque. No desktop o
@@ -34,10 +56,16 @@ type ButtonVariant = 'primary' | 'ghost' | 'danger'
 export function Button({
   variant = 'primary',
   className,
+  loading = false,
+  disabled,
+  children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant
   ref?: Ref<HTMLButtonElement>
+  // Chamada de API em andamento: o rótulo dá lugar ao círculo e o botão trava.
+  // Convenção obrigatória do projeto — ver CLAUDE.md.
+  loading?: boolean
 }) {
   return (
     <button
@@ -48,8 +76,22 @@ export function Button({
         variant === 'danger' && 'bg-danger-soft text-danger hover:bg-danger hover:text-white',
         className,
       )}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
-    />
+    >
+      {loading ? (
+        <>
+          <ProgressCircle decorative />
+          {/* O rótulo continua existindo para leitor de tela e para os testes:
+              trocá-lo pelo círculo mudaria o nome acessível do botão no meio da
+              ação. */}
+          <span className="sr-only">{children}</span>
+        </>
+      ) : (
+        children
+      )}
+    </button>
   )
 }
 
@@ -361,18 +403,6 @@ export function Menu({ label, actions }: { label: string; actions: MenuAction[] 
           document.body,
         )}
     </>
-  )
-}
-
-// Círculo de progresso do tamanho de uma linha de texto, para dentro de botão.
-// O `Spinner` abaixo é outra coisa: ocupa a área toda enquanto a página carrega.
-export function ProgressCircle({ label = 'Processando' }: { label?: string }) {
-  return (
-    <span
-      role="status"
-      aria-label={label}
-      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-edge border-t-primary align-middle"
-    />
   )
 }
 

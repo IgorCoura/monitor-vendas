@@ -25,7 +25,6 @@ import {
   ErrorState,
   Input,
   Menu,
-  ProgressCircle,
   Select,
   Spinner,
   StatusBadge,
@@ -132,7 +131,7 @@ function QrDialog({ target, onClose }: { target: ReconnectTarget | null; onClose
             <Button
               variant="ghost"
               onClick={generate}
-              disabled={requestCode.isPending}
+              loading={requestCode.isPending}
               className="mt-2"
             >
               Gerar código
@@ -191,7 +190,7 @@ function TransferDialog({
           <Button variant="ghost" onClick={close}>
             Cancelar
           </Button>
-          <Button onClick={confirm} disabled={!sellerId || transfer.isPending}>
+          <Button onClick={confirm} disabled={!sellerId} loading={transfer.isPending}>
             Confirmar transferência
           </Button>
         </div>
@@ -298,7 +297,7 @@ function PairingDialog({
                 await confirmPairing.mutateAsync(session.id)
                 onClose()
               }}
-              disabled={confirmPairing.isPending}
+              loading={confirmPairing.isPending}
             >
               Confirmar
             </Button>
@@ -365,7 +364,7 @@ function PairingDialog({
                   <Button
                     variant="ghost"
                     onClick={askForCode}
-                    disabled={requestCode.isPending}
+                    loading={requestCode.isPending}
                     className="shrink-0"
                   >
                     Gerar código
@@ -560,23 +559,26 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
             {/* Frequentes na linha; raros e destrutivos no "⋯" — com os cinco
                 visíveis a linha virava um bloco de botões no celular. */}
             <div className="flex gap-1">
-              <Button variant="ghost" onClick={() => handleConnect(n.id, n.status)}>
+              <Button
+                variant="ghost"
+                onClick={() => handleConnect(n.id, n.status)}
+                loading={connectNumber.isPending}
+              >
                 Reconectar
               </Button>
               {n.status === 'Active' && (
-                <Button variant="ghost" onClick={() => handleDisconnect(n.id, n.phone)}>
+                <Button
+                  variant="ghost"
+                  onClick={() => handleDisconnect(n.id, n.phone)}
+                  loading={disconnectNumber.isPending}
+                >
                   Desconectar
                 </Button>
               )}
               {/* O rótulo acessível não muda com o círculo: quem usa leitor de
                   tela (e o teste) continua achando o mesmo botão. */}
-              <Button
-                variant="ghost"
-                aria-label="Reiniciar"
-                onClick={() => handleRestart(n.id)}
-                disabled={restarting === n.id}
-              >
-                {restarting === n.id ? <ProgressCircle label="Reiniciando" /> : 'Reiniciar'}
+              <Button variant="ghost" onClick={() => handleRestart(n.id)} loading={restarting === n.id}>
+                Reiniciar
               </Button>
               <Menu
                 label={`Mais ações para ${fmtPhone(n.phone)}`}
@@ -609,7 +611,8 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
       <Button
         className="mt-3 w-full md:w-auto"
         onClick={handleStartPairing}
-        disabled={startPairing.isPending || !seller.active}
+        loading={startPairing.isPending}
+        disabled={!seller.active}
         title={seller.active ? undefined : 'Reative o vendedor para conectar um WhatsApp.'}
       >
         Conectar WhatsApp
@@ -658,7 +661,7 @@ export function RegistryPage() {
             aria-label="Nome do novo vendedor"
             className="flex-1"
           />
-          <Button type="submit" disabled={createSeller.isPending}>
+          <Button type="submit" loading={createSeller.isPending}>
             Cadastrar vendedor
           </Button>
         </form>
