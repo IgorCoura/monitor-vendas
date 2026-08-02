@@ -69,6 +69,10 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   (barra inferior fixa, as mesmas 6 rotas, com rótulos curtos — "Painel", "IA").
   O conteúdo reserva a altura dela com a classe `pb-nav`. **Rota nova entra nos
   dois lugares**: `links` do `Layout` e `items` do `BottomNav`.
+- **`Menu` ("⋯")** para ação rara/destrutiva fora da linha. Fecha ao clicar
+  fora, rolar ou apertar Escape — mas **clique dentro dele não fecha no
+  `pointerdown`**: fechar ali desmonta o item antes de o `click` chegar, e a
+  ação nunca dispara (bug pego por teste).
 - **`Dialog` monta no `document.body` por portal.** `fixed`/`z-index` só valem
   dentro do stacking context mais próximo, e `opacity`, `transform` ou `filter`
   em qualquer ancestral criam um: aberto de dentro do card de vendedor inativo
@@ -159,6 +163,11 @@ client/src/
 │   │               #   O dialog conduz as confirmações (transferir de vendedor,
 │   │               #   reativar banido) e mostra o motivo quando o servidor recusa.
 │   │               #   Alternativa ao QR para quem abre o painel no próprio
+│   │               #   Cada número tem Reconectar/Desconectar/Reiniciar na linha
+│   │               #   e as ações raras (transferir, ban) num menu "⋯" — com as
+│   │               #   cinco visíveis a linha virava um bloco no celular.
+│   │               #   Desconectar pede confirmação (tira o vendedor do ar);
+│   │               #   reiniciar não desvincula, então vai direto.
 │   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
 │   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
 │   │               #   número é só o destinatário do código — o cadastro segue

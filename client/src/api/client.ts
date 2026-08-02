@@ -143,6 +143,11 @@ export const api = {
       request<QrCodeDto>(`/numbers/${id}/pairing-code${confirmBanned ? '?confirmBanned=true' : ''}`, {
         method: 'POST',
       }),
+    // Desvincula o aparelho: só volta com QR ou código novo.
+    disconnect: (id: string) =>
+      request<NumberResponse>(`/numbers/${id}/disconnect`, { method: 'POST' }),
+    // Chacoalha o socket sem desvincular — para instância travada.
+    restart: (id: string) => request<NumberResponse>(`/numbers/${id}/restart`, { method: 'POST' }),
     transfer: (id: string, sellerId: string) =>
       request<NumberResponse>(`/numbers/${id}/transfer`, {
         method: 'POST',

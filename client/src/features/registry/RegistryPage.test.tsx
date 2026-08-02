@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RegistryPage } from './RegistryPage'
@@ -7,6 +7,17 @@ import { http, HttpResponse, mswServer, seller } from '../../test/msw'
 import type { PairingSessionDto } from '../../api/types'
 
 const SESSION_ID = 'pair-1'
+
+function activeNumber(sellerId: string) {
+  return {
+    id: 'n1',
+    sellerId,
+    phone: '5511968608425',
+    instanceName: 'mv-1',
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+  }
+}
 
 function session(overrides: Partial<PairingSessionDto> = {}): PairingSessionDto {
   return {
@@ -151,7 +162,9 @@ describe('RegistryPage', () => {
 
     renderWithProviders(<RegistryPage />)
     const user = userEvent.setup()
-    await user.click((await screen.findAllByRole('button', { name: 'Transferir' }))[0])
+    // Ação rara: mora no menu "⋯", não na linha.
+    await user.click(await screen.findByRole('button', { name: /Mais ações para/ }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Transferir para outro vendedor' }))
 
     const select = await screen.findByLabelText('Novo vendedor')
     // Só o outro vendedor é destino possível.
@@ -285,6 +298,94 @@ describe('RegistryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Gerar código' }))
 
     expect(await screen.findByTestId('pairing-code')).toHaveTextContent('ZLKPFRXL')
+  })
+
+  // Desconectar desvincula o aparelho: tira o vendedor do ar no meio do
+  // expediente, então pede confirmação antes.
+  it('desconecta o número depois de confirmar', async () => {
+    let disconnected = false
+    const ana = seller('Ana')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () => HttpResponse.json([activeNumber(ana.id)])),
+      http.post('/api/v1/numbers/n1/disconnect', () => {
+        disconnected = true
+        return HttpResponse.json({})
+      }),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Desconectar' }))
+
+    await waitFor(() => expect(disconnected).toBe(true))
+    expect(confirmSpy).toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  // Recusar a confirmação não desconecta nada.
+  it('não desconecta se a confirmação for recusada', async () => {
+    let disconnected = false
+    const ana = seller('Ana')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () => HttpResponse.json([activeNumber(ana.id)])),
+      http.post('/api/v1/numbers/n1/disconnect', () => {
+        disconnected = true
+        return HttpResponse.json({})
+      }),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Desconectar' }))
+
+    expect(disconnected).toBe(false)
+    confirmSpy.mockRestore()
+  })
+
+  // Reiniciar não desvincula, então vai direto — sem confirmação.
+  it('reinicia o número sem pedir confirmação', async () => {
+    let restarted = false
+    const ana = seller('Ana')
+    const confirmSpy = vi.spyOn(window, 'confirm')
+
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () => HttpResponse.json([activeNumber(ana.id)])),
+      http.post('/api/v1/numbers/n1/restart', () => {
+        restarted = true
+        return HttpResponse.json({})
+      }),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Reiniciar' }))
+
+    await waitFor(() => expect(restarted).toBe(true))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  // Número que não está conectado não tem o que desconectar: o botão nem aparece.
+  it('não oferece desconectar em número já desconectado', async () => {
+    const ana = seller('Ana')
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () =>
+        HttpResponse.json([{ ...activeNumber(ana.id), status: 'Disconnected' }]),
+      ),
+    )
+
+    renderWithProviders(<RegistryPage />)
+
+    expect(await screen.findByRole('button', { name: 'Reiniciar' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Desconectar' })).not.toBeInTheDocument()
   })
 
   // Vendedor inativo tem o card esmaecido; o botão precisa estar desativado de

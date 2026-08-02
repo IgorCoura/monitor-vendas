@@ -4,6 +4,7 @@ import {
   useState,
   type ReactNode,
   type ButtonHTMLAttributes,
+  type Ref,
   type HTMLAttributes,
   type InputHTMLAttributes,
   type SelectHTMLAttributes,
@@ -28,11 +29,16 @@ type ButtonVariant = 'primary' | 'ghost' | 'danger'
 
 // `min-h-11` (44px) só abaixo do `md`: é o alvo mínimo de toque. No desktop o
 // botão continua com a altura compacta de sempre.
+// `ref` como prop normal (React 19): o Menu precisa medir o botão para se
+// posicionar.
 export function Button({
   variant = 'primary',
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: ButtonVariant
+  ref?: Ref<HTMLButtonElement>
+}) {
   return (
     <button
       className={clsx(
@@ -265,6 +271,96 @@ export function InfoTip({ text }: { text: string }) {
         </span>
       )}
     </span>
+  )
+}
+
+export type MenuAction = { label: string; onSelect: () => void; danger?: boolean }
+
+// Ações raras e destrutivas saem da linha e entram aqui: com todas visíveis, a
+// linha do número virava um bloco de cinco botões que empurrava a lista inteira
+// no celular. Posicionado com `fixed` a partir do botão (como o InfoTip), porque
+// dentro da linha ele seria cortado pelo overflow dela.
+export function Menu({ label, actions }: { label: string; actions: MenuAction[] }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const close = () => setPos(null)
+
+  function toggle() {
+    if (pos) return close()
+    const rect = anchorRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = 208
+    const margin = 8
+    setPos({
+      x: Math.min(Math.max(rect.right - width, margin), window.innerWidth - width - margin),
+      y: rect.bottom + 4,
+    })
+  }
+
+  // Clicar fora, rolar ou apertar Escape fecha — menu preso aberto cobre a linha
+  // de baixo e o próximo clique vai para a ação errada.
+  useEffect(() => {
+    if (!pos) return
+
+    // O clique DENTRO do menu não fecha aqui: fechar no `pointerdown` desmonta o
+    // item antes de o `click` chegar nele, e a ação nunca dispara.
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node
+      if (anchorRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      close()
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') close()
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [pos])
+
+  return (
+    <>
+      <Button ref={anchorRef} variant="ghost" aria-label={label} aria-expanded={pos !== null} onClick={toggle}>
+        ⋯
+      </Button>
+      {pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            style={{ left: pos.x, top: pos.y, width: 208 }}
+            className="fixed z-50 overflow-hidden rounded-lg border border-edge bg-card py-1 shadow-md"
+          >
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close()
+                  action.onSelect()
+                }}
+                className={clsx(
+                  'block w-full px-3 py-2 text-left text-sm hover:bg-surface',
+                  action.danger && 'text-danger',
+                )}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   )
 }
 

@@ -80,6 +80,18 @@ vendedor.
   silêncio.
 - **Ban permanente é decisão manual** (`POST /numbers/{id}/ban-permanent`);
   403 marca `BannedTemporary`, reconexão volta a `Active`.
+- **Desconectar ≠ reiniciar**, e a confusão custa caro:
+  `POST /numbers/{id}/disconnect` faz **logout** — desvincula o aparelho, e o
+  número **só volta com QR ou código novo**. Grava `Disconnected` + evento na
+  hora, sem esperar o `connection.update`, para o downtime começar a contar no
+  instante certo (o evento do webhook chega depois com o mesmo status e não soma
+  intervalo novo — há teste medindo o uptime dos dois juntos). Recusa **409** em
+  número que não está `Active`, que é o mesmo "não" que a Evolution daria.
+  `POST /numbers/{id}/restart` (`POST instance/restart/{inst}` — **o PUT dá 404**)
+  derruba e sobe o socket **sem desvincular**: é o remédio para instância travada
+  e por isso **não mexe em status nem grava evento**; quem decide o estado do
+  canal continua sendo o `connection.update`. Recusa 409 em número que nunca
+  pareou (não há sessão para reiniciar).
 
 ## Pipeline de dados (como funciona)
 
@@ -606,6 +618,7 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `POST /numbers/{id}/connect` (novo QR; `?confirmBanned=true` para número banido),
 `POST /numbers/{id}/pairing-code` (código de pareamento, recria a instância),
 `POST /numbers/{id}/transfer`, `POST /numbers/{id}/ban-permanent` (desloga),
+`POST /numbers/{id}/disconnect` (logout), `POST /numbers/{id}/restart`,
 `POST /webhooks/evolution/{secret}`, `POST/GET/DELETE /holidays`,
 `GET/POST/PUT/DELETE /outcome-types` (+ `/{code}/terms`),
 `GET /outcome-labels/suggestions`, `GET /contacts`, `GET /contacts/export`,
@@ -668,7 +681,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 421 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 429 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -734,7 +747,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (421 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (429 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

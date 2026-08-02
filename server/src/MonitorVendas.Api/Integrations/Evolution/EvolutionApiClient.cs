@@ -73,6 +73,23 @@ public sealed class EvolutionApiClient(HttpClient http)
         return new QrCode(GetString(qr, "code"), GetString(qr, "base64"), GetString(qr, "pairingCode"));
     }
 
+    // Derruba e sobe o socket SEM desvincular o aparelho: é o remédio para
+    // instância travada (`connecting` que não sai do lugar, parou de receber).
+    // Não confundir com o logout, que exige QR novo para o número voltar.
+    public async Task<bool> RestartAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // POST, não PUT: o PUT responde 404 na v2.3.7.
+            var response = await http.PostAsync($"instance/restart/{instanceName}", null, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     // Derruba a sessão sem apagar a instância: o número pode voltar depois pelo
     // mesmo registro. Best-effort de propósito — sessão já caída responde erro, e
     // isso não pode impedir quem chamou de registrar a decisão dele.

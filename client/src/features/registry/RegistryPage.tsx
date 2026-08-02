@@ -4,18 +4,31 @@ import {
   useCancelPairing,
   useConfirmPairing,
   useConnectNumber,
+  useDisconnectNumber,
   useCreateSeller,
   useNumberPairingCode,
   useNumbers,
   usePairingStatus,
   useRequestPairingCode,
+  useRestartNumber,
   useSellers,
   useStartPairing,
   useTransferNumber,
   useUpdateSeller,
 } from '../../api/queries'
 import type { QrCodeDto, SellerResponse } from '../../api/types'
-import { Button, Card, Dialog, EmptyState, ErrorState, Input, Select, Spinner, StatusBadge } from '../../components/ui'
+import {
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Menu,
+  Select,
+  Spinner,
+  StatusBadge,
+} from '../../components/ui'
 import { ApiError } from '../../api/client'
 import { fmtPhone } from '../../lib/format'
 
@@ -414,6 +427,8 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
   const updateSeller = useUpdateSeller()
   const connectNumber = useConnectNumber()
   const banPermanent = useBanPermanent()
+  const disconnectNumber = useDisconnectNumber()
+  const restartNumber = useRestartNumber()
   const startPairing = useStartPairing()
 
   const [editing, setEditing] = useState(false)
@@ -449,6 +464,31 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
       setReconnect({ numberId: id, confirmBanned, qr })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Falha ao gerar novo QR.')
+    }
+  }
+
+  // Desconectar tira o vendedor do ar no meio do expediente: pede confirmação,
+  // como o ban.
+  async function handleDisconnect(id: string, phoneLabel: string) {
+    if (!window.confirm(
+      `Desconectar ${fmtPhone(phoneLabel)}? O WhatsApp sai do ar e só volta lendo um QR code novo.`,
+    )) return
+
+    setError(null)
+    try {
+      await disconnectNumber.mutateAsync(id)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Falha ao desconectar o número.')
+    }
+  }
+
+  // Reiniciar é inócuo (não desvincula), então vai sem confirmação.
+  async function handleRestart(id: string) {
+    setError(null)
+    try {
+      await restartNumber.mutateAsync(id)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Falha ao reiniciar o número.')
     }
   }
 
@@ -507,21 +547,43 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
               <span className="text-sm font-medium">{fmtPhone(n.phone)}</span>
               <StatusBadge status={n.status} />
             </div>
+            {/* Frequentes na linha; raros e destrutivos no "⋯" — com os cinco
+                visíveis a linha virava um bloco de botões no celular. */}
             <div className="flex gap-1">
               <Button variant="ghost" onClick={() => handleConnect(n.id, n.status)}>
                 Reconectar
               </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setTransfer({ numberId: n.id, phone: n.phone, sellerId: seller.id })}
-              >
-                Transferir
-              </Button>
-              {n.status !== 'BannedPermanent' && (
-                <Button variant="danger" onClick={() => handleBan(n.id, n.phone)}>
-                  Ban permanente
+              {n.status === 'Active' && (
+                <Button variant="ghost" onClick={() => handleDisconnect(n.id, n.phone)}>
+                  Desconectar
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                onClick={() => handleRestart(n.id)}
+                disabled={restartNumber.isPending}
+              >
+                Reiniciar
+              </Button>
+              <Menu
+                label={`Mais ações para ${fmtPhone(n.phone)}`}
+                actions={[
+                  {
+                    label: 'Transferir para outro vendedor',
+                    onSelect: () =>
+                      setTransfer({ numberId: n.id, phone: n.phone, sellerId: seller.id }),
+                  },
+                  ...(n.status === 'BannedPermanent'
+                    ? []
+                    : [
+                        {
+                          label: 'Marcar ban permanente',
+                          danger: true,
+                          onSelect: () => handleBan(n.id, n.phone),
+                        },
+                      ]),
+                ]}
+              />
             </div>
           </li>
         ))}

@@ -295,6 +295,24 @@ export function useCancelPairing() {
   })
 }
 
+export function useDisconnectNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.numbers.disconnect,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+// Reiniciar não muda status: quem decide é o `connection.update` que vier
+// depois, então a lista é invalidada para pegar o que a Evolution reportar.
+export function useRestartNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.numbers.restart,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
 export function useTransferNumber() {
   const client = useQueryClient()
   return useMutation({
