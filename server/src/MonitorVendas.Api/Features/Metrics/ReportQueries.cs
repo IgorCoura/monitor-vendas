@@ -62,9 +62,14 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         options.Value.UseDailyAggregates &&
         (toUtc - fromUtc).TotalDays > options.Value.LiveCalculationMaxDays;
 
-    private sealed record ConversationRow(Guid Id, Guid NumberId, DateTime StartedAt, bool StartedByContact);
+    private sealed record ConversationRow(Guid Id, Guid NumberId, Guid SellerId, DateTime StartedAt, bool StartedByContact);
     private sealed record MessageRow(Guid ConversationId, DateTime Timestamp, MessageDirection Direction, DateTime? ReadAt);
     private sealed record PriorStateRow(Guid NumberId, NumberStatus? Status);
+
+    // A métrica é sempre de um número SOB um vendedor. Número transferido tem um
+    // par por dono, e cada dono fica com o que aconteceu no seu tempo — é o que
+    // impede a transferência de reescrever o passado.
+    public readonly record struct NumberSeller(Guid NumberId, Guid SellerId);
 
     // O calendário é montado por relatório: os feriados vêm do banco e o
     // sábado/timezone vêm da config — nada disso pode ficar congelado em singleton.
@@ -89,20 +94,24 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             return null;
 
         var calculator = await BuildCalculatorAsync(ct);
-        var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
-            .Where(n => n.SellerId == sellerId)
-            .OrderBy(n => n.CreatedAt)
-            .ToListAsync(ct);
+
+        // Números que ele tem hoje MAIS os que já foram dele e produziram dado no
+        // período: um número transferido no meio do mês continua respondendo pelo
+        // que rendeu enquanto era dele.
+        var numbers = await NumbersOfSellerAsync(sellerId, fromUtc, toUtc, ct);
 
         var snapshots = await BuildSnapshotsAsync(numbers, calculator, fromUtc, toUtc, ct);
         var periodSeconds = (toUtc - fromUtc).TotalSeconds;
         var typeNames = await GetOutcomeTypeNamesAsync(ct);
 
+        MetricsSnapshot SnapshotOf(WhatsappNumber n) =>
+            snapshots.GetValueOrDefault(new NumberSeller(n.Id, sellerId), MetricsSnapshot.Empty);
+
         var perNumber = numbers
-            .Select(n => new NumberReportDto(n.Id, n.Phone, n.Status.ToString(), snapshots[n.Id].ToDto(periodSeconds, typeNames)))
+            .Select(n => new NumberReportDto(n.Id, n.Phone, n.Status.ToString(), SnapshotOf(n).ToDto(periodSeconds, typeNames)))
             .ToList();
 
-        var totals = MetricsSnapshot.Merge(numbers.Select(n => snapshots[n.Id])).ToDto(periodSeconds, typeNames);
+        var totals = MetricsSnapshot.Merge(numbers.Select(SnapshotOf)).ToDto(periodSeconds, typeNames);
 
         return new SellerReportDto(seller.Id, seller.Name, fromUtc, toUtc, totals, perNumber);
     }
@@ -114,13 +123,13 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
         // Todos os números de todos os vendedores de uma vez: a carga é feita em
         // lote (sem N+1) e o agrupamento acontece em memória.
-        var sellerIds = sellers.Select(s => s.Id).ToArray();
-        var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
-            .Where(n => sellerIds.Contains(n.SellerId))
-            .ToListAsync(ct);
+        // Todos os números, não só os dos vendedores ativos: um número que mudou de
+        // dono no período ainda precisa render para o dono antigo.
+        var numbers = await db.Set<WhatsappNumber>().AsNoTracking().ToListAsync(ct);
 
         var snapshots = await BuildSnapshotsAsync(numbers, calculator, fromUtc, toUtc, ct);
-        var numbersBySeller = numbers.ToLookup(n => n.SellerId);
+        var bySeller = snapshots.GroupBy(kv => kv.Key.SellerId)
+            .ToDictionary(g => g.Key, g => g.Select(kv => kv.Value).ToList());
         var periodSeconds = (toUtc - fromUtc).TotalSeconds;
         var typeNames = await GetOutcomeTypeNamesAsync(ct);
 
@@ -128,13 +137,34 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             .Select(s => new RankingEntryDto(
                 s.Id,
                 s.Name,
-                MetricsSnapshot.Merge(numbersBySeller[s.Id].Select(n => snapshots[n.Id])).ToDto(periodSeconds, typeNames)))
+                MetricsSnapshot.Merge(bySeller.GetValueOrDefault(s.Id, [])).ToDto(periodSeconds, typeNames)))
             .ToList();
 
         return [.. entries
             .OrderByDescending(e => e.Metrics.ConversionRate ?? -1)
             .ThenByDescending(e => e.Metrics.ResponseRate ?? -1)
             .ThenBy(e => e.Name)];
+    }
+
+    // Os números que respondem por um vendedor no período: os que são dele hoje
+    // mais os que já foram e deixaram dado aqui dentro. Sem os segundos, uma
+    // transferência apagaria da tela o que o vendedor antigo produziu.
+    private async Task<List<WhatsappNumber>> NumbersOfSellerAsync(
+        Guid sellerId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken ct)
+    {
+        var historic = await db.Set<Conversation>().AsNoTracking()
+            .Where(c => c.SellerId == sellerId && c.StartedAt < toUtc && c.LastMessageAt >= fromUtc)
+            .Select(c => c.WhatsappNumberId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        return await db.Set<WhatsappNumber>().AsNoTracking()
+            .Where(n => n.SellerId == sellerId || historic.Contains(n.Id))
+            .OrderBy(n => n.CreatedAt)
+            .ToListAsync(ct);
     }
 
     // Tipos ativos, na ordem de exibição — o painel gera um card/coluna/gráfico
@@ -153,7 +183,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
     // Junta as fontes: dias fechados do agregado + pontas parciais calculadas ao
     // vivo. Dia fechado sem linha no agregado (cold start, buraco) é calculado ao
     // vivo e marcado como sujo, para o serviço de agregação preencher depois.
-    private async Task<Dictionary<Guid, MetricsSnapshot>> BuildSnapshotsAsync(
+    private async Task<Dictionary<NumberSeller, MetricsSnapshot>> BuildSnapshotsAsync(
         IReadOnlyList<WhatsappNumber> numbers,
         MetricsCalculator calculator,
         DateTime fromUtc,
@@ -170,7 +200,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         var firstFullStart = NextLocalMidnightAtOrAfter(fromUtc, tz);
         var lastFullEnd = LastLocalMidnightAtOrBefore(toUtc, tz);
 
-        var parts = new List<Dictionary<Guid, MetricsSnapshot>>();
+        var parts = new List<Dictionary<NumberSeller, MetricsSnapshot>>();
 
         // Ponta inicial (fração do primeiro dia) e final (dia corrente até agora).
         if (firstFullStart > fromUtc && firstFullStart <= toUtc)
@@ -182,12 +212,15 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         if (toUtc > lastFullEnd && lastFullEnd >= fromUtc)
             parts.Add(await LiveSnapshotsAsync(numbers, calculator, lastFullEnd, toUtc, ct));
 
-        return numbers.ToDictionary(
-            n => n.Id,
-            n => MetricsSnapshot.Merge(parts.Select(p => p.GetValueOrDefault(n.Id, MetricsSnapshot.Empty))));
+        return parts
+            .SelectMany(p => p.Keys)
+            .Distinct()
+            .ToDictionary(
+                pair => pair,
+                pair => MetricsSnapshot.Merge(parts.Select(p => p.GetValueOrDefault(pair, MetricsSnapshot.Empty))));
     }
 
-    private async Task<Dictionary<Guid, MetricsSnapshot>> LiveSnapshotsAsync(
+    private async Task<Dictionary<NumberSeller, MetricsSnapshot>> LiveSnapshotsAsync(
         IReadOnlyList<WhatsappNumber> numbers,
         MetricsCalculator calculator,
         DateTime fromUtc,
@@ -202,7 +235,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             kv => MetricsSnapshot.FromResult(kv.Value, periodSeconds * (1 - kv.Value.UptimePercent / 100.0)));
     }
 
-    private async Task<Dictionary<Guid, MetricsSnapshot>> AggregatedSnapshotsAsync(
+    private async Task<Dictionary<NumberSeller, MetricsSnapshot>> AggregatedSnapshotsAsync(
         IReadOnlyList<WhatsappNumber> numbers,
         MetricsCalculator calculator,
         DateTime firstFullStart,
@@ -238,11 +271,15 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
                     missingDays.Add(day);
         }
 
-        var snapshots = numbers.ToDictionary(
-            n => n.Id,
-            n => MetricsSnapshot.Merge(rowsByNumber[n.Id]
-                .Where(r => !missingDays.Contains(r.Day))
-                .Select(r => MetricsSnapshot.FromDaily(r, outcomesByNumberDay[(r.WhatsappNumberId, r.Day)]))));
+        // O dono de cada dia vem gravado na própria linha do agregado, então um
+        // número transferido rende um par por dono — cada um com os seus dias.
+        var snapshots = rows
+            .Where(r => !missingDays.Contains(r.Day))
+            .GroupBy(r => new NumberSeller(r.WhatsappNumberId, r.SellerId))
+            .ToDictionary(
+                g => g.Key,
+                g => MetricsSnapshot.Merge(g.Select(r =>
+                    MetricsSnapshot.FromDaily(r, outcomesByNumberDay[(r.WhatsappNumberId, r.Day)]))));
 
         // Buracos: calcula ao vivo em blocos contíguos (o cold start vira um bloco
         // único, equivalente ao cálculo antigo) e sinaliza para agregação futura.
@@ -252,12 +289,17 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             var toBlock = TimeZoneInfo.ConvertTimeToUtc(blockEndExclusive.ToDateTime(TimeOnly.MinValue), tz);
             var live = await LiveSnapshotsAsync(numbers, calculator, fromBlock, toBlock, ct);
 
-            foreach (var number in numbers)
+            foreach (var pair in live.Keys.Concat(snapshots.Keys).Distinct().ToList())
             {
-                snapshots[number.Id] = MetricsSnapshot.Merge(
-                    [snapshots[number.Id], live.GetValueOrDefault(number.Id, MetricsSnapshot.Empty)]);
-                await dirtyDays.MarkAsync(db, number.Id, fromBlock, ct);
+                snapshots[pair] = MetricsSnapshot.Merge(
+                [
+                    snapshots.GetValueOrDefault(pair, MetricsSnapshot.Empty),
+                    live.GetValueOrDefault(pair, MetricsSnapshot.Empty),
+                ]);
             }
+
+            foreach (var number in numbers)
+                await dirtyDays.MarkAsync(db, number.Id, fromBlock, ct);
         }
 
         return snapshots;
@@ -305,14 +347,14 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
     // Uma passada de carga (6 queries no total, independentemente da quantidade de
     // números) + cálculo em memória por número.
-    public async Task<Dictionary<Guid, MetricsResult>> ComputeForNumbersAsync(
+    public async Task<Dictionary<NumberSeller, MetricsResult>> ComputeForNumbersAsync(
         IReadOnlyList<WhatsappNumber> numbers,
         MetricsCalculator calculator,
         DateTime fromUtc,
         DateTime toUtc,
         CancellationToken ct)
     {
-        var results = new Dictionary<Guid, MetricsResult>();
+        var results = new Dictionary<NumberSeller, MetricsResult>();
         if (numbers.Count == 0)
             return results;
 
@@ -320,7 +362,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
         var conversations = await db.Set<Conversation>().AsNoTracking()
             .Where(c => numberIds.Contains(c.WhatsappNumberId) && c.StartedAt < toUtc && c.LastMessageAt >= fromUtc)
-            .Select(c => new ConversationRow(c.Id, c.WhatsappNumberId, c.StartedAt, c.StartedByContact))
+            .Select(c => new ConversationRow(c.Id, c.WhatsappNumberId, c.SellerId, c.StartedAt, c.StartedByContact))
             .ToListAsync(ct);
 
         var conversationIds = conversations.Select(c => c.Id).ToArray();
@@ -381,22 +423,37 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         var outcomeByConversation = outcomes
             .GroupBy(o => o.ConversationId)
             .ToDictionary(g => g.Key, g => g.OrderBy(o => o.MarkedAt).Select(o => (o.MarkedAt, o.OutcomeTypeCode)).First());
-        var conversationsByNumber = conversations.ToLookup(c => c.NumberId);
+        var conversationsByPair = conversations.ToLookup(c => new NumberSeller(c.NumberId, c.SellerId));
         var eventsByNumber = statusEvents.ToLookup(e => e.WhatsappNumberId);
         var priorByNumber = priorStates.ToDictionary(p => p.NumberId, p => p.Status);
 
-        foreach (var number in numbers)
+        // O dono atual sempre tem par, mesmo sem conversa no período: é dele o
+        // uptime e o downtime do canal. Donos anteriores entram só se tiveram
+        // conversa aqui dentro.
+        var pairs = conversations
+            .Select(c => new NumberSeller(c.NumberId, c.SellerId))
+            .Concat(numbers.Select(n => new NumberSeller(n.Id, n.SellerId)))
+            .Distinct()
+            .ToList();
+
+        foreach (var pair in pairs)
         {
-            var conversationData = conversationsByNumber[number.Id]
+            var number = numbers.First(n => n.Id == pair.NumberId);
+            var conversationData = conversationsByPair[pair]
                 .Select(c => BuildConversationData(c, messagesByConversation, boundaryByConversation, outcomeByConversation))
                 .ToList();
 
-            var events = eventsByNumber[number.Id].ToList();
-            var priorStatus = priorByNumber.GetValueOrDefault(number.Id);
-            var downtimes = BuildDowntimes(number, priorStatus, events, fromUtc, toUtc);
+            // Downtime e ban descrevem o CANAL, não o atendimento: ficam com o dono
+            // vigente. Rateá-los entre dois donos contaria o mesmo ban duas vezes.
+            var isCurrentOwner = pair.SellerId == number.SellerId;
+            var events = isCurrentOwner ? eventsByNumber[number.Id].ToList() : [];
+            var priorStatus = isCurrentOwner ? priorByNumber.GetValueOrDefault(number.Id) : null;
+            var downtimes = isCurrentOwner
+                ? BuildDowntimes(number, priorStatus, events, fromUtc, toUtc)
+                : [];
             var banCount = CountBanTransitions(events, priorStatus);
 
-            results[number.Id] = calculator.Compute(fromUtc, toUtc, conversationData, downtimes, banCount);
+            results[pair] = calculator.Compute(fromUtc, toUtc, conversationData, downtimes, banCount);
         }
 
         return results;

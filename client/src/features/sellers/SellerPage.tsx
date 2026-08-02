@@ -13,7 +13,7 @@ import {
 import { useSellerReport } from '../../api/queries'
 import { KpiCard } from '../../components/KpiCard'
 import { Button, Card, EmptyState, ErrorState, Spinner, StatusBadge } from '../../components/ui'
-import { fmtDateTime, fmtHours, fmtMinutes, fmtPercent, fmtPerHour, periodOptions } from '../../lib/format'
+import { fmtDateTime, fmtHours, fmtMinutes, fmtPercent, fmtPerHour, periodOptions, fmtPhone } from '../../lib/format'
 import { chartInk, chartPalette } from '../../lib/palette'
 import { metricHelp } from '../../lib/metrics'
 import { usePeriodRange } from '../../lib/usePeriodRange'
@@ -46,7 +46,7 @@ export function SellerPage() {
   const chartData = useMemo(
     () =>
       (report?.numbers ?? []).map((n) => ({
-        name: n.phone,
+        name: fmtPhone(n.phone),
         Enviadas: n.metrics.messagesSent,
         Recebidas: n.metrics.messagesReceived,
       })),
@@ -172,7 +172,7 @@ export function SellerPage() {
             {report.numbers.map((n) => (
               <Card key={n.numberId}>
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="font-semibold">{n.phone}</p>
+                  <p className="font-semibold">{fmtPhone(n.phone)}</p>
                   <StatusBadge status={n.status} />
                 </div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">

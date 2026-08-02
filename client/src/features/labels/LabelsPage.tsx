@@ -89,7 +89,7 @@ function TypeCard({
           aria-label={`Nova etiqueta para ${type.name}`}
           className="flex-1"
         />
-        <Button type="submit" disabled={addTerm.isPending || term.trim().length === 0}>
+        <Button type="submit" loading={addTerm.isPending} disabled={term.trim().length === 0}>
           Adicionar
         </Button>
       </form>
@@ -166,7 +166,7 @@ export function LabelsPage() {
             aria-label="Nome do novo tipo"
             className="flex-1"
           />
-          <Button type="submit" disabled={createType.isPending || newTypeName.trim().length === 0}>
+          <Button type="submit" loading={createType.isPending} disabled={newTypeName.trim().length === 0}>
             Criar tipo
           </Button>
         </form>

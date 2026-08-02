@@ -10,6 +10,9 @@ public sealed class WebhookOptions
         "MESSAGES_UPSERT",
         "MESSAGES_UPDATE",
         "CONNECTION_UPDATE",
+        // O QR do pareamento vence em segundos e a Evolution manda o novo por
+        // aqui; sem assinar, a tela serviria um código já recusado pelo WhatsApp.
+        "QRCODE_UPDATED",
         "LABELS_EDIT",
         "LABELS_ASSOCIATION"
     ];

@@ -46,6 +46,24 @@ public sealed class FakeAiHandler : HttpMessageHandler
     public void EnqueueTimeout() =>
         _scripted.Enqueue(() => throw new TaskCanceledException("timeout simulado"));
 
+    // Conexão recusada/DNS: o provedor não chegou a receber nada, então retentar é
+    // seguro e nada foi cobrado.
+    public void EnqueueNetworkFailure() =>
+        _scripted.Enqueue(() => throw new HttpRequestException("conexão recusada"));
+
+    // 429 com a espera no header padrão, em vez do `retryDelay` do corpo.
+    public void EnqueueRetryAfter(int seconds) =>
+        _scripted.Enqueue(() =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("""{"error":{"message":"quota"}}""", Encoding.UTF8, "application/json"),
+            };
+
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(seconds));
+            return response;
+        });
+
     public void Always(string text, int inputTokens = 1000, int outputTokens = 200) =>
         _fallback = () => Success(GeminiEnvelope(text, inputTokens, outputTokens));
 

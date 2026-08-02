@@ -11,6 +11,12 @@ public class DailyNumberMetrics
     public Guid WhatsappNumberId { get; set; }
     public DateOnly Day { get; set; }
 
+    // Vendedor dono do número naquele dia. Não entra na chave de propósito: a
+    // troca de dono só vale a partir do dia seguinte, então cada (número, dia)
+    // tem exatamente um vendedor. Na chave, o mesmo dia poderia ser gravado duas
+    // vezes com donos diferentes e a soma contaria em dobro.
+    public Guid SellerId { get; set; }
+
     public int ConversationsStarted { get; set; }
     public int ConversationsAnswered { get; set; }
     public int OutboundConversationsStarted { get; set; }

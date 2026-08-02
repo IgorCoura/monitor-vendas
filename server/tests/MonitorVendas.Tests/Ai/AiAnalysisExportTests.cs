@@ -63,6 +63,7 @@ public class AiAnalysisExportTests(IntegrationTestWebAppFactory factory) : BaseI
                 {
                     Id = conversationId,
                     WhatsappNumberId = NumberId,
+                    SellerId = SellerId,
                     ContactId = contactId,
                     StartedByContact = true,
                     StartedAt = start,
@@ -73,6 +74,7 @@ public class AiAnalysisExportTests(IntegrationTestWebAppFactory factory) : BaseI
                     Id = Guid.NewGuid(),
                     ConversationId = conversationId,
                     WhatsappNumberId = NumberId,
+                    SellerId = SellerId,
                     WaMessageId = $"m-{i}",
                     Direction = MessageDirection.Inbound,
                     Type = "conversation",

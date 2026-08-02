@@ -51,7 +51,7 @@ export function HolidaysPage() {
             className="flex-1"
             required
           />
-          <Button type="submit" disabled={createHoliday.isPending}>
+          <Button type="submit" loading={createHoliday.isPending}>
             Adicionar feriado
           </Button>
         </form>

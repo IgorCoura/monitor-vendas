@@ -413,6 +413,9 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.Property<DateTime>("LastMessageAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid>("SellerId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -425,6 +428,8 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ContactId");
+
+                    b.HasIndex("SellerId", "StartedAt");
 
                     b.HasIndex("WhatsappNumberId", "StartedAt");
 
@@ -513,6 +518,9 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid>("SellerId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Text")
                         .HasColumnType("text");
 
@@ -537,6 +545,8 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasIndex("Timestamp");
 
                     b.HasIndex("ConversationId", "Timestamp");
+
+                    b.HasIndex("SellerId", "Timestamp");
 
                     b.HasIndex("WhatsappNumberId", "WaMessageId")
                         .IsUnique();
@@ -633,6 +643,9 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.Property<double>("ResponseMinutesSum")
                         .HasColumnType("double precision");
 
+                    b.Property<Guid>("SellerId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("SilenceGaps")
                         .HasColumnType("integer");
 
@@ -642,6 +655,8 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasKey("WhatsappNumberId", "Day");
 
                     b.HasIndex("Day");
+
+                    b.HasIndex("SellerId", "Day");
 
                     b.ToTable("daily_number_metrics", (string)null);
                 });
@@ -744,6 +759,79 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasIndex("WhatsappNumberId", "OccurredAt");
 
                     b.ToTable("number_status_events", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Numbers.PairingSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool?>("Active")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DetectedPhone")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("DetectedProfileName")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<Guid?>("ExistingNumberId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("InstanceName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("PairingCode")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("QrBase64")
+                        .HasColumnType("text");
+
+                    b.Property<string>("QrCode")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("QuarantineFrom")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("SellerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Active")
+                        .IsUnique()
+                        .HasFilter("\"Active\"");
+
+                    b.HasIndex("InstanceName")
+                        .IsUnique();
+
+                    b.HasIndex("SellerId");
+
+                    b.ToTable("pairing_sessions", (string)null);
                 });
 
             modelBuilder.Entity("MonitorVendas.Api.Features.Numbers.WhatsappNumber", b =>
@@ -1052,6 +1140,15 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasOne("MonitorVendas.Api.Features.Numbers.WhatsappNumber", null)
                         .WithMany()
                         .HasForeignKey("WhatsappNumberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Numbers.PairingSession", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Sellers.Seller", null)
+                        .WithMany()
+                        .HasForeignKey("SellerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

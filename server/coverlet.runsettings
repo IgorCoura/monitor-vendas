@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Medição de cobertura:
+  dotnet test MonitorVendas.slnx (com collect XPlat Code Coverage e este arquivo)
+
+  O que fica de fora e por quê:
+  * Migrations: código gerado pelo EF; testá-lo seria testar a ferramenta.
+  * Código marcado com GeneratedCodeAttribute (regex source generator): idem, e o
+    volume dele distorce o número do que é nosso.
+  * DesignTimeDbContextFactory: existe só para o `dotnet ef` da linha de comando.
+
+  CompilerGeneratedAttribute NÃO entra nessa lista: máquina de estado de `async`
+  é marcada assim, e excluí-la apagaria da medição o corpo de quase todo método
+  do projeto — o número subia sem que um teste a mais existisse.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+          <ExcludeByFile>**/Data/Migrations/*.cs,**/DesignTimeDbContextFactory.cs</ExcludeByFile>
+          <SkipAutoProps>true</SkipAutoProps>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

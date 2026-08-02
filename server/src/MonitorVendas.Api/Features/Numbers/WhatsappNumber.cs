@@ -20,5 +20,10 @@ public enum NumberStatus
     Disconnected = 0,
     Active = 1,
     BannedTemporary = 2,
-    BannedPermanent = 3
+    BannedPermanent = 3,
+
+    // Quarentena: a instância conectou com um WhatsApp diferente do cadastrado.
+    // Nada entra enquanto o número estiver assim — o histórico de dois números
+    // no mesmo cadastro não teria como ser desfeito depois.
+    WrongNumber = 4
 }

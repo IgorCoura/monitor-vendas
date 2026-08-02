@@ -4,10 +4,12 @@ import {
   useState,
   type ReactNode,
   type ButtonHTMLAttributes,
+  type Ref,
   type HTMLAttributes,
   type InputHTMLAttributes,
   type SelectHTMLAttributes,
 } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import type { NumberStatus } from '../api/types'
 import { useIsMobile } from '../lib/useIsMobile'
@@ -23,15 +25,48 @@ export function Card({ children, className, ...rest }: HTMLAttributes<HTMLDivEle
   )
 }
 
+// Círculo de progresso do tamanho de uma linha de texto, para dentro de botão.
+// O `Spinner` abaixo é outra coisa: ocupa a área toda enquanto a página carrega.
+// `decorative` para uso DENTRO de botão: lá o rótulo do próprio botão já diz o
+// que está acontecendo, e um `role="status"` a mais entraria no nome acessível
+// ("Processando Reiniciar"). Quem anuncia o estado é o `aria-busy` do botão.
+export function ProgressCircle({
+  label = 'Processando',
+  decorative = false,
+}: {
+  label?: string
+  decorative?: boolean
+}) {
+  return (
+    <span
+      role={decorative ? undefined : 'status'}
+      aria-label={decorative ? undefined : label}
+      aria-hidden={decorative || undefined}
+      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-edge border-t-primary align-middle"
+    />
+  )
+}
+
 type ButtonVariant = 'primary' | 'ghost' | 'danger'
 
 // `min-h-11` (44px) só abaixo do `md`: é o alvo mínimo de toque. No desktop o
 // botão continua com a altura compacta de sempre.
+// `ref` como prop normal (React 19): o Menu precisa medir o botão para se
+// posicionar.
 export function Button({
   variant = 'primary',
   className,
+  loading = false,
+  disabled,
+  children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: ButtonVariant
+  ref?: Ref<HTMLButtonElement>
+  // Chamada de API em andamento: o rótulo dá lugar ao círculo e o botão trava.
+  // Convenção obrigatória do projeto — ver CLAUDE.md.
+  loading?: boolean
+}) {
   return (
     <button
       className={clsx(
@@ -41,8 +76,22 @@ export function Button({
         variant === 'danger' && 'bg-danger-soft text-danger hover:bg-danger hover:text-white',
         className,
       )}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
-    />
+    >
+      {loading ? (
+        <>
+          <ProgressCircle decorative />
+          {/* O rótulo continua existindo para leitor de tela e para os testes:
+              trocá-lo pelo círculo mudaria o nome acessível do botão no meio da
+              ação. */}
+          <span className="sr-only">{children}</span>
+        </>
+      ) : (
+        children
+      )}
+    </button>
   )
 }
 
@@ -127,7 +176,13 @@ export function Dialog({
   }, [open])
 
   if (!open) return null
-  return (
+
+  // Portal no body porque `fixed` e `z-index` só valem dentro do stacking
+  // context mais próximo — e qualquer ancestral com `opacity`, `transform` ou
+  // `filter` cria um. Renderizado onde é chamado, o dialog aberto de dentro do
+  // card de um vendedor inativo (`opacity-60`) herdava a transparência e ficava
+  // preso atrás dos outros cards.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 md:items-center md:p-4"
       onClick={onClose}
@@ -168,7 +223,8 @@ export function Dialog({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -257,6 +313,96 @@ export function InfoTip({ text }: { text: string }) {
         </span>
       )}
     </span>
+  )
+}
+
+export type MenuAction = { label: string; onSelect: () => void; danger?: boolean }
+
+// Ações raras e destrutivas saem da linha e entram aqui: com todas visíveis, a
+// linha do número virava um bloco de cinco botões que empurrava a lista inteira
+// no celular. Posicionado com `fixed` a partir do botão (como o InfoTip), porque
+// dentro da linha ele seria cortado pelo overflow dela.
+export function Menu({ label, actions }: { label: string; actions: MenuAction[] }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const close = () => setPos(null)
+
+  function toggle() {
+    if (pos) return close()
+    const rect = anchorRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = 208
+    const margin = 8
+    setPos({
+      x: Math.min(Math.max(rect.right - width, margin), window.innerWidth - width - margin),
+      y: rect.bottom + 4,
+    })
+  }
+
+  // Clicar fora, rolar ou apertar Escape fecha — menu preso aberto cobre a linha
+  // de baixo e o próximo clique vai para a ação errada.
+  useEffect(() => {
+    if (!pos) return
+
+    // O clique DENTRO do menu não fecha aqui: fechar no `pointerdown` desmonta o
+    // item antes de o `click` chegar nele, e a ação nunca dispara.
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node
+      if (anchorRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      close()
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') close()
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [pos])
+
+  return (
+    <>
+      <Button ref={anchorRef} variant="ghost" aria-label={label} aria-expanded={pos !== null} onClick={toggle}>
+        ⋯
+      </Button>
+      {pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            style={{ left: pos.x, top: pos.y, width: 208 }}
+            className="fixed z-50 overflow-hidden rounded-lg border border-edge bg-card py-1 shadow-md"
+          >
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close()
+                  action.onSelect()
+                }}
+                className={clsx(
+                  'block w-full px-3 py-2 text-left text-sm hover:bg-surface',
+                  action.danger && 'text-danger',
+                )}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   )
 }
 

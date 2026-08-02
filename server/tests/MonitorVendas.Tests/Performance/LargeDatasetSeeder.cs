@@ -101,6 +101,7 @@ public static class LargeDatasetSeeder
                         {
                             Id = Guid.NewGuid(),
                             WhatsappNumberId = number.Id,
+                            SellerId = number.SellerId,
                             ContactId = contact.Id,
                             StartedByContact = startedByContact,
                             StartedAt = startedAt,
@@ -117,6 +118,7 @@ public static class LargeDatasetSeeder
                                 Id = Guid.NewGuid(),
                                 ConversationId = conversation.Id,
                                 WhatsappNumberId = number.Id,
+                                SellerId = number.SellerId,
                                 WaMessageId = $"BM-{number.Id:N}-{d:D3}-{c:D2}-{m:D2}",
                                 Direction = inbound ? MessageDirection.Inbound : MessageDirection.Outbound,
                                 Type = "conversation",

@@ -69,6 +69,15 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   (barra inferior fixa, as mesmas 6 rotas, com rótulos curtos — "Painel", "IA").
   O conteúdo reserva a altura dela com a classe `pb-nav`. **Rota nova entra nos
   dois lugares**: `links` do `Layout` e `items` do `BottomNav`.
+- **`Menu` ("⋯")** para ação rara/destrutiva fora da linha. Fecha ao clicar
+  fora, rolar ou apertar Escape — mas **clique dentro dele não fecha no
+  `pointerdown`**: fechar ali desmonta o item antes de o `click` chegar, e a
+  ação nunca dispara (bug pego por teste).
+- **`Dialog` monta no `document.body` por portal.** `fixed`/`z-index` só valem
+  dentro do stacking context mais próximo, e `opacity`, `transform` ou `filter`
+  em qualquer ancestral criam um: aberto de dentro do card de vendedor inativo
+  (`opacity-60`), o dialog herdava a transparência e ficava atrás dos outros
+  cards. Componente novo que se sobrepõe à tela segue a mesma regra.
 - **`Dialog` vira bottom sheet** abaixo de `md`: colado embaixo, `max-h-[90dvh]`
   (**`dvh`, nunca `vh`** — no celular o `vh` ignora a barra de URL e joga o
   rodapé para fora da tela), rolagem do fundo travada, Escape fecha. Botão de
@@ -148,7 +157,26 @@ client/src/
 │   │               #   Sem IA e sem job: o botão é um <a> para
 │   │               #   `api.reports.exportUrl(filters)` e o navegador baixa.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
-│   ├── registry/   # CRUD vendedores + números (QR em dialog, ban permanente)
+│   ├── registry/   # CRUD vendedores + conexão de WhatsApp. NÃO existe campo de
+│   │               #   telefone: "Conectar WhatsApp" abre uma sessão de pareamento
+│   │               #   (PairingDialog) e o número vem do aparelho que leu o QR.
+│   │               #   O dialog conduz as confirmações (transferir de vendedor,
+│   │               #   reativar banido) e mostra o motivo quando o servidor recusa.
+│   │               #   Alternativa ao QR para quem abre o painel no próprio
+│   │               #   Cada número tem Reconectar/Desconectar/Reiniciar na linha
+│   │               #   e as ações raras (transferir, ban) num menu "⋯" — com as
+│   │               #   cinco visíveis a linha virava um bloco no celular.
+│   │               #   Desconectar pede confirmação (tira o vendedor do ar);
+│   │               #   reiniciar não desvincula, então vai direto — com o
+│   │               #   círculo segurado por >=1s, senão o clique parece não ter
+│   │               #   feito nada (o socket sobe rápido demais).
+│   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
+│   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
+│   │               #   número é só o destinatário do código — o cadastro segue
+│   │               #   vindo do aparelho que conectar. Na RECONEXÃO de um número
+│   │               #   já cadastrado o código sai só no clique em "Gerar código"
+│   │               #   (recria a instância na Evolution; vir junto do QR daria um
+│   │               #   código de sessão vencida, que o WhatsApp recusa).
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,
@@ -171,8 +199,26 @@ client/src/
   (`outcome:<code>`) automaticamente — **não adicionar tipo hardcoded aqui**;
   o catálogo é editado na tela `/labels`. `sale` já aparece como "Vendas" nos
   campos fixos, então é filtrado da lista dinâmica para não duplicar.
+- **OBRIGATÓRIO — toda chamada de API disparada pelo usuário mostra o círculo de
+  progresso.** Nenhum clique que fala com o servidor pode ficar sem resposta
+  visual: sem isso o usuário clica de novo, e num POST isso é ação duplicada.
+  Na prática: `<Button loading={mutation.isPending}>`, que troca o rótulo pelo
+  `ProgressCircle`, trava o botão e marca `aria-busy`. **Nunca** usar
+  `disabled={mutation.isPending}` sozinho — botão que só apaga parece quebrado.
+  - O rótulo continua no DOM (`sr-only`) e o círculo dentro do botão é
+    **decorativo**: `role="status"` ali dentro entraria no nome acessível
+    ("Processando Enviar") e quebraria leitor de tela e teste.
+  - Resposta rápida demais para ser vista? Segure o círculo por ~1s
+    (`Promise.all([mutação, delay(1000)])`), como no "Reiniciar" do registry.
+  - Quando o controle some com o clique (item de menu, dialog que fecha), o
+    círculo vai no elemento que fica.
+  - **Exceção**: busca em segundo plano (polling de `useRanking`, `useAiStatus`,
+    status do pareamento) **não** leva círculo — a UI ficaria piscando sozinha.
+    O sinal dessas é o ícone girando do `UpdateControls`.
 - Erros da API: `ApiError` carrega o `error`/`title` do corpo — exibir a
-  mensagem, não engolir. Na tela `/ai` isso vale para o **409** (já existe rodada
+  mensagem, não engolir.
+- **Telefone sempre por `fmtPhone`** (`lib/format.ts`): `+55 11 91234-4567`. O
+  banco guarda só dígitos com DDI; nenhuma tela inventa a própria máscara. Na tela `/ai` isso vale para o **409** (já existe rodada
   em andamento) e o **422** (sem saldo): as duas frases vêm do servidor.
 - **O trabalho de IA é 100% do servidor.** A tela nunca acompanha progresso —
   `useAiStatus` pergunta o estado da vaga única (5 s enquanto houver rodada) e é

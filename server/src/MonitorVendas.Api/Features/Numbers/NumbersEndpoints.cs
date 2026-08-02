@@ -41,7 +41,7 @@ public static class NumbersEndpoints
             {
                 await evolution.CreateInstanceAsync(instanceName, phone, ct);
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
-                qr = await evolution.ConnectAsync(instanceName, ct);
+                qr = await evolution.ConnectAsync(instanceName, phone, ct);
             }
             catch (HttpRequestException)
             {
@@ -94,6 +94,7 @@ public static class NumbersEndpoints
         // Reconexão (pós logout/ban temporário): gera um novo QR para o mesmo número.
         group.MapPost("/numbers/{id:guid}/connect", async (
             Guid id,
+            bool? confirmBanned,
             AppDbContext db,
             EvolutionApiClient evolution,
             CancellationToken ct) =>
@@ -102,9 +103,83 @@ public static class NumbersEndpoints
             if (number is null)
                 return Results.NotFound();
 
+            // Ban permanente é decisão manual de quem opera; reconectar por engano
+            // apagaria essa decisão em silêncio. Exige um "sim" explícito.
+            if (number.Status == NumberStatus.BannedPermanent && confirmBanned != true)
+                return Results.Conflict(new
+                {
+                    error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
+                    requiresConfirmation = true,
+                });
+
             try
             {
-                var qr = await evolution.ConnectAsync(number.InstanceName, ct);
+                // Sem número: `connect?number=` devolve o código de pareamento de uma
+                // sessão antiga em cache, que o WhatsApp já recusa. Código válido só
+                // sai de instância recém-criada — é o /pairing-code abaixo.
+                var qr = await evolution.ConnectAsync(number.InstanceName, cancellationToken: ct);
+                return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, null));
+            }
+            catch (HttpRequestException)
+            {
+                return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        // Código de pareamento para reconectar sem ler QR (mesmo aparelho). A
+        // instância é RECRIADA com o número: pedir o código a uma instância que já
+        // existe devolve o de uma sessão antiga em cache, que o WhatsApp recusa —
+        // era o motivo de o código da reconexão nunca funcionar.
+        group.MapPost("/numbers/{id:guid}/pairing-code", async (
+            Guid id,
+            bool? confirmBanned,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            IOptions<WebhookOptions> webhookOptions,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            if (number.Status == NumberStatus.BannedPermanent && confirmBanned != true)
+                return Results.Conflict(new
+                {
+                    error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
+                    requiresConfirmation = true,
+                });
+
+            // Recriar derruba a sessão viva; para o número conectado não há o que
+            // reconectar de qualquer forma.
+            if (number.Status == NumberStatus.Active)
+                return Results.Conflict(new { error = "Este número já está conectado." });
+
+            // Instância NOVA, não a mesma recriada: apagar e recriar com o mesmo
+            // nome dá corrida na Evolution e a criação volta sem QR nenhum.
+            var previousInstance = number.InstanceName;
+            var instanceName = $"mv-{Guid.NewGuid():N}"[..20];
+
+            try
+            {
+                var qr = await evolution.CreateInstanceAsync(instanceName, number.Phone, ct);
+                if (qr is null || string.IsNullOrWhiteSpace(qr.PairingCode))
+                {
+                    await evolution.DeleteInstanceAsync(instanceName, ct);
+                    return Results.Problem(
+                        title: "A Evolution não devolveu um código de pareamento para este número.",
+                        statusCode: StatusCodes.Status502BadGateway);
+                }
+
+                await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+
+                // O cadastro passa a apontar para a instância nova: é por ela que os
+                // webhooks deste número vão chegar daqui para frente.
+                await db.Set<WhatsappNumber>()
+                    .Where(n => n.Id == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(n => n.InstanceName, instanceName), ct);
+
+                await evolution.DeleteInstanceAsync(previousInstance, ct);
+
                 return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, qr.PairingCode));
             }
             catch (HttpRequestException)
@@ -113,13 +188,122 @@ public static class NumbersEndpoints
             }
         });
 
-        // Promoção manual a ban permanente: o WhatsApp não distingue ban temporário
-        // de permanente no statusReason; quem confirma a perda definitiva é o operador.
-        group.MapPost("/numbers/{id:guid}/ban-permanent", async (Guid id, AppDbContext db, CancellationToken ct) =>
+        // Transferência de número entre vendedores. O passado NÃO se move: as
+        // conversas e mensagens já carimbadas continuam do vendedor antigo, e o
+        // novo dono responde pelo que vier daqui para frente.
+        group.MapPost("/numbers/{id:guid}/transfer", async (
+            Guid id,
+            TransferNumberRequest request,
+            AppDbContext db,
+            CancellationToken ct) =>
         {
             var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
             if (number is null)
                 return Results.NotFound();
+
+            var seller = await db.Set<Seller>().FirstOrDefaultAsync(s => s.Id == request.SellerId, ct);
+            if (seller is null)
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["sellerId"] = ["Vendedor não encontrado."],
+                });
+
+            if (number.SellerId == request.SellerId)
+                return Results.Ok(NumberResponse.From(number));
+
+            number.SellerId = request.SellerId;
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(NumberResponse.From(number));
+        });
+
+        // Promoção manual a ban permanente: o WhatsApp não distingue ban temporário
+        // de permanente no statusReason; quem confirma a perda definitiva é o operador.
+        // Desconectar: desvincula o aparelho. O número continua cadastrado, com
+        // todo o histórico, mas só volta com QR ou código novo — é o oposto de
+        // reiniciar, que não mexe no vínculo.
+        group.MapPost("/numbers/{id:guid}/disconnect", async (
+            Guid id,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            // A própria Evolution recusa o logout de instância não conectada; dizer
+            // isso aqui evita gastar a chamada para receber o mesmo "não".
+            if (number.Status != NumberStatus.Active)
+                return Results.Conflict(new { error = "Este número não está conectado." });
+
+            // Best-effort, como no ban: Evolution fora do ar não pode impedir o
+            // registro da decisão de quem opera.
+            if (!await evolution.LogoutAsync(number.InstanceName, ct))
+                logger.LogWarning("Desconexão de {Instance}: logout não confirmado pela Evolution.", number.InstanceName);
+
+            // O estado vale a partir de agora, sem esperar o `connection.update`:
+            // é o que faz o downtime começar a contar na hora certa. O evento do
+            // webhook chega depois com o mesmo status e não soma intervalo novo.
+            number.Status = NumberStatus.Disconnected;
+            db.Add(new NumberStatusEvent
+            {
+                WhatsappNumberId = number.Id,
+                State = "manual",
+                ResultingStatus = NumberStatus.Disconnected,
+                OccurredAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(NumberResponse.From(number));
+        });
+
+        // Reiniciar: derruba e sobe o socket da instância SEM desvincular. É o
+        // remédio para instância travada, e por isso não mexe no status — quem
+        // decide o estado do canal continua sendo o `connection.update`.
+        group.MapPost("/numbers/{id:guid}/restart", async (
+            Guid id,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            // Número que nunca pareou não tem sessão para reiniciar: a instância
+            // existe, mas vazia. O caminho dele é conectar.
+            var everConnected = await db.Set<NumberStatusEvent>()
+                .AnyAsync(e => e.WhatsappNumberId == number.Id && e.ResultingStatus == NumberStatus.Active, ct);
+            if (!everConnected)
+                return Results.Conflict(new { error = "Este número ainda não foi conectado nenhuma vez." });
+
+            if (!await evolution.RestartAsync(number.InstanceName, ct))
+                return Results.Problem(
+                    title: "A Evolution não conseguiu reiniciar esta instância.",
+                    statusCode: StatusCodes.Status502BadGateway);
+
+            return Results.Ok(NumberResponse.From(number));
+        });
+
+        group.MapPost("/numbers/{id:guid}/ban-permanent", async (
+            Guid id,
+            AppDbContext db,
+            EvolutionApiClient evolution,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
+            if (number is null)
+                return Results.NotFound();
+
+            // Número declarado perdido não pode continuar conectado: seguiria
+            // recebendo mensagem e contando uptime como se estivesse no ar. O
+            // logout é best-effort — Evolution fora ou sessão já caída não pode
+            // impedir o registro da decisão.
+            if (!await evolution.LogoutAsync(number.InstanceName, ct))
+                logger.LogWarning("Ban permanente de {Instance}: logout não confirmado pela Evolution.", number.InstanceName);
 
             number.Status = NumberStatus.BannedPermanent;
             db.Add(new NumberStatusEvent

@@ -56,8 +56,12 @@ public sealed class ConversationAiWorkset(
         var numbers = (await NumbersAsync(filter, ct)).ToDictionary(n => n.Id);
         var max = Math.Max(1, filter.MaxConversations);
 
+        // O recorte por vendedor é feito na conversa (que carimba quem atendeu),
+        // não no dono atual do número.
+        var sellerIds = filter.SellerIds.ToList();
         var conversations = await db.Set<Conversation>().AsNoTracking()
             .Where(c => numbers.Keys.Contains(c.WhatsappNumberId) &&
+                        (sellerIds.Count == 0 || sellerIds.Contains(c.SellerId)) &&
                         c.LastMessageAt >= filter.From && c.StartedAt <= filter.To)
             .OrderByDescending(c => c.LastMessageAt)
             .Take(max + 1)
@@ -90,6 +94,9 @@ public sealed class ConversationAiWorkset(
         var byConversation = messages
             .GroupBy(m => m.ConversationId)
             .ToDictionary(g => g.Key, g => g.ToList());
+
+        var sellerNames = await db.Set<Seller>().AsNoTracking()
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
 
         var calendar = await queries.BuildCalendarAsync(ct);
         var timeZone = TimeZoneInfo.FindSystemTimeZoneById(options.Value.TimeZone);
@@ -143,8 +150,8 @@ public sealed class ConversationAiWorkset(
 
             items.Add(new ConversationContext(
                 conversation.Id,
-                number?.SellerId,
-                number?.SellerName ?? "—",
+                conversation.SellerId,
+                sellerNames.GetValueOrDefault(conversation.SellerId, number?.SellerName ?? "—"),
                 number?.Phone ?? "—",
                 contact?.PushName ?? phone ?? "—",
                 phone ?? "—",

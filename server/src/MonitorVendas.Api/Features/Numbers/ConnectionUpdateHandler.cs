@@ -9,7 +9,10 @@ namespace MonitorVendas.Api.Features.Numbers;
 
 // statusReason 403 = conta banida pelo WhatsApp (Baileys). Ban começa como temporário;
 // a promoção a permanente é decisão manual (POST /numbers/{id}/ban-permanent).
-public sealed class ConnectionUpdateHandler(IDirtyDayTracker dirtyDays) : IWebhookEventHandler
+public sealed class ConnectionUpdateHandler(
+    IDirtyDayTracker dirtyDays,
+    PairingService pairing,
+    ILogger<ConnectionUpdateHandler> logger) : IWebhookEventHandler
 {
     public string EventType => "CONNECTION_UPDATE";
 
@@ -23,9 +26,51 @@ public sealed class ConnectionUpdateHandler(IDirtyDayTracker dirtyDays) : IWebho
         if (state is not ("open" or "close"))
             return;
 
+        // Instância de uma tentativa de pareamento: é aqui que descobrimos QUAL
+        // WhatsApp conectou, e só depois disso ele vira cadastro.
+        var session = await db.Set<PairingSession>()
+            .FirstOrDefaultAsync(s => s.InstanceName == evt.InstanceName && s.Active == true, ct);
+
+        if (session is not null)
+        {
+            if (state == "open")
+            {
+                await pairing.ResolveConnectedAsync(
+                    session,
+                    WebhookPayload.GetString(data, "wuid") ?? WebhookPayload.GetString(doc.RootElement, "sender") ?? string.Empty,
+                    WebhookPayload.GetString(data, "profileName"),
+                    ct);
+            }
+
+            return;
+        }
+
         var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.InstanceName == evt.InstanceName, ct);
         if (number is null)
             return;
+
+        // Repareamento divergente: a instância é conhecida, mas quem conectou é
+        // outro número. Deixar seguir misturaria o histórico de dois WhatsApps
+        // no mesmo cadastro.
+        if (state == "open" && WebhookPayload.GetString(data, "wuid") is { Length: > 0 } wuid &&
+            !PhoneNumber.SameNumber(number.Phone, PhoneNumber.FromJid(wuid)))
+        {
+            logger.LogWarning(
+                "Instância {Instance} conectou com {Detected}, mas o cadastro é {Registered}: sessão derrubada.",
+                evt.InstanceName, PhoneNumber.FromJid(wuid), number.Phone);
+
+            number.Status = NumberStatus.WrongNumber;
+            db.Add(new NumberStatusEvent
+            {
+                WhatsappNumberId = number.Id,
+                State = "wrong-number",
+                ResultingStatus = NumberStatus.WrongNumber,
+                OccurredAt = WebhookPayload.GetEnvelopeTime(doc, evt.ReceivedAt),
+            });
+
+            await pairing.LogoutDivergentAsync(number.InstanceName, ct);
+            return;
+        }
 
         int? statusReason = data.TryGetProperty("statusReason", out var reason) && reason.TryGetInt32(out var code)
             ? code

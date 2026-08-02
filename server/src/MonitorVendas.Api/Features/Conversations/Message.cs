@@ -5,6 +5,9 @@ public class Message
     public Guid Id { get; set; }
     public Guid ConversationId { get; set; }
     public Guid WhatsappNumberId { get; set; }
+
+    // Vendedor dono do número no momento da mensagem — ver Conversation.SellerId.
+    public Guid SellerId { get; set; }
     public string WaMessageId { get; set; } = string.Empty;
     public MessageDirection Direction { get; set; }
     public string Type { get; set; } = string.Empty;

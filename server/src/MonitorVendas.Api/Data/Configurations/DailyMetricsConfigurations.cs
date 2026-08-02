@@ -14,6 +14,8 @@ public class DailyNumberMetricsConfiguration : IEntityTypeConfiguration<DailyNum
         builder.HasKey(d => new { d.WhatsappNumberId, d.Day });
         builder.HasOne<WhatsappNumber>().WithMany().HasForeignKey(d => d.WhatsappNumberId);
         builder.HasIndex(d => d.Day);
+        // Leitura do relatório: dias de um vendedor no período.
+        builder.HasIndex(d => new { d.SellerId, d.Day });
         // Histograma como array nativo do Postgres (integer[]).
         builder.Property(d => d.FirstResponseHistogram).HasColumnType("integer[]").IsRequired();
     }

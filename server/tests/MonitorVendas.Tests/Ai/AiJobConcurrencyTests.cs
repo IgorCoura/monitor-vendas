@@ -62,6 +62,7 @@ public class AiJobConcurrencyTests(IntegrationTestWebAppFactory factory) : BaseI
             {
                 Id = conversationId,
                 WhatsappNumberId = NumberId,
+                SellerId = SellerId,
                 ContactId = contactId,
                 StartedByContact = true,
                 StartedAt = start,
@@ -72,6 +73,7 @@ public class AiJobConcurrencyTests(IntegrationTestWebAppFactory factory) : BaseI
                 Id = Guid.NewGuid(),
                 ConversationId = conversationId,
                 WhatsappNumberId = NumberId,
+                SellerId = SellerId,
                 WaMessageId = "m-1",
                 Direction = MessageDirection.Inbound,
                 Type = "conversation",
@@ -273,6 +275,7 @@ public class AiJobConcurrencyTests(IntegrationTestWebAppFactory factory) : BaseI
                 Id = Guid.NewGuid(),
                 ConversationId = conversation.Id,
                 WhatsappNumberId = NumberId,
+                SellerId = SellerId,
                 WaMessageId = "m-2",
                 Direction = MessageDirection.Inbound,
                 Type = "conversation",

@@ -167,8 +167,9 @@ describe('ContactsPage', () => {
       const cards = await screen.findByTestId('contacts-cards')
       expect(screen.queryByTestId('contacts-table')).not.toBeInTheDocument()
       expect(within(cards).getByText('Maria Silva')).toBeInTheDocument()
-      // Um card por contato, cada um com o número do cliente na prévia.
-      expect(within(cards).getAllByText('5511700001111')).toHaveLength(2)
+      // Um card por contato, cada um com o número do cliente na prévia — já no
+      // formato de leitura (+55 11 70000-1111).
+      expect(within(cards).getAllByText('+55 11 70000-1111')).toHaveLength(2)
 
       // Vendedor e banimento ficam na parte escondida do card.
       expect(within(cards).queryByText('Bruno')).not.toBeInTheDocument()

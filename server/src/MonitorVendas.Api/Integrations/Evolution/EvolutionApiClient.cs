@@ -50,14 +50,76 @@ public sealed class EvolutionApiClient(HttpClient http)
         return new Media(base64, GetString(root, "mimetype") ?? "application/octet-stream");
     }
 
-    public async Task CreateInstanceAsync(string instanceName, string phone, CancellationToken cancellationToken = default)
+    // `number` é OMITIDO quando não se sabe o telefone — mandá-lo vazio faz a
+    // Evolution recusar com 400 ("number does not match pattern"). É o caso do
+    // pareamento por QR, em que o número só aparece depois de conectar.
+    // Devolve o QR da criação — e é AQUI que sai o código de pareamento: pedi-lo
+    // depois, em `instance/connect/{name}?number=`, devolve `pairingCode: null`
+    // quando a instância nasceu sem número (confirmado contra a v2.3.7).
+    public async Task<QrCode?> CreateInstanceAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
     {
-        var response = await http.PostAsJsonAsync(
-            "instance/create",
-            new { instanceName, number = phone, qrcode = true, integration = "WHATSAPP-BAILEYS" },
-            cancellationToken);
+        object body = string.IsNullOrWhiteSpace(phone)
+            ? new { instanceName, qrcode = true, integration = "WHATSAPP-BAILEYS" }
+            : new { instanceName, number = phone, qrcode = true, integration = "WHATSAPP-BAILEYS" };
+
+        var response = await http.PostAsJsonAsync("instance/create", body, cancellationToken);
 
         response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!doc.RootElement.TryGetProperty("qrcode", out var qr) || qr.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return new QrCode(GetString(qr, "code"), GetString(qr, "base64"), GetString(qr, "pairingCode"));
+    }
+
+    // Derruba e sobe o socket SEM desvincular o aparelho: é o remédio para
+    // instância travada (`connecting` que não sai do lugar, parou de receber).
+    // Não confundir com o logout, que exige QR novo para o número voltar.
+    public async Task<bool> RestartAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // POST, não PUT: o PUT responde 404 na v2.3.7.
+            var response = await http.PostAsync($"instance/restart/{instanceName}", null, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
+    // Derruba a sessão sem apagar a instância: o número pode voltar depois pelo
+    // mesmo registro. Best-effort de propósito — sessão já caída responde erro, e
+    // isso não pode impedir quem chamou de registrar a decisão dele.
+    public async Task<bool> LogoutAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.DeleteAsync($"instance/logout/{instanceName}", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
+    // Apaga a instância e, por cascata no banco da Evolution, todo o histórico
+    // dela (chats, contatos, mensagens, etiquetas). Só é seguro porque a fonte de
+    // verdade é o NOSSO banco: lá a Evolution é transporte, não arquivo.
+    public async Task<bool> DeleteInstanceAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.DeleteAsync($"instance/delete/{instanceName}", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
     }
 
     public async Task SetWebhookAsync(string instanceName, string url, IReadOnlyCollection<string> events, CancellationToken cancellationToken = default)
@@ -70,9 +132,17 @@ public sealed class EvolutionApiClient(HttpClient http)
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task<QrCode> ConnectAsync(string instanceName, CancellationToken cancellationToken = default)
+    // Com `phone`, a Evolution devolve também o **código de pareamento** — é a
+    // saída de quem abre o painel no próprio celular e não tem uma segunda câmera
+    // para ler o QR da tela. O número aqui serve só para o WhatsApp saber a quem
+    // mandar o código; quem manda no cadastro continua sendo o `wuid` da conexão.
+    public async Task<QrCode> ConnectAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
     {
-        var response = await http.GetAsync($"instance/connect/{instanceName}", cancellationToken);
+        var path = string.IsNullOrWhiteSpace(phone)
+            ? $"instance/connect/{instanceName}"
+            : $"instance/connect/{instanceName}?number={Uri.EscapeDataString(phone)}";
+
+        var response = await http.GetAsync(path, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));

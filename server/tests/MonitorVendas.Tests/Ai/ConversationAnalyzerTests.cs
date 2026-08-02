@@ -62,6 +62,7 @@ public class ConversationAnalyzerTests(IntegrationTestWebAppFactory factory) : B
             {
                 Id = ConversationId,
                 WhatsappNumberId = numberId,
+                SellerId = sellerId,
                 ContactId = contactId,
                 StartedByContact = true,
                 StartedAt = DateTime.UtcNow.AddDays(-1),

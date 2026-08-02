@@ -2,6 +2,8 @@ namespace MonitorVendas.Api.Features.Numbers;
 
 public record CreateNumberRequest(string Phone);
 
+public record TransferNumberRequest(Guid SellerId);
+
 public record QrCodeDto(string? Code, string? Base64, string? PairingCode);
 
 public record NumberResponse(Guid Id, Guid SellerId, string Phone, string InstanceName, string Status, DateTime CreatedAt)

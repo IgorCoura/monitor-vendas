@@ -226,18 +226,101 @@ export function useUpdateSeller() {
   })
 }
 
-export function useCreateNumber() {
-  const client = useQueryClient()
+export function useConnectNumber() {
   return useMutation({
-    mutationFn: ({ sellerId, phone }: { sellerId: string; phone: string }) =>
-      api.numbers.create(sellerId, phone),
-    onSuccess: (_, { sellerId }) =>
-      client.invalidateQueries({ queryKey: ['numbers', sellerId] }),
+    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
+      api.numbers.connect(id, confirmBanned),
   })
 }
 
-export function useConnectNumber() {
-  return useMutation({ mutationFn: api.numbers.connect })
+// Pareamento: o número vem do WhatsApp que leu o QR. Enquanto a sessão está
+// viva, a tela pergunta o estado a cada 2s — é o servidor que descobre o número.
+export function useStartPairing() {
+  return useMutation({ mutationFn: (sellerId: string) => api.pairings.start(sellerId) })
+}
+
+export function usePairingStatus(id: string | null) {
+  const client = useQueryClient()
+  return useQuery({
+    queryKey: ['pairing', id],
+    queryFn: async () => {
+      const session = await api.pairings.status(id!)
+      if (session.status === 'Completed') {
+        void client.invalidateQueries({ queryKey: ['numbers'] })
+        void client.invalidateQueries({ queryKey: ['sellers'] })
+      }
+      return session
+    },
+    enabled: !!id,
+    // A consulta é o sinal de vida da sessão no servidor: parar de perguntar
+    // libera a vaga. Por isso vale também enquanto espera a confirmação — sem
+    // isso a sessão morreria embaixo de quem está lendo o aviso de transferência.
+    refetchInterval: (query) =>
+      query.state.data?.status === 'AwaitingScan' || query.state.data?.status === 'AwaitingConfirmation'
+        ? 2000
+        : false,
+  })
+}
+
+export function useConfirmPairing() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.pairings.confirm(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+// Código de pareamento de um número JÁ cadastrado (reconexão).
+export function useNumberPairingCode() {
+  return useMutation({
+    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
+      api.numbers.pairingCode(id, confirmBanned),
+  })
+}
+
+export function useRequestPairingCode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, phone }: { id: string; phone: string }) => api.pairings.pairingCode(id, phone),
+    // O código volta pela sessão, que é o que a tela mostra.
+    onSuccess: (session) => client.setQueryData(['pairing', session.id], session),
+  })
+}
+
+export function useCancelPairing() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.pairings.cancel(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+export function useDisconnectNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.numbers.disconnect,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+// Reiniciar não muda status: quem decide é o `connection.update` que vier
+// depois, então a lista é invalidada para pegar o que a Evolution reportar.
+export function useRestartNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.numbers.restart,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
+export function useTransferNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sellerId }: { id: string; sellerId: string }) =>
+      api.numbers.transfer(id, sellerId),
+    // O número sai de uma lista e entra na outra: as duas precisam ser refeitas.
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
 }
 
 export function useBanPermanent() {

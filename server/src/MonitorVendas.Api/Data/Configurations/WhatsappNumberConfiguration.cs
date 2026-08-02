@@ -19,3 +19,29 @@ public class WhatsappNumberConfiguration : IEntityTypeConfiguration<WhatsappNumb
         builder.HasOne<Seller>().WithMany().HasForeignKey(n => n.SellerId);
     }
 }
+
+public class PairingSessionConfiguration : IEntityTypeConfiguration<PairingSession>
+{
+    public void Configure(EntityTypeBuilder<PairingSession> builder)
+    {
+        builder.ToTable("pairing_sessions");
+        builder.HasKey(s => s.Id);
+        builder.Property(s => s.InstanceName).HasMaxLength(64).IsRequired();
+        builder.Property(s => s.Status).HasConversion<string>().HasMaxLength(24).IsRequired();
+        builder.Property(s => s.DetectedPhone).HasMaxLength(20);
+        builder.Property(s => s.DetectedProfileName).HasMaxLength(120);
+        builder.Property(s => s.Error).HasMaxLength(300);
+        // Sem limite: o base64 do PNG passa de 4 KB e o `code` do WhatsApp não tem
+        // tamanho fixo. Truncar aqui daria um QR ilegível em vez de um erro.
+        builder.Property(s => s.QrCode);
+        builder.Property(s => s.QrBase64);
+        builder.Property(s => s.PairingCode).HasMaxLength(16);
+        builder.HasIndex(s => s.InstanceName).IsUnique();
+        builder.HasOne<Seller>().WithMany().HasForeignKey(s => s.SellerId);
+
+        // Um pareamento por vez em todo o sistema: no Postgres vários NULL
+        // convivem, mas só existe um `true`. É o banco decidindo quem chegou
+        // primeiro, em vez de duas pessoas criando duas instâncias.
+        builder.HasIndex(s => s.Active).IsUnique().HasFilter("\"Active\"");
+    }
+}

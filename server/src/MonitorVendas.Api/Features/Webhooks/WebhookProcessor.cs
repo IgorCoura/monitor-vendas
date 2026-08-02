@@ -24,6 +24,10 @@ public sealed class WebhookProcessor(IServiceScopeFactory scopeFactory, ILogger<
     public async Task<int> ProcessPendingAsync(CancellationToken ct = default)
     {
         var processed = 0;
+        // Um evento é tentado UMA vez por passada: sem isso o próprio laço
+        // repescava o que acabou de falhar e queimava as 5 tentativas em
+        // sequência, sem intervalo nenhum — falha passageira virava evento morto.
+        var failed = new HashSet<long>();
 
         while (!ct.IsCancellationRequested)
         {
@@ -32,7 +36,7 @@ public sealed class WebhookProcessor(IServiceScopeFactory scopeFactory, ILogger<
             {
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 ids = await db.Set<WebhookEvent>()
-                    .Where(w => w.ProcessedAt == null && w.Attempts < MAX_ATTEMPTS)
+                    .Where(w => w.ProcessedAt == null && w.Attempts < MAX_ATTEMPTS && !failed.Contains(w.Id))
                     .OrderBy(w => w.Id)
                     .Take(BATCH_SIZE)
                     .Select(w => w.Id)
@@ -66,6 +70,7 @@ public sealed class WebhookProcessor(IServiceScopeFactory scopeFactory, ILogger<
                     db.ChangeTracker.Clear();
                     db.Update(evt);
                     evt.Attempts++;
+                    failed.Add(evt.Id);
                     evt.Error = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message;
                     logger.LogError(ex, "Falha ao processar webhook {Id} ({EventType}), tentativa {Attempts}",
                         evt.Id, evt.EventType, evt.Attempts);
