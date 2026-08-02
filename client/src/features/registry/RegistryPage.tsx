@@ -25,6 +25,7 @@ import {
   ErrorState,
   Input,
   Menu,
+  ProgressCircle,
   Select,
   Spinner,
   StatusBadge,
@@ -436,6 +437,7 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
   const [reconnect, setReconnect] = useState<ReconnectTarget | null>(null)
   const [pairingId, setPairingId] = useState<string | null>(null)
   const [transfer, setTransfer] = useState<TransferTarget | null>(null)
+  const [restarting, setRestarting] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Conectar não pede telefone: quem diz o número é o WhatsApp que ler o QR.
@@ -482,13 +484,21 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
     }
   }
 
-  // Reiniciar é inócuo (não desvincula), então vai sem confirmação.
+  // Reiniciar é inócuo (não desvincula), então vai sem confirmação. O socket sobe
+  // rápido demais para dar sinal de que algo aconteceu: o círculo fica no ar por
+  // pelo menos 1s, senão o clique parece não ter feito nada.
   async function handleRestart(id: string) {
     setError(null)
+    setRestarting(id)
     try {
-      await restartNumber.mutateAsync(id)
+      await Promise.all([
+        restartNumber.mutateAsync(id),
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ])
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Falha ao reiniciar o número.')
+    } finally {
+      setRestarting(null)
     }
   }
 
@@ -558,12 +568,15 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
                   Desconectar
                 </Button>
               )}
+              {/* O rótulo acessível não muda com o círculo: quem usa leitor de
+                  tela (e o teste) continua achando o mesmo botão. */}
               <Button
                 variant="ghost"
+                aria-label="Reiniciar"
                 onClick={() => handleRestart(n.id)}
-                disabled={restartNumber.isPending}
+                disabled={restarting === n.id}
               >
-                Reiniciar
+                {restarting === n.id ? <ProgressCircle label="Reiniciando" /> : 'Reiniciar'}
               </Button>
               <Menu
                 label={`Mais ações para ${fmtPhone(n.phone)}`}

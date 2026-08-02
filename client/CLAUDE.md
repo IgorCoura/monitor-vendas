@@ -167,7 +167,9 @@ client/src/
 │   │               #   e as ações raras (transferir, ban) num menu "⋯" — com as
 │   │               #   cinco visíveis a linha virava um bloco no celular.
 │   │               #   Desconectar pede confirmação (tira o vendedor do ar);
-│   │               #   reiniciar não desvincula, então vai direto.
+│   │               #   reiniciar não desvincula, então vai direto — com
+│   │               #   ProgressCircle por >=1s, senão o clique parece não ter
+│   │               #   feito nada (o socket sobe rápido demais).
 │   │               #   celular: informar o número gera um CÓDIGO DE PAREAMENTO
 │   │               #   ("Conectar com número de telefone" no WhatsApp). Esse
 │   │               #   número é só o destinatário do código — o cadastro segue

@@ -364,6 +364,18 @@ export function Menu({ label, actions }: { label: string; actions: MenuAction[] 
   )
 }
 
+// Círculo de progresso do tamanho de uma linha de texto, para dentro de botão.
+// O `Spinner` abaixo é outra coisa: ocupa a área toda enquanto a página carrega.
+export function ProgressCircle({ label = 'Processando' }: { label?: string }) {
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-edge border-t-primary align-middle"
+    />
+  )
+}
+
 export function Spinner() {
   return <p className="py-8 text-center text-sm text-ink-muted">Carregando…</p>
 }

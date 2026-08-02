@@ -372,6 +372,32 @@ describe('RegistryPage', () => {
     confirmSpy.mockRestore()
   })
 
+  // O socket sobe rápido demais para o clique dar sinal de vida: o círculo de
+  // progresso fica no ar por ~1s e só então o botão volta ao normal.
+  it('mostra o círculo de progresso enquanto reinicia', async () => {
+    const ana = seller('Ana')
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () => HttpResponse.json([activeNumber(ana.id)])),
+      http.post('/api/v1/numbers/n1/restart', () => HttpResponse.json({})),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Reiniciar' }))
+
+    // Some o rótulo, entra o círculo — e o botão fica travado enquanto isso.
+    const spinner = await screen.findByRole('status', { name: 'Reiniciando' })
+    expect(spinner).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reiniciar' })).toBeDisabled()
+
+    // Passado o tempo, volta ao normal mesmo com a resposta tendo chegado antes.
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByRole('button', { name: 'Reiniciar' })).toBeEnabled()
+  })
+
   // Número que não está conectado não tem o que desconectar: o botão nem aparece.
   it('não oferece desconectar em número já desconectado', async () => {
     const ana = seller('Ana')
