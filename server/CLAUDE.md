@@ -150,9 +150,9 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   | Situação | Ação |
   |---|---|
   | Livre | cria o `WhatsappNumber`; a instância nova fica |
-  | Já **conectado** | instância nova apagada; erro com o nome do dono |
-  | Já existe, **mesmo vendedor**, desconectado | instância nova apagada; avisa que já existe e manda usar "Reconectar" — **nada é apagado** |
-  | Já existe, **outro vendedor** | `AwaitingConfirmation`; confirmar transfere |
+  | Já **conectado** em outro vendedor | `AwaitingConfirmation`; a tela avisa que está conectado lá e confirmar **desliga o aparelho de lá** (a instância antiga é apagada) |
+  | Já existe, **mesmo vendedor** | instância nova apagada; avisa que já existe e manda usar "Reconectar" — **nada é apagado** |
+  | Já existe, **outro vendedor** (conectado ou não) | `AwaitingConfirmation`; confirmar transfere |
   | Já existe **banido** | idem, com aviso do ban; confirmar reativa |
 
 - **O registro é reaproveitado, nunca duplicado**: na transferência, o
@@ -200,7 +200,8 @@ fechado.
   foram dele e produziram dado no período.
 - **Downtime, uptime e ban ficam com o dono vigente** — descrevem o canal, não o
   atendimento. Rateá-los contaria o mesmo ban duas vezes.
-- **`POST /numbers/{id}/transfer`** troca o dono a partir de agora; a contagem de
+- **`POST /numbers/{id}/transfer`** troca o dono a partir de agora (botão
+  "Transferir" ao lado do ban, com a lista de vendedores); a contagem de
   bans (`CountBanTransitions`) segue contando as transições **do período**, então
   o ban de julho continua com quem era dono em julho e some das contagens futuras
   quando o número volta ou muda de mãos.
@@ -667,7 +668,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 420 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 421 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -733,7 +734,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (420 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (421 testes): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

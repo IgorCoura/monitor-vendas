@@ -11,10 +11,11 @@ import {
   useRequestPairingCode,
   useSellers,
   useStartPairing,
+  useTransferNumber,
   useUpdateSeller,
 } from '../../api/queries'
 import type { QrCodeDto, SellerResponse } from '../../api/types'
-import { Button, Card, Dialog, EmptyState, ErrorState, Input, Spinner, StatusBadge } from '../../components/ui'
+import { Button, Card, Dialog, EmptyState, ErrorState, Input, Select, Spinner, StatusBadge } from '../../components/ui'
 import { ApiError } from '../../api/client'
 import { fmtPhone } from '../../lib/format'
 
@@ -125,6 +126,89 @@ function QrDialog({ target, onClose }: { target: ReconnectTarget | null; onClose
           </>
         )}
         {codeError && <p className="mt-2 text-xs text-danger">{codeError}</p>}
+      </div>
+    </Dialog>
+  )
+}
+
+type TransferTarget = { numberId: string; phone: string; sellerId: string }
+
+// Transferir um número entre vendedores. O passado NÃO se move: o histórico
+// carimbado continua com quem atendeu, e o novo dono responde daqui para frente.
+function TransferDialog({
+  target,
+  onClose,
+}: {
+  target: TransferTarget | null
+  onClose: () => void
+}) {
+  const { data: sellers } = useSellers()
+  const transfer = useTransferNumber()
+  const [sellerId, setSellerId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  // O dono atual não é destino possível.
+  const options = (sellers ?? []).filter((s) => s.id !== target?.sellerId)
+
+  function close() {
+    setSellerId('')
+    setError(null)
+    onClose()
+  }
+
+  async function confirm() {
+    if (!target || !sellerId) return
+    setError(null)
+    try {
+      await transfer.mutateAsync({ id: target.numberId, sellerId })
+      close()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Falha ao transferir o número.')
+    }
+  }
+
+  return (
+    <Dialog
+      open={target !== null}
+      onClose={close}
+      title={`Transferir ${target ? fmtPhone(target.phone) : ''}`}
+      footer={
+        <div className="flex justify-end gap-2 max-md:flex-col-reverse">
+          <Button variant="ghost" onClick={close}>
+            Cancelar
+          </Button>
+          <Button onClick={confirm} disabled={!sellerId || transfer.isPending}>
+            Confirmar transferência
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-sm">
+        <p className="text-ink-muted">
+          O número passa a contar para o vendedor escolhido <strong>a partir de agora</strong>. As
+          conversas e mensagens já registradas continuam com o vendedor atual.
+        </p>
+        <label className="block">
+          <span className="text-xs font-medium text-ink-muted">Novo vendedor</span>
+          <Select
+            aria-label="Novo vendedor"
+            className="mt-1"
+            value={sellerId}
+            onChange={(e) => setSellerId(e.target.value)}
+          >
+            <option value="">Selecione…</option>
+            {options.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {s.active ? '' : ' (inativo)'}
+              </option>
+            ))}
+          </Select>
+        </label>
+        {options.length === 0 && (
+          <p className="text-xs text-ink-muted">Não há outro vendedor cadastrado para receber.</p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
       </div>
     </Dialog>
   )
@@ -293,6 +377,12 @@ function PairingDialog({
               {session.currentOwnerName}.
             </p>
           )}
+          {session.currentlyConnected && (
+            <p className="text-danger">
+              Atenção: ele está <strong>conectado agora</strong> em {session.currentOwnerName}.
+              Confirmar desliga o WhatsApp de lá.
+            </p>
+          )}
           {session.requiresBannedConfirmation && (
             <p className="text-danger">
               Atenção: este número está marcado como <strong>banido permanentemente</strong>.
@@ -330,6 +420,7 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
   const [name, setName] = useState(seller.name)
   const [reconnect, setReconnect] = useState<ReconnectTarget | null>(null)
   const [pairingId, setPairingId] = useState<string | null>(null)
+  const [transfer, setTransfer] = useState<TransferTarget | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Conectar não pede telefone: quem diz o número é o WhatsApp que ler o QR.
@@ -420,6 +511,12 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
               <Button variant="ghost" onClick={() => handleConnect(n.id, n.status)}>
                 Reconectar
               </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setTransfer({ numberId: n.id, phone: n.phone, sellerId: seller.id })}
+              >
+                Transferir
+              </Button>
               {n.status !== 'BannedPermanent' && (
                 <Button variant="danger" onClick={() => handleBan(n.id, n.phone)}>
                   Ban permanente
@@ -450,6 +547,7 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}
 
       <QrDialog target={reconnect} onClose={() => setReconnect(null)} />
+      <TransferDialog target={transfer} onClose={() => setTransfer(null)} />
       <PairingDialog
         sessionId={pairingId}
         sellerName={seller.name}

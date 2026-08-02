@@ -100,22 +100,8 @@ public sealed class PairingService(
 
         session.ExistingNumberId = existing.Id;
 
-        // Já conectado: dois cadastros para o mesmo WhatsApp fariam a mesma
-        // conversa contar duas vezes. A tentativa nova é descartada.
-        if (existing.Status == NumberStatus.Active)
-        {
-            var owner = await db.Set<Seller>().AsNoTracking()
-                .Where(s => s.Id == existing.SellerId)
-                .Select(s => s.Name)
-                .FirstOrDefaultAsync(ct) ?? "outro vendedor";
-
-            await FinishAsync(session, PairingStatus.Rejected,
-                $"Este WhatsApp já está conectado no vendedor {owner}.", ct);
-            return;
-        }
-
-        // Mesmo vendedor, desconectado: não é caso de cadastro novo — o número já
-        // existe e tem histórico. Reconectar é pelo botão do próprio número.
+        // Mesmo vendedor: não é caso de cadastro novo nem de transferência — o
+        // número já existe e tem histórico. Reconectar é pelo botão dele.
         if (existing.SellerId == session.SellerId && existing.Status != NumberStatus.BannedPermanent)
         {
             await FinishAsync(session, PairingStatus.Rejected,
@@ -123,8 +109,12 @@ public sealed class PairingService(
             return;
         }
 
-        // Sobrou o que exige decisão humana: transferir de vendedor e/ou reativar
-        // um número dado como perdido.
+        // Sobrou o que exige decisão humana: transferir de outro vendedor
+        // (conectado ou não) e/ou reativar um número dado como perdido. Número
+        // conectado noutro vendedor também é oferecido — o WhatsApp já aceitou o
+        // pareamento aqui, e recusar sem opção deixaria o operador sem saída; a
+        // confirmação apaga a instância antiga, que é o que desliga o aparelho de
+        // lá em vez de deixar as duas recebendo a mesma conversa.
         session.Status = PairingStatus.AwaitingConfirmation;
         session.Error = null;
         await db.SaveChangesAsync(ct);

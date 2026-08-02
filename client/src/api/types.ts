@@ -38,6 +38,8 @@ export interface PairingSessionDto {
   requiresTransfer: boolean
   requiresBannedConfirmation: boolean
   currentOwnerName: string | null
+  // Conectado AGORA no dono atual: transferir desliga o aparelho de lá.
+  currentlyConnected: boolean
   expiresAt: string
   qr: QrCodeDto | null
 }

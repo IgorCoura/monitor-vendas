@@ -270,10 +270,12 @@ public class PairingTests(IntegrationTestWebAppFactory factory) : BaseIntegratio
         Assert.Equal(1, await InDbAsync(db => db.Set<PairingSession>().CountAsync()));
     }
 
-    // Número já conectado em outro vendedor: a tentativa é descartada e a
-    // instância recém-criada, apagada.
+    // Número conectado em OUTRO vendedor também vira decisão de quem opera: avisa
+    // que está conectado lá e oferece a transferência, em vez de recusar sem
+    // saída. Confirmar apaga a instância antiga — sem isso os dois aparelhos
+    // ficariam recebendo a mesma conversa.
     [Fact]
-    public async Task Pairing_WhenNumberIsAlreadyConnected_IsRejected()
+    public async Task Pairing_WhenNumberIsConnectedElsewhere_OffersTheTransfer()
     {
         await SeedSellersAsync();
         await SeedNumberAsync(BrunoId, NumberStatus.Active);
@@ -282,9 +284,39 @@ public class PairingTests(IntegrationTestWebAppFactory factory) : BaseIntegratio
         var instance = SessionInstance(session.Id);
         await ConnectAsync(instance);
 
-        var status = await StatusAsync(session.Id);
-        Assert.Equal("Rejected", status.Status);
-        Assert.Contains("Bruno", status.Error);
+        var pending = await StatusAsync(session.Id);
+        Assert.Equal("AwaitingConfirmation", pending.Status);
+        Assert.True(pending.RequiresTransfer);
+        Assert.True(pending.CurrentlyConnected);
+        Assert.Equal("Bruno", pending.CurrentOwnerName);
+
+        var confirmed = await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/confirm", new { });
+        confirmed.EnsureSuccessStatusCode();
+
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync());
+        Assert.Equal(AnaId, number.SellerId);
+        Assert.Equal(instance, number.InstanceName);
+        Assert.Contains(FakeEvolution.Requests, r =>
+            r.Method == HttpMethod.Delete && r.Path.Contains("mv-antiga", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Recusar mantém tudo como estava: o número segue conectado no dono atual e a
+    // instância da tentativa é apagada.
+    [Fact]
+    public async Task Pairing_WhenTheTransferOfAConnectedNumberIsRefused_KeepsIt()
+    {
+        await SeedSellersAsync();
+        await SeedNumberAsync(BrunoId, NumberStatus.Active);
+
+        var session = await StartAsync(AnaId);
+        var instance = SessionInstance(session.Id);
+        await ConnectAsync(instance);
+        await Client.PostAsJsonAsync($"/api/v1/pairings/{session.Id}/cancel", new { });
+
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync());
+        Assert.Equal(BrunoId, number.SellerId);
+        Assert.Equal("mv-antiga", number.InstanceName);
+        Assert.Equal(NumberStatus.Active, number.Status);
         Assert.Contains(FakeEvolution.Requests, r =>
             r.Method == HttpMethod.Delete && r.Path.Contains(instance, StringComparison.OrdinalIgnoreCase));
     }

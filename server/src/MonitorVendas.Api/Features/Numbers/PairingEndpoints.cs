@@ -17,6 +17,9 @@ public sealed record PairingSessionDto(
     bool RequiresTransfer,
     bool RequiresBannedConfirmation,
     string? CurrentOwnerName,
+    // O número está conectado AGORA no dono atual: transferir desliga o aparelho
+    // de lá, e quem confirma precisa saber disso antes.
+    bool CurrentlyConnected,
     DateTime ExpiresAt,
     QrCodeDto? Qr)
 {
@@ -25,10 +28,11 @@ public sealed record PairingSessionDto(
         QrCodeDto? qr = null,
         bool requiresTransfer = false,
         bool requiresBanned = false,
-        string? currentOwner = null) =>
+        string? currentOwner = null,
+        bool currentlyConnected = false) =>
         new(session.Id, session.SellerId, session.Status.ToString(), session.DetectedPhone,
             session.DetectedProfileName, session.Error, requiresTransfer, requiresBanned,
-            currentOwner, session.ExpiresAt, qr);
+            currentOwner, currentlyConnected, session.ExpiresAt, qr);
 }
 
 // O telefone aqui é só o destinatário do código no WhatsApp — não é cadastro.
@@ -181,7 +185,8 @@ public static class PairingEndpoints
             session,
             requiresTransfer: existing.SellerId != session.SellerId,
             requiresBanned: existing.Status == NumberStatus.BannedPermanent,
-            currentOwner: owner);
+            currentOwner: owner,
+            currentlyConnected: existing.Status == NumberStatus.Active);
     }
 
     private static QrCodeDto? QrOf(PairingSession session) =>

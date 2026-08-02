@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RegistryPage } from './RegistryPage'
 import { renderWithProviders } from '../../test/render'
@@ -19,6 +19,7 @@ function session(overrides: Partial<PairingSessionDto> = {}): PairingSessionDto 
     requiresTransfer: false,
     requiresBannedConfirmation: false,
     currentOwnerName: null,
+    currentlyConnected: false,
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
     qr: { code: 'QRDATA', base64: 'data:image/png;base64,abc123', pairingCode: null },
     ...overrides,
@@ -101,6 +102,65 @@ describe('RegistryPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Confirmar' }))
     await waitFor(() => expect(confirmed).toBe(true))
+  })
+
+  // Número conectado em outro vendedor agora também é oferecido para transferir,
+  // com o aviso de que confirmar desliga o WhatsApp de lá. (Antes era recusado
+  // sem saída.)
+  it('avisa quando o número está conectado em outro vendedor', async () => {
+    await openPairing(session({
+      status: 'AwaitingConfirmation',
+      detectedPhone: '5511912344567',
+      requiresTransfer: true,
+      currentlyConnected: true,
+      currentOwnerName: 'Bruno',
+      qr: null,
+    }))
+
+    expect(await screen.findByText(/conectado agora/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirmar' })).toBeInTheDocument()
+  })
+
+  // Transferir um número entre vendedores é decisão de quem opera: escolhe o
+  // destino numa lista e confirma. O dono atual não entra na lista.
+  it('transfere o número para outro vendedor', async () => {
+    const ana = seller('Ana')
+    const bruno = seller('Bruno')
+    let transferredTo: string | null = null
+
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana, bruno])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () =>
+        HttpResponse.json([
+          {
+            id: 'n1',
+            sellerId: ana.id,
+            phone: '5511968608425',
+            instanceName: 'mv-1',
+            status: 'Active',
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      ),
+      http.get(`/api/v1/sellers/${bruno.id}/numbers`, () => HttpResponse.json([])),
+      http.post('/api/v1/numbers/n1/transfer', async ({ request }) => {
+        transferredTo = ((await request.json()) as { sellerId: string }).sellerId
+        return HttpResponse.json({})
+      }),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByRole('button', { name: 'Transferir' }))[0])
+
+    const select = await screen.findByLabelText('Novo vendedor')
+    // Só o outro vendedor é destino possível.
+    expect(within(select).queryByRole('option', { name: 'Ana' })).not.toBeInTheDocument()
+
+    await user.selectOptions(select, bruno.id)
+    await user.click(screen.getByRole('button', { name: 'Confirmar transferência' }))
+
+    await waitFor(() => expect(transferredTo).toBe(bruno.id))
   })
 
   // Número banido pede o aviso extra: reativar por engano apagaria a decisão de

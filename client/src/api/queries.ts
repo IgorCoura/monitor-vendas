@@ -295,6 +295,16 @@ export function useCancelPairing() {
   })
 }
 
+export function useTransferNumber() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sellerId }: { id: string; sellerId: string }) =>
+      api.numbers.transfer(id, sellerId),
+    // O número sai de uma lista e entra na outra: as duas precisam ser refeitas.
+    onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
+  })
+}
+
 export function useBanPermanent() {
   const client = useQueryClient()
   return useMutation({
