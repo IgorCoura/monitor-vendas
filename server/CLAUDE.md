@@ -102,8 +102,12 @@ vendedor.
    consome a fila e despacha por `IWebhookEventHandler` (1 por tipo):
    `MessageUpsertHandler` (Contact/Conversation/Message + janela 15d),
    `MessageUpdateHandler` (acks entregue/lida), `ConnectionUpdateHandler`
-   (status + `number_status_events`), `LabelsEditHandler`/`LabelsAssociationHandler`
-   (venda). Falha incrementa `Attempts` (máx. 5) sem travar a fila, e o evento é
+   (status + `number_status_events`),
+   `InstanceRemovedHandler`/`InstanceLogoutHandler` (`REMOVE_INSTANCE`/
+   `LOGOUT_INSTANCE` — instância apagada/deslogada do lado da Evolution **não
+   gera `connection.update`**; sem eles o número ficava "conectado" no painel
+   sem instância — só o `Active` é rebaixado, ban não se desfaz),
+   `LabelsEditHandler`/`LabelsAssociationHandler` (venda). Falha incrementa `Attempts` (máx. 5) sem travar a fila, e o evento é
    tentado **uma vez por passada** — o laço repescava o que acabara de falhar e
    queimava as 5 tentativas em sequência, sem intervalo (mesmo bug que já tinha
    sido corrigido no `ContactShareSender`; regressão em `WebhookProcessorTests`).
@@ -194,6 +198,17 @@ com outro, e o histórico do WhatsApp errado entrava no vendedor errado.
   sessão sem sinal de vida tem a instância apagada e a vaga liberada. O intervalo
   precisa ser bem menor que o prazo, senão a vaga fica presa por até um ciclo
   inteiro depois de vencida.
+- **A faxina disputa a sessão com o webhook que a completa** — e essa corrida
+  criava o **número fantasma** ("conectado" no painel, instância inexistente na
+  Evolution): a faxina, com cópia velha da sessão, cancelava e apagava a
+  instância que o número recém-conectado tinha acabado de receber. Três defesas
+  (regressões em `PairingRaceTests`): **token de concorrência `xmin`** em
+  `PairingSession` (última escrita não vence mais em silêncio — o
+  `DbUpdateConcurrencyException` é esperado e tratado na faxina e no
+  `ConfirmAsync`, que devolve 409 amigável); a faxina **relê cada sessão em
+  escopo próprio** imediatamente antes de cancelar (a lista envelhece enquanto
+  deletes anteriores rodam); e `FinishAsync` **nunca apaga instância que já
+  pertence a um `WhatsappNumber`** — última linha de defesa.
 - **Repareamento divergente**: instância **já cadastrada** que conecta com `wuid`
   diferente vira `NumberStatus.WrongNumber`, com `logout` imediato. Os handlers
   de mensagem, ack e etiqueta descartam tudo de número nesse estado.
@@ -232,6 +247,23 @@ não uma janela fixa. Implementado em 2026-07-31.
 - `LastReconciledAt` é o piso da varredura; `LookbackHours` vale só no primeiro
   ciclo de um número (quando a marca ainda é nula). `MaxLookbackHours` (72 h) é
   o teto: número parado há semanas não puxa o histórico inteiro numa tacada.
+- **Instância inexistente (404) é RESPOSTA, não falha** (`InstanceState.Missing`
+  no `EvolutionApiClient`): número `Active` cuja instância sumiu da Evolution
+  (restart sem persistência, `DEL_INSTANCE`, exclusão manual — nada disso gera
+  webhook `connection.update`) recebe um `close` sintético e vira `Disconnected`,
+  e a marca d'água anda para o aviso não repetir. Antes o 404 caía no mesmo
+  `catch` de "Evolution fora do ar" e o **número fantasma** ficava "conectado"
+  para sempre, com reiniciar/reconectar dando erro de comunicação (regressões em
+  `GhostNumberTests`). `POST /numbers/{id}/connect` com instância sumida
+  **recria a instância** (nome novo, webhook, cadastro repontado) em vez de
+  devolver 502 — reconectar é o reparo.
+- **Varredura de órfãs** no mesmo ciclo (`SweepOrphanInstancesAsync`): instância
+  `mv-*` na Evolution sem número e sem sessão de pareamento viva é apagada — é o
+  retry dos deletes best-effort que falharam. Carência de
+  `Reconciliation:OrphanInstanceGraceMinutes` (10) pela `createdAt`, e prefixo
+  obrigatório porque uma Evolution compartilhada pode ter instâncias de outros
+  sistemas. A lista da Evolution é lida **antes** das referências do banco:
+  pareamento iniciado no meio tempo já tem sessão gravada e é poupado.
 - **A marca só avança quando a Evolution respondeu.** Avançá-la numa falha
   declararia varrido um trecho que ninguém leu, e o buraco viraria permanente.
   Por isso ela é gravada **dentro** do `try`, e o `catch (HttpRequestException)`
@@ -681,7 +713,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 429 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 443 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -705,7 +737,8 @@ server/
   bloco `ContactShare` (ver seção do envio);
   `Evolution:BaseUrl` (barra final!) e `ApiKey`;
   `Webhook:Secret`/`PublicBaseUrl`/`ProcessorEnabled`/`ProcessorIntervalSeconds`;
-  `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`/`MaxLookbackHours`;
+  `Reconciliation:Enabled`/`IntervalMinutes`/`LookbackHours`/`MaxLookbackHours`/
+  `OrphanInstanceGraceMinutes`;
   bloco `Metrics`
   (timezone, horas úteis seg–sex, sábado
   `SaturdayEnabled`/`SaturdayStartHour`/`SaturdayEndHour`, etiqueta de venda,
@@ -747,7 +780,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (429 testes): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (429 testes; 443 desde 2026-08-03): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

@@ -13,6 +13,11 @@ public sealed class WebhookOptions
         // O QR do pareamento vence em segundos e a Evolution manda o novo por
         // aqui; sem assinar, a tela serviria um código já recusado pelo WhatsApp.
         "QRCODE_UPDATED",
+        // Instância apagada ou deslogada do lado da Evolution (DEL_INSTANCE,
+        // exclusão manual) NÃO gera connection.update: sem estes dois, o número
+        // ficava "conectado" no painel sem instância nenhuma por trás.
+        "REMOVE_INSTANCE",
+        "LOGOUT_INSTANCE",
         "LABELS_EDIT",
         "LABELS_ASSOCIATION"
     ];

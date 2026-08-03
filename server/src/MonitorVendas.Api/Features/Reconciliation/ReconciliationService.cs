@@ -20,6 +20,10 @@ public sealed class ReconciliationOptions
     // Teto da marca d'água: número parado há semanas não faz a volta puxar o
     // histórico inteiro da Evolution numa tacada.
     public int MaxLookbackHours { get; set; } = 72;
+
+    // Carência antes de apagar instância órfã na Evolution: uma instância recém-
+    // criada pode ser de um pareamento que ainda nem gravou a sessão.
+    public int OrphanInstanceGraceMinutes { get; set; } = 10;
 }
 
 public interface IReconciliationService
@@ -73,7 +77,31 @@ public sealed class ReconciliationService(
 
             try
             {
-                inserted += await ReconcileConnectionStateAsync(number, db, evolution, ct);
+                var state = await evolution.GetConnectionStateAsync(number.InstanceName, ct);
+
+                // A instância sumiu da Evolution (restart sem persistência,
+                // DEL_INSTANCE, exclusão manual). Isso não gera webhook nenhum, e
+                // era o que deixava número fantasma "conectado" para sempre: o 404
+                // caía no mesmo catch de "Evolution fora do ar" e nada mudava.
+                if (state.Missing)
+                {
+                    if (number.Status == NumberStatus.Active)
+                    {
+                        logger.LogWarning(
+                            "Reconciliação: a instância {Instance} não existe mais na Evolution; o número será marcado como desconectado.",
+                            number.InstanceName);
+                        db.Add(SyntheticConnectionUpdate(number.InstanceName, "close"));
+                        inserted++;
+                    }
+
+                    // Não há o que varrer numa instância inexistente; a marca anda
+                    // para o aviso não repetir a cada ciclo.
+                    number.LastReconciledAt = startedAt;
+                    advanced = true;
+                    continue;
+                }
+
+                inserted += ReconcileConnectionState(number, db, state.State);
                 inserted += await ReconcileMessagesAsync(number, LookbackStartFor(number), db, evolution, ct);
 
                 // Só avança depois que a Evolution respondeu às duas chamadas: marca
@@ -86,6 +114,8 @@ public sealed class ReconciliationService(
                 logger.LogWarning(ex, "Reconciliação: Evolution inacessível para {Instance}.", number.InstanceName);
             }
         }
+
+        await SweepOrphanInstancesAsync(db, evolution, ct);
 
         if (inserted > 0 || advanced)
         {
@@ -114,10 +144,9 @@ public sealed class ReconciliationService(
         return start < floor ? floor : start;
     }
 
-    private static async Task<int> ReconcileConnectionStateAsync(
-        WhatsappNumber number, AppDbContext db, EvolutionApiClient evolution, CancellationToken ct)
+    private static int ReconcileConnectionState(WhatsappNumber number, AppDbContext db, string? rawState)
     {
-        var state = (await evolution.GetConnectionStateAsync(number.InstanceName, ct))?.ToLowerInvariant();
+        var state = rawState?.ToLowerInvariant();
         if (state is not ("open" or "close" or "connecting"))
             return 0;
 
@@ -126,17 +155,71 @@ public sealed class ReconciliationService(
         if (!mismatch)
             return 0;
 
-        var synthetic = state == "open" ? "open" : "close";
-        db.Add(new WebhookEvent
-        {
-            InstanceName = number.InstanceName,
-            EventType = "CONNECTION_UPDATE",
-            Payload = """{"event":"connection.update","instance":"__I__","data":{"state":"__S__"}}"""
-                .Replace("__I__", number.InstanceName)
-                .Replace("__S__", synthetic),
-            ReceivedAt = DateTime.UtcNow
-        });
+        db.Add(SyntheticConnectionUpdate(number.InstanceName, state == "open" ? "open" : "close"));
         return 1;
+    }
+
+    private static WebhookEvent SyntheticConnectionUpdate(string instanceName, string state) => new()
+    {
+        InstanceName = instanceName,
+        EventType = "CONNECTION_UPDATE",
+        Payload = """{"event":"connection.update","instance":"__I__","data":{"state":"__S__"}}"""
+            .Replace("__I__", instanceName)
+            .Replace("__S__", state),
+        ReceivedAt = DateTime.UtcNow
+    };
+
+    // A outra direção do fantasma: instância viva na Evolution sem dono aqui —
+    // sobra de um delete best-effort que falhou (sessão de pareamento encerrada,
+    // transferência). Ela fica emitindo webhook sem destino e ocupando a Evolution;
+    // esta varredura é o retry que aquele delete não tem.
+    private async Task SweepOrphanInstancesAsync(AppDbContext db, EvolutionApiClient evolution, CancellationToken ct)
+    {
+        IReadOnlyList<EvolutionApiClient.InstanceInfo> instances;
+        try
+        {
+            instances = await evolution.FetchInstancesAsync(ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(ex, "Reconciliação: não foi possível listar as instâncias da Evolution.");
+            return;
+        }
+
+        if (instances.Count == 0)
+            return;
+
+        // Carregado DEPOIS da lista: um pareamento iniciado no meio tempo já tem
+        // sessão gravada aqui e é poupado; instância criada depois da lista nem
+        // aparece nela.
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        referenced.UnionWith(await db.Set<WhatsappNumber>().AsNoTracking()
+            .Select(n => n.InstanceName).ToListAsync(ct));
+        referenced.UnionWith(await db.Set<PairingSession>().AsNoTracking()
+            .Where(s => s.Active == true).Select(s => s.InstanceName).ToListAsync(ct));
+
+        var cutoff = DateTime.UtcNow.AddMinutes(-Math.Max(1, options.Value.OrphanInstanceGraceMinutes));
+
+        foreach (var instance in instances)
+        {
+            // Só o nosso prefixo: uma Evolution compartilhada pode ter instâncias
+            // de outros sistemas, e essas não são nossas para apagar.
+            if (!instance.Name.StartsWith("mv-", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (referenced.Contains(instance.Name))
+                continue;
+
+            // Sem data de criação não dá para aplicar a carência: melhor deixar
+            // para um ciclo futuro do que apagar algo recém-nascido.
+            if (instance.CreatedAt is not { } createdAt || createdAt > cutoff)
+                continue;
+
+            if (await evolution.DeleteInstanceAsync(instance.Name, ct))
+                logger.LogInformation("Reconciliação: instância órfã {Instance} removida da Evolution.", instance.Name);
+            else
+                logger.LogWarning("Reconciliação: não foi possível remover a instância órfã {Instance}.", instance.Name);
+        }
     }
 
     private static async Task<int> ReconcileMessagesAsync(

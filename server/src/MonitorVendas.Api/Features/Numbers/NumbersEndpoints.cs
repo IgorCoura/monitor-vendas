@@ -97,6 +97,7 @@ public static class NumbersEndpoints
             bool? confirmBanned,
             AppDbContext db,
             EvolutionApiClient evolution,
+            IOptions<WebhookOptions> webhookOptions,
             CancellationToken ct) =>
         {
             var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
@@ -119,6 +120,34 @@ public static class NumbersEndpoints
                 // sai de instância recém-criada — é o /pairing-code abaixo.
                 var qr = await evolution.ConnectAsync(number.InstanceName, cancellationToken: ct);
                 return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, null));
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // A instância sumiu da Evolution (número fantasma): reconectar É o
+                // caminho de reparo, então em vez de devolver "falha de
+                // comunicação", uma instância nova é criada e o cadastro repontado
+                // — o mesmo desenho do /pairing-code (nome novo: recriar com o
+                // mesmo nome dá corrida na Evolution e volta sem QR).
+                var instanceName = $"mv-{Guid.NewGuid():N}"[..20];
+                try
+                {
+                    var created = await evolution.CreateInstanceAsync(instanceName, phone: null, ct);
+                    await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+
+                    await db.Set<WhatsappNumber>()
+                        .Where(n => n.Id == id)
+                        .ExecuteUpdateAsync(s => s.SetProperty(n => n.InstanceName, instanceName), ct);
+
+                    var qr = created is { Code: not null } or { Base64: not null }
+                        ? new EvolutionApiClient.QrCode(created.Code, created.Base64, null)
+                        : await evolution.ConnectAsync(instanceName, cancellationToken: ct);
+
+                    return Results.Ok(new QrCodeDto(qr.Code, qr.Base64, null));
+                }
+                catch (HttpRequestException)
+                {
+                    return Results.Problem(title: "Falha ao comunicar com a Evolution API.", statusCode: StatusCodes.Status502BadGateway);
+                }
             }
             catch (HttpRequestException)
             {
