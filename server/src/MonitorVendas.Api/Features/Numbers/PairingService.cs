@@ -120,8 +120,23 @@ public sealed class PairingService(
         await db.SaveChangesAsync(ct);
     }
 
-    // Confirmação do operador para os casos de transferência/reativação.
+    // Confirmação do operador para os casos de transferência/reativação. A
+    // exceção de concorrência aqui é a faxina cancelando a sessão no mesmo
+    // instante: o clique perde, e nada é aplicado pela metade.
     public async Task<PairingResult> ConfirmAsync(PairingSession session, CancellationToken ct)
+    {
+        try
+        {
+            return await ConfirmCoreAsync(session, ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.ChangeTracker.Clear();
+            return new PairingResult(null, "A sessão expirou enquanto a confirmação era processada. Tente conectar de novo.", Conflict: true);
+        }
+    }
+
+    private async Task<PairingResult> ConfirmCoreAsync(PairingSession session, CancellationToken ct)
     {
         if (session.Status != PairingStatus.AwaitingConfirmation || session.ExistingNumberId is not { } numberId)
             return new PairingResult(null, "Esta sessão não está esperando confirmação.");
@@ -292,6 +307,18 @@ public sealed class PairingService(
 
         await db.SaveChangesAsync(ct);
 
+        // Última linha de defesa contra o número fantasma: se a instância desta
+        // sessão já pertence a um número (o pareamento completou por outra via no
+        // meio tempo), apagá-la deixaria um cadastro "conectado" sem instância.
+        var owned = await db.Set<WhatsappNumber>().AnyAsync(n => n.InstanceName == session.InstanceName, ct);
+        if (owned)
+        {
+            logger.LogWarning(
+                "Instância {Instance} não foi removida ao encerrar a sessão: já pertence a um número cadastrado.",
+                session.InstanceName);
+            return;
+        }
+
         if (!await evolution.DeleteInstanceAsync(session.InstanceName, ct))
             logger.LogWarning("Instância {Instance} da sessão de pareamento não pôde ser removida.", session.InstanceName);
     }
@@ -313,18 +340,44 @@ public sealed class PairingCleanupService(
         {
             try
             {
-                using var scope = scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var pairing = scope.ServiceProvider.GetRequiredService<PairingService>();
-
-                var expired = await db.Set<PairingSession>()
-                    .Where(s => s.Active == true && s.ExpiresAt < DateTime.UtcNow)
-                    .ToListAsync(stoppingToken);
-
-                foreach (var session in expired)
+                List<Guid> expired;
+                using (var scope = scopeFactory.CreateScope())
                 {
-                    await pairing.CancelAsync(session, "A tela parou de responder; a conexão foi cancelada.", stoppingToken);
-                    logger.LogInformation("Sessão de pareamento {Id} ficou sem sinal de vida e foi encerrada.", session.Id);
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    expired = await db.Set<PairingSession>()
+                        .Where(s => s.Active == true && s.ExpiresAt < DateTime.UtcNow)
+                        .Select(s => s.Id)
+                        .ToListAsync(stoppingToken);
+                }
+
+                foreach (var id in expired)
+                {
+                    // Escopo próprio e releitura imediatamente antes de cancelar: a
+                    // lista envelhece enquanto sessões anteriores são canceladas
+                    // (cada delete na Evolution pode demorar), e cancelar em cima
+                    // de cópia velha apagava a instância de um número que acabara
+                    // de conectar — o número fantasma.
+                    using var scope = scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var pairing = scope.ServiceProvider.GetRequiredService<PairingService>();
+
+                    var session = await db.Set<PairingSession>()
+                        .FirstOrDefaultAsync(s => s.Id == id && s.Active == true && s.ExpiresAt < DateTime.UtcNow, stoppingToken);
+                    if (session is null)
+                        continue;
+
+                    try
+                    {
+                        await pairing.CancelAsync(session, "A tela parou de responder; a conexão foi cancelada.", stoppingToken);
+                        logger.LogInformation("Sessão de pareamento {Id} ficou sem sinal de vida e foi encerrada.", session.Id);
+                    }
+                    catch (DbUpdateConcurrencyException)
+                    {
+                        // A sessão foi resolvida entre a releitura e o cancelamento
+                        // (webhook completou, operador confirmou): o cancelamento
+                        // perde de propósito e nada é apagado.
+                        logger.LogInformation("Sessão de pareamento {Id} foi resolvida durante a faxina; cancelamento descartado.", id);
+                    }
                 }
             }
             catch (OperationCanceledException)

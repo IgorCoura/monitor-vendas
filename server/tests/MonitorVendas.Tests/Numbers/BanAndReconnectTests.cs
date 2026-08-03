@@ -32,6 +32,33 @@ public class BanAndReconnectTests(IntegrationTestWebAppFactory factory) : BaseIn
         });
     }
 
+    // Regressão do número fantasma: reconectar um número cuja instância sumiu da
+    // Evolution respondia "falha de comunicação" (404 disfarçado). Reconectar É o
+    // reparo — a instância é recriada com nome novo e o cadastro repontado.
+    [Fact]
+    public async Task Connect_WhenTheInstanceIsMissing_RecreatesItAndReturnsTheQr()
+    {
+        await SeedAsync(NumberStatus.Disconnected);
+        FakeEvolution.When(HttpMethod.Get, $"/instance/connect/{Instance}",
+            """{"status":404,"error":"Not Found","response":{"message":["The instance does not exist"]}}""",
+            HttpStatusCode.NotFound);
+        FakeEvolution.When(HttpMethod.Post, "/instance/create",
+            """{"instance":{"instanceName":"nova"},"qrcode":{"code":"QR-NOVO","base64":"data:image/png;base64,novo"}}""");
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/connect", null);
+
+        response.EnsureSuccessStatusCode();
+        var qr = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal("QR-NOVO", qr.GetProperty("code").GetString());
+
+        // O cadastro aponta para a instância nova, com o webhook configurado nela.
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync(n => n.Id == NumberId));
+        Assert.NotEqual(Instance, number.InstanceName);
+        Assert.StartsWith("mv-", number.InstanceName);
+        Assert.Contains(FakeEvolution.Requests, r =>
+            r.Method == HttpMethod.Post && r.Path.StartsWith($"/webhook/set/{number.InstanceName}", StringComparison.OrdinalIgnoreCase));
+    }
+
     // Regressão (01/08/2026): declarar ban permanente só mudava o status no banco.
     // A instância seguia conectada na Evolution, recebendo mensagem e contando
     // uptime de um número dado como perdido.
