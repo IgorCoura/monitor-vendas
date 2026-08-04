@@ -95,8 +95,12 @@ public sealed class ConnectionUpdateHandler(
 
             // Volta ao dia 1 da curva de aquecimento: retomar o volume de antes
             // é o caminho mais curto para o próximo ban, e a escalada seguinte é
-            // mais longa que a anterior.
+            // mais longa que a anterior. A pausa e a conclusão manual são
+            // apagadas junto — um número liberado à mão que toma ban voltaria
+            // maduro e dispararia no volume cheio, que é o oposto do necessário.
             number.WarmupStartedAt = occurredAt;
+            number.WarmupPausedAt = null;
+            number.WarmupCompletedAt = null;
         }
         else if (state == "open")
         {

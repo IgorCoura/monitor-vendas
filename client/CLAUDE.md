@@ -65,10 +65,16 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
 - **Como divergir**: classe `md:` quando é só espaçamento/direção; `isMobile ?`
   quando o componente é outro (tabela × cards, botões × `<select>`). Nunca
   duplicar a lógica da página.
-- **Navegação**: sidebar some abaixo de `md` e entra a `components/mobile/BottomNav`
-  (barra inferior fixa, as mesmas 6 rotas, com rótulos curtos — "Painel", "IA").
-  O conteúdo reserva a altura dela com a classe `pb-nav`. **Rota nova entra nos
-  dois lugares**: `links` do `Layout` e `items` do `BottomNav`.
+- **Navegação**: `components/navigation.tsx` é a **fonte única** das rotas (`to`,
+  `label` da sidebar, `mobileLabel`, ícone e `primary`). Rota nova entra **só
+  ali** e aparece nos dois lugares — antes eram dois arrays independentes e era
+  fácil esquecer um. A sidebar some abaixo de `md` e entra a
+  `components/mobile/BottomNav`: as 4 rotas `primary` (Painel, Cadastros,
+  Contatos, IA) mais um "⋯ Mais" que abre as demais numa folha de baixo. Com
+  todas na barra cada aba caía para ~56px e os rótulos truncavam; com quatro
+  sobram ~78px. O "⋯" **acende quando a rota atual está dentro dele**, senão a
+  barra ficaria toda apagada e o usuário não saberia onde está. O conteúdo
+  reserva a altura da barra com a classe `pb-nav`.
 - **`Menu` ("⋯")** para ação rara/destrutiva fora da linha. Fecha ao clicar
   fora, rolar ou apertar Escape — mas **clique dentro dele não fecha no
   `pointerdown`**: fechar ali desmonta o item antes de o `click` chegar, e a
@@ -190,6 +196,13 @@ client/src/
 │   │               #   já cadastrado o código sai só no clique em "Gerar código"
 │   │               #   (recria a instância na Evolution; vir junto do QR daria um
 │   │               #   código de sessão vencida, que o WhatsApp recusa).
+│   ├── warmup/     # WarmupPage (rota /warmup): em que dia da curva cada número
+│   │               #   está, teto do dia e quanto já usou ("18/50"), com quem
+│   │               #   bateu o teto destacado — é a resposta para "por que este
+│   │               #   número parou de enviar?". Ações no "⋯": reiniciar curva,
+│   │               #   pausar/retomar e marcar como aquecido (confirma antes:
+│   │               #   é a única que afrouxa proteção). A curva configurada
+│   │               #   aparece sob demanda, para o teto não parecer arbitrário.
 │   ├── proxies/    # ProxiesPage (rota /proxies): tela SÓ de monitoramento — a
 │   │               #   compra é no portal do fornecedor. Ocupação (números/capacidade),
 │   │               #   vendedores distintos e bans por proxy no período; expandir mostra

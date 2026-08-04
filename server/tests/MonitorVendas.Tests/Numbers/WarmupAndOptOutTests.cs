@@ -156,6 +156,82 @@ public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal(0, await InDbAsync(db => db.Set<ContactOptOut>().CountAsync()));
     }
 
+    // A tela lê dia da curva, teto e consumo do dia — e o consumo conta TUDO que
+    // saiu pelo número, inclusive o que o vendedor mandou pelo celular.
+    [Fact]
+    public async Task Overview_ReportsTheDayAndTodaysUsage()
+    {
+        await SeedAsync();
+        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/restart", null);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        var number = overview.GetProperty("numbers").EnumerateArray().Single();
+        Assert.Equal("Warming", number.GetProperty("state").GetString());
+        Assert.Equal(1, number.GetProperty("day").GetInt32());
+        Assert.Equal(30, number.GetProperty("totalDays").GetInt32());
+        Assert.Equal(20, number.GetProperty("messagesPerDay").GetInt32());
+        Assert.True(overview.GetProperty("curve").GetArrayLength() > 0);
+    }
+
+    // Pausar congela o dia; retomar devolve o número ao MESMO dia em que parou,
+    // em vez de tê-lo envelhecido de graça.
+    [Fact]
+    public async Task PauseAndResume_PreserveTheCurveDay()
+    {
+        await SeedAsync();
+        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/restart", null);
+
+        var paused = await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/pause", null);
+        paused.EnsureSuccessStatusCode();
+
+        var afterPause = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+        Assert.Equal("Paused", afterPause.GetProperty("numbers").EnumerateArray().Single().GetProperty("state").GetString());
+
+        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/resume", null);
+
+        var afterResume = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+        var number = afterResume.GetProperty("numbers").EnumerateArray().Single();
+        Assert.Equal("Warming", number.GetProperty("state").GetString());
+        Assert.Equal(1, number.GetProperty("day").GetInt32());
+    }
+
+    // Concluir à mão libera o teto: é a única ação que afrouxa a proteção.
+    [Fact]
+    public async Task Complete_ReleasesTheCeiling()
+    {
+        await SeedAsync();
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/complete", null);
+
+        response.EnsureSuccessStatusCode();
+        var number = (await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup"))
+            .GetProperty("numbers").EnumerateArray().Single();
+        Assert.Equal("Mature", number.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, number.GetProperty("messagesPerDay").ValueKind);
+    }
+
+    // Regressão: o ban reinicia a curva mesmo em número pausado ou concluído —
+    // é o caso que alguém vai quebrar no futuro ao mexer no handler.
+    [Fact]
+    public async Task Ban_RestartsTheCurveEvenWhenPausedOrCompleted()
+    {
+        await SeedAsync();
+        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/complete", null);
+        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/pause", null);
+
+        await PostWebhookAsync($$"""
+            { "event": "connection.update", "instance": "{{Instance}}",
+              "data": { "state": "close", "statusReason": 403 }, "date_time": "2026-07-25T12:00:00Z" }
+            """);
+        await ProcessAsync();
+
+        var number = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().SingleAsync());
+        Assert.Equal(new DateTime(2026, 7, 25, 12, 0, 0, DateTimeKind.Utc), number.WarmupStartedAt);
+        Assert.Null(number.WarmupCompletedAt);
+        Assert.Null(number.WarmupPausedAt);
+    }
+
     // As settings da instância são aplicadas no pareamento: readMessages ligado
     // (marcar como lido é sinal humano) e alwaysOnline desligado (presença 24/7
     // é assinatura de servidor).

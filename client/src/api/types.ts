@@ -29,6 +29,43 @@ export interface NumberResponse {
   sendingPauseReason: string | null
 }
 
+// Aquecimento: teto progressivo sobre o tráfego real do vendedor. O sistema não
+// envia nada por conta própria — só limita.
+export type WarmupState = 'NoData' | 'Warming' | 'Paused' | 'Mature'
+
+export interface WarmupNumberDto {
+  numberId: string
+  phone: string
+  sellerName: string
+  numberStatus: NumberStatus
+  state: WarmupState
+  day: number
+  totalDays: number
+  messagesPerDay: number | null
+  messagesToday: number
+  newContactsPerDay: number
+  newContactsToday: number
+  startedAt: string | null
+  pausedAt: string | null
+  completedAt: string | null
+  atCeiling: boolean
+}
+
+export interface WarmupCurveStepDto {
+  throughDay: number
+  messagesPerDay: number
+  newContactsPerDay: number
+}
+
+export interface WarmupOverviewDto {
+  enabled: boolean
+  warming: number
+  mature: number
+  atCeiling: number
+  curve: WarmupCurveStepDto[]
+  numbers: WarmupNumberDto[]
+}
+
 // Proxies contratados no fornecedor. A senha nunca vem na resposta.
 export type ProxyStatus = 'Active' | 'Paused' | 'Suspect' | 'Expired' | 'Revoked' | 'Failed'
 

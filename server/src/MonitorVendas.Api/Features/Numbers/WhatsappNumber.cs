@@ -28,6 +28,17 @@ public class WhatsappNumber
     // REINICIA a cada ban: número banido volta ao dia 1 da curva, porque voltar
     // ao volume de antes é o caminho mais curto para o próximo ban.
     public DateTime? WarmupStartedAt { get; set; }
+
+    // Congelado neste instante: o dia da curva para de avançar. Vendedor de
+    // férias não deve "envelhecer" o chip sozinho e voltar liberado para um
+    // volume que ele nunca praticou.
+    public DateTime? WarmupPausedAt { get; set; }
+
+    // Declarado maduro à mão. É diferente de `WarmupStartedAt == null`, que
+    // significa "nunca conectou" ou "é anterior a esta feature": sem separar os
+    // dois, a tela não conseguiria distinguir quem nunca aqueceu de quem o
+    // operador liberou, e essas situações pedem conversas diferentes.
+    public DateTime? WarmupCompletedAt { get; set; }
 }
 
 public enum NumberStatus

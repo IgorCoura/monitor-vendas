@@ -2,7 +2,16 @@ namespace MonitorVendas.Api.Features.Numbers.Warmup;
 
 public sealed record WarmupStep(int ThroughDay, int MessagesPerDay, int NewContactsPerDay);
 
-public sealed record WarmupLimits(int Day, int? MessagesPerDay, int NewContactsPerDay)
+public enum WarmupState
+{
+    // Nunca conectou, ou é anterior a esta feature: sem curva para aplicar.
+    NoData = 0,
+    Warming = 1,
+    Paused = 2,
+    Mature = 3,
+}
+
+public sealed record WarmupLimits(int Day, int? MessagesPerDay, int NewContactsPerDay, WarmupState State)
 {
     public bool InWarmup => MessagesPerDay is not null;
 }
@@ -36,21 +45,42 @@ public sealed class WarmupOptions
 // próprias métricas do produto.
 public static class WarmupPolicy
 {
-    public static WarmupLimits LimitsFor(DateTime? warmupStartedAt, DateTime now, WarmupOptions options)
+    public static WarmupLimits LimitsFor(
+        DateTime? warmupStartedAt,
+        DateTime now,
+        WarmupOptions options,
+        DateTime? pausedAt = null,
+        DateTime? completedAt = null)
     {
         // Número sem data de aquecimento é número que nunca conectou: sem
         // histórico, trata-se como maduro para não travar quem já operava antes
         // desta feature existir.
         if (!options.Enabled || warmupStartedAt is not { } start)
-            return new WarmupLimits(0, null, options.MatureNewContactsPerDay);
+            return new WarmupLimits(0, null, options.MatureNewContactsPerDay, WarmupState.NoData);
 
-        // Dia 1 é o próprio dia da primeira conexão.
-        var day = (int)(now.Date - start.Date).TotalDays + 1;
+        // Liberado à mão por quem opera: sai da curva sem esperar os 30 dias.
+        if (completedAt is not null)
+            return new WarmupLimits(DayOf(start, now), null, options.MatureNewContactsPerDay, WarmupState.Mature);
+
+        // Pausado: o relógio para no instante da pausa em vez de continuar
+        // correndo. Manter a função pura — ela só recebe datas — é o que
+        // permite testar a pausa sem banco.
+        var reference = pausedAt ?? now;
+        var day = DayOf(start, reference);
+        var state = pausedAt is null ? WarmupState.Warming : WarmupState.Paused;
 
         foreach (var step in options.Curve.OrderBy(s => s.ThroughDay))
             if (day <= step.ThroughDay)
-                return new WarmupLimits(day, step.MessagesPerDay, step.NewContactsPerDay);
+                return new WarmupLimits(day, step.MessagesPerDay, step.NewContactsPerDay, state);
 
-        return new WarmupLimits(day, null, options.MatureNewContactsPerDay);
+        return new WarmupLimits(day, null, options.MatureNewContactsPerDay, WarmupState.Mature);
     }
+
+    // Total de dias da curva, para a tela desenhar "dia 5 de 30".
+    public static int TotalDays(WarmupOptions options) =>
+        options.Curve.Count == 0 ? 0 : options.Curve.Max(s => s.ThroughDay);
+
+    // Dia 1 é o próprio dia da primeira conexão.
+    private static int DayOf(DateTime start, DateTime reference) =>
+        (int)(reference.Date - start.Date).TotalDays + 1;
 }

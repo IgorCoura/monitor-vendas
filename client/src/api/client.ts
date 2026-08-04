@@ -26,6 +26,7 @@ import type {
   RiskWarning,
   SellerReportDto,
   SellerResponse,
+  WarmupOverviewDto,
 } from './types'
 
 // Relativo por default: o navegador chama a própria origem e o nginx encaminha
@@ -277,6 +278,18 @@ export const api = {
         },
       ),
     shareStatus: (id: string) => request<ContactShareDto>(`/contacts/share/${id}`),
+  },
+  warmup: {
+    overview: () => request<WarmupOverviewDto>('/warmup'),
+    restart: (numberId: string) =>
+      request<NumberResponse>(`/numbers/${numberId}/warmup/restart`, { method: 'POST' }),
+    pause: (numberId: string) =>
+      request<NumberResponse>(`/numbers/${numberId}/warmup/pause`, { method: 'POST' }),
+    resume: (numberId: string) =>
+      request<NumberResponse>(`/numbers/${numberId}/warmup/resume`, { method: 'POST' }),
+    // Única ação que afrouxa proteção: a tela confirma antes.
+    complete: (numberId: string) =>
+      request<NumberResponse>(`/numbers/${numberId}/warmup/complete`, { method: 'POST' }),
   },
   proxies: {
     overview: () => request<ProxyOverviewDto>('/proxies'),

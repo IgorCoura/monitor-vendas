@@ -70,6 +70,36 @@ export function useNumbersHealth() {
   return useQuery({ queryKey: ['numbers', 'health'], queryFn: api.numbers.health })
 }
 
+export function useWarmup() {
+  return useQuery({ queryKey: ['warmup'], queryFn: api.warmup.overview })
+}
+
+// Toda ação de aquecimento muda a lista e o estado do número em Cadastros.
+function useWarmupMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['warmup'] })
+      client.invalidateQueries({ queryKey: ['numbers'] })
+    },
+  })
+}
+
+export function useRestartWarmup() {
+  return useWarmupMutation((numberId: string) => api.warmup.restart(numberId))
+}
+
+export function usePauseWarmup() {
+  return useWarmupMutation(({ id, paused }: { id: string; paused: boolean }) =>
+    paused ? api.warmup.pause(id) : api.warmup.resume(id),
+  )
+}
+
+export function useCompleteWarmup() {
+  return useWarmupMutation((numberId: string) => api.warmup.complete(numberId))
+}
+
 export function useProxies() {
   return useQuery({ queryKey: ['proxies'], queryFn: api.proxies.overview })
 }

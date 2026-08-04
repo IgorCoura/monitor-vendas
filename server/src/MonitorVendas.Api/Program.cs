@@ -7,6 +7,7 @@ using MonitorVendas.Api.Features.Contacts;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
+using MonitorVendas.Api.Features.Numbers.Warmup;
 using MonitorVendas.Api.Features.Outcomes;
 using MonitorVendas.Api.Features.Proxies;
 using MonitorVendas.Api.Integrations.ProxyBr;
@@ -50,6 +51,7 @@ builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(Anti
 builder.Services.Configure<MonitorVendas.Api.Features.Numbers.Warmup.WarmupOptions>(
     builder.Configuration.GetSection(MonitorVendas.Api.Features.Numbers.Warmup.WarmupOptions.Section));
 builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Warmup.WarmupQueries>();
 
 builder.Services.AddProxyBr(builder.Configuration);
 builder.Services.Configure<ProxyOptions>(builder.Configuration.GetSection(ProxyOptions.Section));
@@ -129,6 +131,7 @@ v1.MapAiBudgetEndpoints();
 v1.MapReportExportEndpoints();
 v1.MapAiAnalysisEndpoints();
 v1.MapProxiesEndpoints();
+v1.MapWarmupEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

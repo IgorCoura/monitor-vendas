@@ -65,6 +65,47 @@ public class WarmupPolicyTests
         Assert.False(limits.InWarmup);
     }
 
+    // Pausado, o relógio da curva PARA: o número volta no mesmo dia em que
+    // parou, em vez de envelhecer de graça enquanto o vendedor estava de férias.
+    [Fact]
+    public void WhenPaused_TheDayStopsAdvancing()
+    {
+        var pausedAt = Start.AddDays(4);   // dia 5
+
+        var limits = WarmupPolicy.LimitsFor(Start, Start.AddDays(30), Options, pausedAt: pausedAt);
+
+        Assert.Equal(5, limits.Day);
+        Assert.Equal(50, limits.MessagesPerDay);
+        Assert.Equal(WarmupState.Paused, limits.State);
+    }
+
+    // Concluído à mão, o número sai da curva sem esperar os 30 dias — é a única
+    // ação que afrouxa a proteção.
+    [Fact]
+    public void WhenCompleted_IsMatureRegardlessOfTheDay()
+    {
+        var limits = WarmupPolicy.LimitsFor(Start, Start.AddDays(2), Options, completedAt: Start.AddDays(2));
+
+        Assert.False(limits.InWarmup);
+        Assert.Equal(WarmupState.Mature, limits.State);
+    }
+
+    // Os estados são distinguíveis: nunca conectou é NoData, não "maduro".
+    [Fact]
+    public void WithoutAStartDate_IsNoDataNotMature()
+    {
+        Assert.Equal(WarmupState.NoData, WarmupPolicy.LimitsFor(null, Start, Options).State);
+        Assert.Equal(WarmupState.Warming, WarmupPolicy.LimitsFor(Start, Start, Options).State);
+    }
+
+    // O total de dias sai da própria curva: a tela desenha "dia 5 de 30" sem
+    // repetir o 30 em lugar nenhum.
+    [Fact]
+    public void TotalDays_ComesFromTheCurve()
+    {
+        Assert.Equal(30, WarmupPolicy.TotalDays(Options));
+    }
+
     // A curva vem da config: mudar as faixas não exige recompilar.
     [Fact]
     public void UsesTheConfiguredCurve()

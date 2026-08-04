@@ -206,7 +206,8 @@ public sealed class ContactShareSender(
     private async Task<int> RemainingQuotaAsync(AppDbContext db, WhatsappNumber number, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var limits = WarmupPolicy.LimitsFor(number.WarmupStartedAt, now, warmup.Value);
+        var limits = WarmupPolicy.LimitsFor(
+            number.WarmupStartedAt, now, warmup.Value, number.WarmupPausedAt, number.WarmupCompletedAt);
         var settings = antiBan.Value;
 
         // Zero significa ZERO: uma cota configurada como 0 pausa o envio por

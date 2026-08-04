@@ -199,8 +199,21 @@ portal do fornecedor** — o sistema só lê o catálogo, distribui e aplica.
 
 - **`WarmupPolicy` é puro** e devolve o teto do dia a partir de
   `WhatsappNumber.WarmupStartedAt` (gravado na 1ª conexão) e da curva em config
-  (`Warmup:Curve`). **Ban reinicia a curva no dia 1.** Número sem data é tratado
-  como maduro — travar quem já operava seria punir o histórico existente.
+  (`Warmup:Curve`). **Ban reinicia a curva no dia 1 e apaga pausa e conclusão** —
+  um número liberado à mão que toma ban voltaria maduro e dispararia no volume
+  cheio, o oposto do necessário. Número sem data é `NoData` (nunca conectou ou é
+  anterior à feature), não "maduro": travar quem já operava seria punir o
+  histórico existente.
+- **Pausa e conclusão manual** (`WarmupPausedAt`, `WarmupCompletedAt`): pausado, o
+  relógio para no instante da pausa e retomar empurra `WarmupStartedAt` pelo tempo
+  parado — o número volta no MESMO dia da curva em vez de envelhecer de graça. A
+  função continua pura: recebe as datas, não consulta nada.
+- **`GET /api/v1/warmup`** devolve a lista (dia, teto, consumo do dia, contatos
+  novos) mais a curva configurada. O consumo conta **tudo** que saiu pelo número,
+  inclusive o que o vendedor mandou pelo celular — é assim que o WhatsApp conta, e
+  mostrar só o que o sistema enviou daria uma falsa folga. Ações em
+  `POST /numbers/{id}/warmup/restart|pause|resume|complete`; `complete` é a única
+  que afrouxa proteção e fica registrada em log.
 - **O aquecimento não envia NADA**: é teto sobre o tráfego real do vendedor.
   Tráfego sintético (números do sistema conversando entre si) foi descartado —
   é clique fechada com reciprocidade perfeita e horários correlacionados, o
