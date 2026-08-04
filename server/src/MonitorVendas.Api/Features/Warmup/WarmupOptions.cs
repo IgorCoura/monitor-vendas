@@ -46,8 +46,14 @@ public sealed class WarmupOptions
     public int MaxTurnGapSeconds { get; set; } = 5400;
 
     // Janela de envio. O expediente vem do BusinessHoursCalendar (com feriados);
-    // esta é a cauda da noite, porque colega manda mensagem depois do trabalho.
+    // estas são as bordas — ninguém conversa com colega às 4 da manhã, e à noite
+    // ainda se manda mensagem depois do trabalho.
+    public int MorningFromHour { get; set; } = 7;
     public int EveningUntilHour { get; set; } = 21;
+
+    // Chance de mandar fora do expediente, dentro da janela acima: é a cauda em
+    // que colega ainda escreve, com frequência menor.
+    public double OffHoursChance { get; set; } = 0.35;
 
     // Fim de semana existe, mas bem reduzido.
     public double WeekendFactor { get; set; } = 0.25;

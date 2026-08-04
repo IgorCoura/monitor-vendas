@@ -9,6 +9,7 @@ using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Outcomes;
 using MonitorVendas.Api.Features.Proxies;
+using MonitorVendas.Api.Features.Warmup;
 using MonitorVendas.Api.Integrations.ProxyBr;
 using MonitorVendas.Api.Features.Reconciliation;
 using MonitorVendas.Api.Features.ReportExport;
@@ -52,6 +53,14 @@ builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealt
 builder.Services.Configure<MonitorVendas.Api.Features.Warmup.WarmupOptions>(
     builder.Configuration.GetSection(MonitorVendas.Api.Features.Warmup.WarmupOptions.Section));
 builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupPool, MonitorVendas.Api.Features.Warmup.WarmupPool>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupState, MonitorVendas.Api.Features.Warmup.WarmupState>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Warmup.IWarmupContentGenerator, MonitorVendas.Api.Features.Warmup.WarmupContentGenerator>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.WarmupClock>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Warmup.WarmupQueries>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupScheduler, MonitorVendas.Api.Features.Warmup.WarmupScheduler>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupExecutor, MonitorVendas.Api.Features.Warmup.WarmupExecutor>();
+if (builder.Configuration.GetValue("Warmup:Enabled", true))
+    builder.Services.AddHostedService<MonitorVendas.Api.Features.Warmup.WarmupBackgroundService>();
 
 builder.Services.AddProxyBr(builder.Configuration);
 builder.Services.Configure<ProxyOptions>(builder.Configuration.GetSection(ProxyOptions.Section));
@@ -131,6 +140,7 @@ v1.MapAiBudgetEndpoints();
 v1.MapReportExportEndpoints();
 v1.MapAiAnalysisEndpoints();
 v1.MapProxiesEndpoints();
+v1.MapWarmupEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

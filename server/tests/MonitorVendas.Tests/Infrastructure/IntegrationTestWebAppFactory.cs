@@ -76,6 +76,18 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         // não pelo BackgroundService — determinismo.
         builder.UseSetting("AiJob:Enabled", "false");
 
+        // Aquecimento: o laço fica desligado e os testes chamam
+        // IWarmupScheduler.RunOnceAsync() / IWarmupExecutor.ProcessPendingAsync()
+        // direto. O gate de fim de semana e o de noite são neutralizados — a hora
+        // em que a suíte roda não pode decidir teste.
+        builder.UseSetting("Warmup:Enabled", "false");
+        builder.UseSetting("Warmup:MinTurnGapSeconds", "5");
+        builder.UseSetting("Warmup:MaxTurnGapSeconds", "6");
+        builder.UseSetting("Warmup:WeekendFactor", "1");
+        builder.UseSetting("Warmup:OffHoursChance", "1");
+        builder.UseSetting("Warmup:MorningFromHour", "0");
+        builder.UseSetting("Warmup:EveningUntilHour", "24");
+
         builder.ConfigureTestServices(services =>
         {
             services.AddHttpClient<EvolutionApiClient>((_, http) =>
