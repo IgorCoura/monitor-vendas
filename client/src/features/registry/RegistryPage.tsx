@@ -8,6 +8,7 @@ import {
   useCreateSeller,
   useNumberPairingCode,
   useNumbers,
+  useNumbersHealth,
   usePairingStatus,
   useRequestPairingCode,
   useRestartNumber,
@@ -16,13 +17,14 @@ import {
   useTransferNumber,
   useUpdateSeller,
 } from '../../api/queries'
-import type { QrCodeDto, SellerResponse } from '../../api/types'
+import type { NumberResponse, QrCodeDto, SellerResponse } from '../../api/types'
 import {
   Button,
   Card,
   Dialog,
   EmptyState,
   ErrorState,
+  InfoTip,
   Input,
   Menu,
   Select,
@@ -30,9 +32,45 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { ApiError } from '../../api/client'
-import { fmtPhone } from '../../lib/format'
+import { fmtDateTime, fmtPhone } from '../../lib/format'
+import { healthHelp, healthLevelLabel, healthSignalLabel } from '../../lib/metrics'
+import type { NumberHealthDto } from '../../api/types'
 
-type ReconnectTarget = { numberId: string; confirmBanned: boolean; qr: QrCodeDto }
+// Badge do semáforo de saúde, sempre com rótulo textual (nunca só cor). O "?"
+// lista os sinais que pesaram — a tela diz POR QUE o número está amarelo.
+function HealthBadge({ health }: { health: NumberHealthDto | undefined }) {
+  if (!health || health.level === 'NoData') return null
+
+  const style = {
+    Low: 'bg-ok-soft text-ok',
+    Medium: 'bg-warn-soft text-warn',
+    High: 'bg-danger-soft text-danger',
+    Critical: 'bg-danger text-white',
+  }[health.level]
+
+  const details =
+    health.signals.length === 0
+      ? healthHelp
+      : `${healthHelp} Sinais deste número: ${health.signals
+          .map((s) => `${healthSignalLabel[s.key] ?? s.key}: ${s.value}`)
+          .join('; ')}.`
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${style}`}>
+        {healthLevelLabel[health.level]}
+      </span>
+      <InfoTip text={details} />
+    </span>
+  )
+}
+
+type ReconnectTarget = {
+  numberId: string
+  confirmBanned: boolean
+  confirmCooldown: boolean
+  qr: QrCodeDto
+}
 
 function QrDialog({ target, onClose }: { target: ReconnectTarget | null; onClose: () => void }) {
   const requestCode = useNumberPairingCode()
@@ -62,6 +100,7 @@ function QrDialog({ target, onClose }: { target: ReconnectTarget | null; onClose
       const fresh = await requestCode.mutateAsync({
         id: target.numberId,
         confirmBanned: target.confirmBanned,
+        confirmCooldown: target.confirmCooldown,
       })
       setCode(fresh.pairingCode ?? null)
       if (!fresh.pairingCode) setCodeError('A Evolution não devolveu um código para este número.')
@@ -424,6 +463,8 @@ function PairingDialog({
 
 function SellerCard({ seller }: { seller: SellerResponse }) {
   const { data: numbers, isLoading } = useNumbers(seller.id)
+  // Mesma queryKey em todos os cards: o TanStack Query deduplica a busca.
+  const { data: health } = useNumbersHealth()
   const updateSeller = useUpdateSeller()
   const connectNumber = useConnectNumber()
   const banPermanent = useBanPermanent()
@@ -450,19 +491,27 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
     }
   }
 
-  async function handleConnect(id: string, status: string) {
+  async function handleConnect(n: NumberResponse) {
     setError(null)
 
     // Ban permanente foi decisão de quem opera; reconectar sem confirmar
     // apagaria isso em silêncio.
-    const confirmBanned = status === 'BannedPermanent'
+    const confirmBanned = n.status === 'BannedPermanent'
     if (confirmBanned && !window.confirm(
       'Este número está marcado como banido permanentemente. Deseja mesmo reconectá-lo?',
     )) return
 
+    // Cooldown pós-ban: reconectar durante a punição é o que promove ban
+    // temporário a permanente. O servidor recusa sem esta confirmação.
+    const confirmCooldown = !!n.bannedUntil && new Date(n.bannedUntil) > new Date()
+    if (confirmCooldown && !window.confirm(
+      `Este número levou um ban do WhatsApp. Reconectar antes de ${fmtDateTime(n.bannedUntil)} ` +
+      'pode tornar o ban permanente. Reconectar mesmo assim?',
+    )) return
+
     try {
-      const qr = await connectNumber.mutateAsync({ id, confirmBanned })
-      setReconnect({ numberId: id, confirmBanned, qr })
+      const qr = await connectNumber.mutateAsync({ id: n.id, confirmBanned, confirmCooldown })
+      setReconnect({ numberId: n.id, confirmBanned, confirmCooldown, qr })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Falha ao gerar novo QR.')
     }
@@ -483,15 +532,22 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
     }
   }
 
-  // Reiniciar é inócuo (não desvincula), então vai sem confirmação. O socket sobe
-  // rápido demais para dar sinal de que algo aconteceu: o círculo fica no ar por
-  // pelo menos 1s, senão o clique parece não ter feito nada.
-  async function handleRestart(id: string) {
+  // Reiniciar é inócuo (não desvincula), então vai sem confirmação — exceto
+  // durante o cooldown pós-ban, quando subir o socket de novo é insistir contra
+  // a punição. O socket sobe rápido demais para dar sinal de que algo aconteceu:
+  // o círculo fica no ar por pelo menos 1s, senão o clique parece não ter feito nada.
+  async function handleRestart(n: NumberResponse) {
+    const confirmCooldown = !!n.bannedUntil && new Date(n.bannedUntil) > new Date()
+    if (confirmCooldown && !window.confirm(
+      `Este número levou um ban do WhatsApp. Reiniciar antes de ${fmtDateTime(n.bannedUntil)} ` +
+      'pode tornar o ban permanente. Reiniciar mesmo assim?',
+    )) return
+
     setError(null)
-    setRestarting(id)
+    setRestarting(n.id)
     try {
       await Promise.all([
-        restartNumber.mutateAsync(id),
+        restartNumber.mutateAsync({ id: n.id, confirmCooldown }),
         new Promise((resolve) => setTimeout(resolve, 1000)),
       ])
     } catch (err) {
@@ -552,16 +608,29 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
       <ul className="space-y-2">
         {(numbers ?? []).map((n) => (
           <li key={n.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface px-3 py-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium">{fmtPhone(n.phone)}</span>
               <StatusBadge status={n.status} />
+              <HealthBadge health={health?.find((h) => h.numberId === n.id)} />
+              {/* Avisos de proteção do número: cooldown pós-ban e pausa de envio.
+                  Ficam na linha porque explicam por que uma ação vai ser recusada. */}
+              {n.bannedUntil && new Date(n.bannedUntil) > new Date() && (
+                <span className="text-xs text-danger">
+                  Aguarde até {fmtDateTime(n.bannedUntil)} para reconectar
+                </span>
+              )}
+              {n.sendingPausedUntil && new Date(n.sendingPausedUntil) > new Date() && (
+                <span className="text-xs text-warn" title={n.sendingPauseReason ?? undefined}>
+                  Envio pausado até {fmtDateTime(n.sendingPausedUntil)}
+                </span>
+              )}
             </div>
             {/* Frequentes na linha; raros e destrutivos no "⋯" — com os cinco
                 visíveis a linha virava um bloco de botões no celular. */}
             <div className="flex gap-1">
               <Button
                 variant="ghost"
-                onClick={() => handleConnect(n.id, n.status)}
+                onClick={() => handleConnect(n)}
                 loading={connectNumber.isPending}
               >
                 Reconectar
@@ -577,7 +646,7 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
               )}
               {/* O rótulo acessível não muda com o círculo: quem usa leitor de
                   tela (e o teste) continua achando o mesmo botão. */}
-              <Button variant="ghost" onClick={() => handleRestart(n.id)} loading={restarting === n.id}>
+              <Button variant="ghost" onClick={() => handleRestart(n)} loading={restarting === n.id}>
                 Reiniciar
               </Button>
               <Menu

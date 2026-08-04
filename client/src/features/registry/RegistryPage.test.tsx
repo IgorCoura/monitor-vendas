@@ -16,6 +16,9 @@ function activeNumber(sellerId: string) {
     instanceName: 'mv-1',
     status: 'Active',
     createdAt: new Date().toISOString(),
+    bannedUntil: null,
+    sendingPausedUntil: null,
+    sendingPauseReason: null,
   }
 }
 
@@ -298,6 +301,69 @@ describe('RegistryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Gerar código' }))
 
     expect(await screen.findByTestId('pairing-code')).toHaveTextContent('ZLKPFRXL')
+  })
+
+  // O semáforo de saúde entra na linha do número com rótulo textual (nunca só
+  // cor) e o "?" traz os sinais que pesaram no score.
+  it('mostra o semáforo de saúde do número', async () => {
+    const ana = seller('Ana')
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () => HttpResponse.json([activeNumber(ana.id)])),
+      http.get('/api/v1/numbers/health', () =>
+        HttpResponse.json([
+          {
+            numberId: 'n1',
+            phone: '5511968608425',
+            sellerId: ana.id,
+            sellerName: 'Ana',
+            status: 'Active',
+            score: 30,
+            level: 'Medium',
+            signals: [{ key: 'delivery', value: '50%', points: 30 }],
+          },
+        ]),
+      ),
+    )
+
+    renderWithProviders(<RegistryPage />)
+
+    expect(await screen.findByText('Saúde: atenção')).toBeInTheDocument()
+  })
+
+  // Número em cooldown pós-ban: a linha avisa o prazo e reconectar exige
+  // confirmação — que segue para a API como confirmCooldown=true.
+  it('avisa o cooldown pós-ban e reconecta só depois de confirmar', async () => {
+    const ana = seller('Ana')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    let requestedUrl: string | null = null
+
+    mswServer.use(
+      http.get('/api/v1/sellers', () => HttpResponse.json([ana])),
+      http.get(`/api/v1/sellers/${ana.id}/numbers`, () =>
+        HttpResponse.json([
+          {
+            ...activeNumber(ana.id),
+            status: 'BannedTemporary',
+            bannedUntil: new Date(Date.now() + 20 * 3_600_000).toISOString(),
+          },
+        ]),
+      ),
+      http.post('/api/v1/numbers/n1/connect', ({ request }) => {
+        requestedUrl = request.url
+        return HttpResponse.json({ code: 'QRDATA', base64: null, pairingCode: null })
+      }),
+    )
+
+    renderWithProviders(<RegistryPage />)
+    expect(await screen.findByText(/Aguarde até/)).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Reconectar' }))
+
+    await waitFor(() => expect(requestedUrl).toContain('confirmCooldown=true'))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('ban permanente'))
+    confirmSpy.mockRestore()
   })
 
   // Desconectar desvincula o aparelho: tira o vendedor do ar no meio do

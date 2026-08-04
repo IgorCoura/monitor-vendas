@@ -38,9 +38,12 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         // não pelo BackgroundService — determinismo.
         builder.UseSetting("Metrics:AggregationEnabled", "false");
         // Envio de contatos também é dirigido pelos testes; sem intervalo entre as
-        // mensagens (o delay existe para proteger o número em produção).
+        // mensagens (o jitter existe para proteger o número em produção) e sem o
+        // gate de expediente (a hora em que a suíte roda não pode decidir teste).
         builder.UseSetting("ContactShare:Enabled", "false");
-        builder.UseSetting("ContactShare:DelayBetweenMessagesSeconds", "0");
+        builder.UseSetting("ContactShare:MinDelaySeconds", "0");
+        builder.UseSetting("ContactShare:MaxDelaySeconds", "0");
+        builder.UseSetting("ContactShare:BusinessHoursOnly", "false");
         builder.UseSetting("Evolution:BaseUrl", "http://evolution.fake/");
         builder.UseSetting("Evolution:ApiKey", "test-key");
 

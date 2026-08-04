@@ -79,6 +79,19 @@ public static class NumbersEndpoints
             return Results.Ok(numbers.Select(NumberResponse.From));
         });
 
+        // Semáforo de saúde: os sinais que preveem ban antes de ele acontecer
+        // (entrega, resposta, disparos, desconexões, restrição 463, ban).
+        group.MapGet("/numbers/health", async (
+            DateTime? from,
+            DateTime? to,
+            Health.NumberHealthQueries queries,
+            CancellationToken ct) =>
+        {
+            var toUtc = (to ?? DateTime.UtcNow).ToUniversalTime();
+            var fromUtc = (from ?? toUtc.AddDays(-7)).ToUniversalTime();
+            return Results.Ok(await queries.ListAsync(fromUtc, toUtc, ct));
+        });
+
         group.MapGet("/numbers", async (AppDbContext db, CancellationToken ct) =>
         {
             var numbers = await db.Set<WhatsappNumber>().AsNoTracking()
@@ -95,6 +108,7 @@ public static class NumbersEndpoints
         group.MapPost("/numbers/{id:guid}/connect", async (
             Guid id,
             bool? confirmBanned,
+            bool? confirmCooldown,
             AppDbContext db,
             EvolutionApiClient evolution,
             IOptions<WebhookOptions> webhookOptions,
@@ -112,6 +126,9 @@ public static class NumbersEndpoints
                     error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
                     requiresConfirmation = true,
                 });
+
+            if (CooldownWarning(number, confirmCooldown, "Reconectar") is { } cooldown)
+                return cooldown;
 
             try
             {
@@ -162,6 +179,7 @@ public static class NumbersEndpoints
         group.MapPost("/numbers/{id:guid}/pairing-code", async (
             Guid id,
             bool? confirmBanned,
+            bool? confirmCooldown,
             AppDbContext db,
             EvolutionApiClient evolution,
             IOptions<WebhookOptions> webhookOptions,
@@ -177,6 +195,9 @@ public static class NumbersEndpoints
                     error = "Este número está marcado como banido permanentemente. Confirme que deseja reconectá-lo.",
                     requiresConfirmation = true,
                 });
+
+            if (CooldownWarning(number, confirmCooldown, "Gerar um código novo") is { } cooldown)
+                return cooldown;
 
             // Recriar derruba a sessão viva; para o número conectado não há o que
             // reconectar de qualquer forma.
@@ -293,6 +314,7 @@ public static class NumbersEndpoints
         // decide o estado do canal continua sendo o `connection.update`.
         group.MapPost("/numbers/{id:guid}/restart", async (
             Guid id,
+            bool? confirmCooldown,
             AppDbContext db,
             EvolutionApiClient evolution,
             CancellationToken ct) =>
@@ -300,6 +322,12 @@ public static class NumbersEndpoints
             var number = await db.Set<WhatsappNumber>().AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
             if (number is null)
                 return Results.NotFound();
+
+            // Reiniciar não desvincula, mas sobe o socket de novo — durante um ban
+            // é mais uma tentativa de voltar ao ar. Sem este aviso o cooldown do
+            // "Reconectar" seria contornável por um botão ao lado.
+            if (CooldownWarning(number, confirmCooldown, "Reiniciar") is { } cooldown)
+                return cooldown;
 
             // Número que nunca pareou não tem sessão para reiniciar: a instância
             // existe, mas vazia. O caminho dele é conectar.
@@ -348,5 +376,23 @@ public static class NumbersEndpoints
         });
 
         return group;
+    }
+
+    // Cooldown pós-ban: voltar ao ar durante a punição é o que promove ban
+    // temporário a permanente. É AVISO, não trava — o operador segue em frente
+    // dizendo que sabe do risco (`confirmCooldown=true`).
+    private static IResult? CooldownWarning(WhatsappNumber number, bool? confirmCooldown, string action)
+    {
+        if (number.BannedUntil is not { } bannedUntil || bannedUntil <= DateTime.UtcNow || confirmCooldown == true)
+            return null;
+
+        return Results.Conflict(new
+        {
+            error = $"Este número levou um ban do WhatsApp há pouco tempo. {action} antes de "
+                + $"{bannedUntil:dd/MM HH:mm} UTC pode tornar o ban permanente. "
+                + "Confirme para prosseguir mesmo assim.",
+            requiresConfirmation = true,
+            bannedUntil,
+        });
     }
 }

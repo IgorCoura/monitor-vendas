@@ -50,7 +50,8 @@ public class BanAndSaleTests(IntegrationTestWebAppFactory factory) : BaseIntegra
         }
         """;
 
-    // close com statusReason 403 marca o número como banido temporário e grava o evento de status.
+    // close com statusReason 403 marca o número como banido temporário, grava o
+    // evento de status e abre o cooldown de reconexão de 24h.
     [Fact]
     public async Task Close403_MarksNumberAsBannedTemporary()
     {
@@ -61,11 +62,14 @@ public class BanAndSaleTests(IntegrationTestWebAppFactory factory) : BaseIntegra
 
         var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync(n => n.Id == _numberId));
         Assert.Equal(NumberStatus.BannedTemporary, number.Status);
+        Assert.NotNull(number.BannedUntil);
+        Assert.True(number.BannedUntil > DateTime.UtcNow.AddHours(23));
         var evt = await InDbAsync(db => db.Set<NumberStatusEvent>().SingleAsync());
         Assert.Equal(403, evt.StatusReason);
     }
 
-    // Reconexão (open) depois do ban devolve o número ao status Active.
+    // Reconexão (open) depois do ban devolve o número ao status Active e encerra
+    // o cooldown — se o WhatsApp aceitou a conexão, o ban acabou.
     [Fact]
     public async Task OpenAfterBan_Reactivates()
     {
@@ -77,9 +81,11 @@ public class BanAndSaleTests(IntegrationTestWebAppFactory factory) : BaseIntegra
 
         var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync(n => n.Id == _numberId));
         Assert.Equal(NumberStatus.Active, number.Status);
+        Assert.Null(number.BannedUntil);
     }
 
-    // close com 401 (logout) é desconexão comum, não ban.
+    // close com 401 (logout) é desconexão comum, não ban — e NÃO abre cooldown
+    // de reconexão (regressão fácil: tratar todo close como punição).
     [Fact]
     public async Task Close401_MarksDisconnected()
     {
@@ -90,6 +96,7 @@ public class BanAndSaleTests(IntegrationTestWebAppFactory factory) : BaseIntegra
 
         var number = await InDbAsync(db => db.Set<WhatsappNumber>().SingleAsync(n => n.Id == _numberId));
         Assert.Equal(NumberStatus.Disconnected, number.Status);
+        Assert.Null(number.BannedUntil);
     }
 
     // Promoção manual a ban permanente via endpoint, com evento de status registrado.

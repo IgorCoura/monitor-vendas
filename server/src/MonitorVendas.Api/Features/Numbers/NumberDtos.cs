@@ -6,10 +6,20 @@ public record TransferNumberRequest(Guid SellerId);
 
 public record QrCodeDto(string? Code, string? Base64, string? PairingCode);
 
-public record NumberResponse(Guid Id, Guid SellerId, string Phone, string InstanceName, string Status, DateTime CreatedAt)
+public record NumberResponse(
+    Guid Id,
+    Guid SellerId,
+    string Phone,
+    string InstanceName,
+    string Status,
+    DateTime CreatedAt,
+    DateTime? BannedUntil,
+    DateTime? SendingPausedUntil,
+    string? SendingPauseReason)
 {
     public static NumberResponse From(WhatsappNumber number) =>
-        new(number.Id, number.SellerId, number.Phone, number.InstanceName, number.Status.ToString(), number.CreatedAt);
+        new(number.Id, number.SellerId, number.Phone, number.InstanceName, number.Status.ToString(),
+            number.CreatedAt, number.BannedUntil, number.SendingPausedUntil, number.SendingPauseReason);
 }
 
 public record CreateNumberResponse(NumberResponse Number, QrCodeDto? Qr);

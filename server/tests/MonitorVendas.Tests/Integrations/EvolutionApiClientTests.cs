@@ -1,5 +1,7 @@
 using System.Net;
+using MonitorVendas.Api.Common;
 using MonitorVendas.Api.Integrations.Evolution;
+using MonitorVendas.Tests.Infrastructure;
 
 namespace MonitorVendas.Tests.Integrations;
 
@@ -9,22 +11,28 @@ public class EvolutionApiClientTests
     {
         var handler = new RecordingHandler { StatusCode = status, Body = body };
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://evolution.local/") };
-        return (new EvolutionApiClient(http), handler);
+        return (new EvolutionApiClient(http, new FixedRandomSource()), handler);
     }
 
-    // Enviar texto faz POST em message/sendText/{instance} com number e text no corpo JSON.
+    // Enviar texto faz POST em message/sendText/{instance} com number, text e a
+    // digitação simulada (presence composing + delay proporcional ao texto).
     [Fact]
-    public async Task SendTextAsync_PostsToInstanceRoute_WithNumberAndText()
+    public async Task SendTextAsync_PostsToInstanceRoute_WithTypingSimulation()
     {
-        var (client, handler) = Build();
+        var (client, handler) = Build(body: """{"key":{"id":"MSG-1"}}""");
 
-        await client.SendTextAsync("vendas", "5511999999999", "Nova venda!");
+        var result = await client.SendTextAsync("vendas", "5511999999999", "Nova venda!");
 
         Assert.NotNull(handler.LastRequest);
         Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
         Assert.Equal("http://evolution.local/message/sendText/vendas", handler.LastRequest.RequestUri!.ToString());
         Assert.Contains("5511999999999", handler.LastBody);
         Assert.Contains("Nova venda!", handler.LastBody);
+        Assert.Contains("\"presence\":\"composing\"", handler.LastBody);
+        Assert.Equal("MSG-1", result.KeyId);
+        // O delay é sorteado: o teste garante a faixa, nunca o valor exato.
+        Assert.InRange(result.DelayMs, HumanDelay.MinMs, HumanDelay.MaxMs);
+        Assert.Contains($"\"delay\":{result.DelayMs}", handler.LastBody);
     }
 
     // Resposta de erro da Evolution API (ex.: 401) vira HttpRequestException — falha não pode passar silenciosa.
@@ -196,7 +204,7 @@ public class EvolutionApiClientTests
         var client = new EvolutionApiClient(new HttpClient(new ThrowingHandler())
         {
             BaseAddress = new Uri("http://evolution.local/"),
-        });
+        }, new FixedRandomSource());
 
         Assert.Null(await client.GetMediaAsync("mv-1", "m-1"));
         Assert.False(await client.LogoutAsync("mv-1"));

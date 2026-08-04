@@ -1,0 +1,392 @@
+{
+  "info": {
+    "name": "ProxyBR API v1",
+    "_postman_id": "b7f1e2a0-proxybr-apiv1-0001",
+    "description": "# ProxyBR API v1\n\nAPI de integração da ProxyBR para conectar sistemas externos (painéis de revendedor, automações, etc.) à sua conta.\n\n## Base URL\n`https://portal.proxybr.com.br/api/v1`\n\n## Autenticação\nTodas as chamadas usam **Bearer token**:\n```\nAuthorization: Bearer <seu-token>\n```\nGere o token no portal em **API & Integrações → Novo token**. O valor completo aparece **uma única vez** — guarde com segurança.\n\nEnvie sempre `Accept: application/json` para receber erros em JSON.\n\n## Limite de requisições (Rate limit)\n- **60 requisições por minuto** por conta autenticada (padrão de todos os endpoints).\n- O limite é por **conta** — tokens diferentes da mesma conta **compartilham** o mesmo balde.\n- Ao exceder, a API retorna **HTTP 429** com o header `Retry-After` (segundos até liberar).\n\n## Versionamento\nVia prefixo de path: `/api/v1`.\n\n## Paginação\nListas aceitam `?limit=` e retornam `meta` com `current_page`, `last_page`, `per_page`, `total`.\n\n## Datas\nFiltros de período usam `YYYY-MM-DD`. Respostas retornam datas em ISO 8601.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://portal.proxybr.com.br/api/v1", "type": "string" },
+    { "key": "token", "value": "", "type": "string", "description": "Cole seu token de integração aqui (ou use um Environment do Postman)." }
+  ],
+  "item": [
+    {
+      "name": "Autenticação",
+      "description": "Verifica o token e retorna os dados da conta associada.",
+      "item": [
+        {
+          "name": "Dados da conta (me)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] },
+            "description": "Retorna a conta do token.\n\n**Resposta 200**\n```json\n{\n  \"data\": {\n    \"id\": 123,\n    \"name\": \"...\",\n    \"email\": \"...\",\n    \"status\": \"active\",\n    \"blocked\": false,\n    \"balance\": 150.00,\n    \"whatsapp_verified\": true,\n    \"created_at\": \"2026-01-01T00:00:00Z\"\n  }\n}\n```"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Produtos & Catálogo",
+      "description": "Consulta os planos/produtos disponíveis e a cobertura residencial. Apenas produtos habilitados para o seu token aparecem.",
+      "item": [
+        {
+          "name": "Listar planos",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/plans", "host": ["{{baseUrl}}"], "path": ["plans"] },
+            "description": "Lista os planos disponíveis.\n\n**Resposta 200**: `data[]` com `uuid`, `slug`, `name`, `category`, `billing_model`, `pricing`, `locations`, `min_quantity`, `max_quantity`."
+          }
+        },
+        {
+          "name": "Detalhe do plano",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/plans/:slug", "host": ["{{baseUrl}}"], "path": ["plans", ":slug"], "variable": [{ "key": "slug", "value": "proxy-ipv6" }] },
+            "description": "Detalhe de um plano pelo `slug`.\n\n**Erros**: `404 plan_not_found`."
+          }
+        },
+        {
+          "name": "Casos de uso (use-cases)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/use-cases", "host": ["{{baseUrl}}"], "path": ["use-cases"] },
+            "description": "Lista os casos de uso (categorias/sites) disponíveis para os produtos habilitados."
+          }
+        },
+        {
+          "name": "Residencial — geo",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/residential/geo", "host": ["{{baseUrl}}"], "path": ["residential", "geo"] },
+            "description": "Catálogo geográfico do produto residencial (países/estados/cidades)."
+          }
+        },
+        {
+          "name": "Residencial — disponibilidade",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/residential/availability?country=BR&state=&city=&asn=",
+              "host": ["{{baseUrl}}"],
+              "path": ["residential", "availability"],
+              "query": [
+                { "key": "country", "value": "BR", "description": "Obrigatório (código do país)" },
+                { "key": "state", "value": "" },
+                { "key": "city", "value": "" },
+                { "key": "asn", "value": "" }
+              ]
+            },
+            "description": "Disponibilidade residencial. `country` é obrigatório."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Comprar & Renovar",
+      "description": "Valida cupom, lista pedidos, compra novos proxies e gerencia o ciclo de vida (renovar, cancelar, auto-renovar, upgrade de protocolo, uso).",
+      "item": [
+        {
+          "name": "Validar cupom",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/coupons/validate", "host": ["{{baseUrl}}"], "path": ["coupons", "validate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"plan_slug\": \"proxy-ipv6\",\n  \"code\": \"CUPOM10\",\n  \"quantity\": 5\n}" },
+            "description": "Valida um cupom para um plano.\n\n**Body**: `plan_slug` OU `plan_uuid`, `code`; opcionais `quantity`, `traffic_gb`, `subtotal`.\n\n**Resposta**: `valid`, `code`, `percentage`, `billing_mode`, `minimum`, `final_total`."
+          }
+        },
+        {
+          "name": "Listar pedidos/assinaturas",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/orders?limit=50&status=",
+              "host": ["{{baseUrl}}"],
+              "path": ["orders"],
+              "query": [
+                { "key": "limit", "value": "50", "description": "1..200" },
+                { "key": "status", "value": "", "description": "Filtro opcional por status" }
+              ]
+            },
+            "description": "Lista os pedidos/assinaturas. Resposta `data[]` + `meta{current_page,last_page,per_page,total}`."
+          }
+        },
+        {
+          "name": "Comprar — Datacenter (por IP)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders", "host": ["{{baseUrl}}"], "path": ["orders"] },
+            "body": { "mode": "raw", "raw": "{\n  \"plan_slug\": \"proxy-ipv6\",\n  \"quantity\": 5,\n  \"use_case\": null,\n  \"protocol\": \"http_socks5\",\n  \"location_code\": null,\n  \"devices\": null,\n  \"coupon\": null\n}" },
+            "description": "Compra proxies datacenter (IPv4/IPv6/ISP por IP).\n\n**Body**: `plan_slug` OU `plan_uuid`, `quantity`; opcionais `use_case`, `protocol`, `location_code`, `bandwidth_limit_mbps`, `devices`, `coupon`, `prep_temp`.\n\n**Resposta**: `data` (pedido) com `proxies[]` (inclui credenciais).\n\n**Erros**: `402 insufficient_balance`, `400/422 invalid_body`."
+          }
+        },
+        {
+          "name": "Comprar — Residencial",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders", "host": ["{{baseUrl}}"], "path": ["orders"] },
+            "body": { "mode": "raw", "raw": "{\n  \"plan_slug\": \"residencial\",\n  \"traffic_gb\": 5,\n  \"coupon\": null\n}" },
+            "description": "Compra pacote residencial (por tráfego).\n\n**Body**: `plan_slug`/`plan_uuid`, `traffic_gb`, `coupon` (opcional)."
+          }
+        },
+        {
+          "name": "Comprar — ISP / Mobile",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders", "host": ["{{baseUrl}}"], "path": ["orders"] },
+            "body": { "mode": "raw", "raw": "{\n  \"plan_slug\": \"isp\",\n  \"country_id\": 1,\n  \"period_id\": 1,\n  \"quantity\": 1,\n  \"operator_id\": null,\n  \"rotation_id\": null,\n  \"target_section_id\": null,\n  \"coupon\": null\n}" },
+            "description": "Compra ISP/Mobile.\n\n**Body**: `country_id`, `period_id`, `quantity`; opcionais `operator_id`, `rotation_id`, `target_section_id`, `coupon`."
+          }
+        },
+        {
+          "name": "Detalhe do pedido",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders/:uuid", "host": ["{{baseUrl}}"], "path": ["orders", ":uuid"], "variable": [{ "key": "uuid", "value": "" }] },
+            "description": "Detalhe de um pedido/assinatura pelo `uuid`."
+          }
+        },
+        {
+          "name": "Renovar pedido",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders/:uuid/renew", "host": ["{{baseUrl}}"], "path": ["orders", ":uuid", "renew"], "variable": [{ "key": "uuid", "value": "" }] },
+            "description": "Renova a assinatura (+período). Debita do saldo. `402 insufficient_balance` se não houver saldo."
+          }
+        },
+        {
+          "name": "Cancelar pedido",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders/:uuid/cancel", "host": ["{{baseUrl}}"], "path": ["orders", ":uuid", "cancel"], "variable": [{ "key": "uuid", "value": "" }] },
+            "description": "Cancela a assinatura."
+          }
+        },
+        {
+          "name": "Auto-renovação (ligar/desligar)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/orders/:uuid/auto-renew", "host": ["{{baseUrl}}"], "path": ["orders", ":uuid", "auto-renew"], "variable": [{ "key": "uuid", "value": "" }] },
+            "body": { "mode": "raw", "raw": "{\n  \"enabled\": true\n}" },
+            "description": "Liga/desliga a renovação automática."
+          }
+        },
+        {
+          "name": "Uso do pedido",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/orders/:uuid/usage?from=2026-01-01&to=2026-01-31",
+              "host": ["{{baseUrl}}"],
+              "path": ["orders", ":uuid", "usage"],
+              "query": [{ "key": "from", "value": "2026-01-01" }, { "key": "to", "value": "2026-01-31" }],
+              "variable": [{ "key": "uuid", "value": "" }]
+            },
+            "description": "Consumo/uso da assinatura no período (`from`/`to` em `YYYY-MM-DD`)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assinaturas & Proxies",
+      "description": "Consulta e gerencia os proxies (listar, detalhe, uso, revogar, rotacionar, testar) e as assinaturas legadas.",
+      "item": [
+        {
+          "name": "Listar proxies",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/proxies?limit=50&status=",
+              "host": ["{{baseUrl}}"],
+              "path": ["proxies"],
+              "query": [{ "key": "limit", "value": "50" }, { "key": "status", "value": "" }]
+            },
+            "description": "Lista os proxies. A resposta inclui credenciais: `ip`, `port`, `port_socks5`, `username`, `password`, `proxy_string*`."
+          }
+        },
+        {
+          "name": "Detalhe do proxy",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/proxies/:shortId", "host": ["{{baseUrl}}"], "path": ["proxies", ":shortId"], "variable": [{ "key": "shortId", "value": "" }] },
+            "description": "Detalhe de um proxy pelo `shortId`."
+          }
+        },
+        {
+          "name": "Uso do proxy",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/proxies/:shortId/usage?from=2026-01-01&to=2026-01-31",
+              "host": ["{{baseUrl}}"],
+              "path": ["proxies", ":shortId", "usage"],
+              "query": [{ "key": "from", "value": "2026-01-01" }, { "key": "to", "value": "2026-01-31" }],
+              "variable": [{ "key": "shortId", "value": "" }]
+            },
+            "description": "Consumo do proxy no período."
+          }
+        },
+        {
+          "name": "Rotacionar IP (IPv6)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/proxies/:shortId/rotate", "host": ["{{baseUrl}}"], "path": ["proxies", ":shortId", "rotate"], "variable": [{ "key": "shortId", "value": "" }] },
+            "description": "Troca o IP do proxy (disponível para IPv6).\n\n**Erros**: `422 rotation_limit_exceeded` (limite mensal), `402 insufficient_balance` (troca paga sem saldo)."
+          }
+        },
+        {
+          "name": "Testar proxy",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/proxies/:shortId/test", "host": ["{{baseUrl}}"], "path": ["proxies", ":shortId", "test"], "variable": [{ "key": "shortId", "value": "" }] },
+            "description": "Testa a conectividade/egress do proxy."
+          }
+        },
+        {
+          "name": "Revogar proxy",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/proxies/:shortId/revoke", "host": ["{{baseUrl}}"], "path": ["proxies", ":shortId", "revoke"], "variable": [{ "key": "shortId", "value": "" }] },
+            "description": "Revoga (desativa) o proxy."
+          }
+        },
+        {
+          "name": "Assinaturas legadas — listar",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/legacy-subscriptions", "host": ["{{baseUrl}}"], "path": ["legacy-subscriptions"] },
+            "description": "Lista as assinaturas do sistema antigo (legado) da sua conta."
+          }
+        },
+        {
+          "name": "Assinaturas legadas — contagem",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/legacy-subscriptions/count", "host": ["{{baseUrl}}"], "path": ["legacy-subscriptions", "count"] },
+            "description": "Contagem de assinaturas legadas."
+          }
+        },
+        {
+          "name": "Assinaturas legadas — renovar",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/legacy-subscriptions/:code/renew", "host": ["{{baseUrl}}"], "path": ["legacy-subscriptions", ":code", "renew"], "variable": [{ "key": "code", "value": "" }] },
+            "description": "Renova uma assinatura legada (+30 dias), debitando do saldo."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Saldo & PIX",
+      "description": "Consulta o saldo, histórico, configuração de pagamento e gera recargas via PIX.",
+      "item": [
+        {
+          "name": "Saldo atual",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/balance", "host": ["{{baseUrl}}"], "path": ["balance"] },
+            "description": "Retorna `data{balance, currency}`."
+          }
+        },
+        {
+          "name": "Histórico de saldo",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/balance/history?limit=50&type=&from=&to=",
+              "host": ["{{baseUrl}}"],
+              "path": ["balance", "history"],
+              "query": [{ "key": "limit", "value": "50" }, { "key": "type", "value": "" }, { "key": "from", "value": "" }, { "key": "to", "value": "" }]
+            },
+            "description": "Histórico de movimentações do saldo (paginado)."
+          }
+        },
+        {
+          "name": "Config de pagamento",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/payment/config", "host": ["{{baseUrl}}"], "path": ["payment", "config"] },
+            "description": "Gateway ativo, PIX/cartão habilitados e limites `min_value`/`max_value`."
+          }
+        },
+        {
+          "name": "Gerar recarga PIX",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/balance/topup", "host": ["{{baseUrl}}"], "path": ["balance", "topup"] },
+            "body": { "mode": "raw", "raw": "{\n  \"value\": 50.00,\n  \"coupon\": null\n}" },
+            "description": "Cria uma recarga.\n\n**Body**: `value` (mín. `12.00`, máx. `10000.00`), `coupon` (opcional).\n\n**Resposta**: inclui `qr_code` e `qr_code_image` (PIX) quando aplicável."
+          }
+        },
+        {
+          "name": "Listar recargas",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/balance/topup?limit=50&status=",
+              "host": ["{{baseUrl}}"],
+              "path": ["balance", "topup"],
+              "query": [{ "key": "limit", "value": "50" }, { "key": "status", "value": "" }]
+            },
+            "description": "Lista as recargas."
+          }
+        },
+        {
+          "name": "Detalhe da recarga",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/balance/topup/:uuid", "host": ["{{baseUrl}}"], "path": ["balance", "topup", ":uuid"], "variable": [{ "key": "uuid", "value": "" }] },
+            "description": "Detalhe/status de uma recarga."
+          }
+        },
+        {
+          "name": "Cancelar recarga",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/balance/topup/:uuid", "host": ["{{baseUrl}}"], "path": ["balance", "topup", ":uuid"], "variable": [{ "key": "uuid", "value": "" }] },
+            "description": "Cancela uma recarga pendente."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Erros & Limites",
+      "description": "## Códigos de erro\n\n| HTTP | Corpo | Significado |\n|---|---|---|\n| 401 | `{\"message\": \"Unauthenticated.\"}` | Token ausente ou inválido |\n| 400 / 422 | `{\"error\": \"invalid_body\", \"errors\": {...}}` | Validação do corpo |\n| 402 | `{\"error\": \"insufficient_balance\", \"message\": \"...\"}` | Saldo insuficiente |\n| 403 | `{\"error\": \"whatsapp_not_verified\", \"message\": \"...\"}` | WhatsApp não verificado |\n| 404 | `{\"error\": \"..._not_found\"}` | Recurso não encontrado |\n| 429 | `Too Many Attempts.` (+ header `Retry-After`) | Limite de requisições excedido |\n\n## Rate limit\n**60 requisições por minuto** por conta. Ao exceder → HTTP 429 + `Retry-After`.\n\n> ⚠️ Envie sempre `Accept: application/json` para receber os erros em JSON (senão o 401/429 pode vir como HTML/redirect).",
+      "item": []
+    }
+  ]
+}
