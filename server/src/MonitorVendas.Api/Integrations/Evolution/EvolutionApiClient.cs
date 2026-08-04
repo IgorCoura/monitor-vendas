@@ -210,6 +210,36 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
         }
     }
 
+    // Ajustes de comportamento da instância. `readMessages` marca como lido, que
+    // é sinal humano; `alwaysOnline` fica FALSO de propósito — presença 24/7 é
+    // assinatura de servidor, não de vendedor que dorme. Best-effort: falhar
+    // aqui não pode derrubar um pareamento que já deu certo.
+    public async Task<bool> SetSettingsAsync(string instanceName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.PostAsJsonAsync(
+                $"settings/set/{instanceName}",
+                new
+                {
+                    rejectCall = false,
+                    msgCall = "",
+                    groupsIgnore = true,
+                    alwaysOnline = false,
+                    readMessages = true,
+                    readStatus = false,
+                    syncFullHistory = false,
+                },
+                cancellationToken);
+
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     public async Task SetWebhookAsync(string instanceName, string url, IReadOnlyCollection<string> events, CancellationToken cancellationToken = default)
     {
         var response = await http.PostAsJsonAsync(

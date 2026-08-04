@@ -109,6 +109,8 @@ public sealed class MessageUpsertHandler(
             conversation.LastMessageAt = timestamp;
         }
 
+        var text = WebhookPayload.ExtractText(data);
+
         db.Add(new Message
         {
             Id = Guid.NewGuid(),
@@ -118,10 +120,25 @@ public sealed class MessageUpsertHandler(
             WaMessageId = waMessageId,
             Direction = fromMe ? MessageDirection.Outbound : MessageDirection.Inbound,
             Type = WebhookPayload.GetString(data, "messageType") ?? "unknown",
-            Text = WebhookPayload.ExtractText(data),
+            Text = text,
             DurationSeconds = WebhookPayload.ExtractDurationSeconds(data),
             Timestamp = timestamp
         });
+
+        // "SAIR"/"PARE" do cliente vira opt-out permanente. Só mensagem DELE
+        // conta: o vendedor escrevendo "pare" não descadastra ninguém.
+        if (!fromMe && OptOutDetector.IsOptOut(text)
+            && !await db.Set<ContactOptOut>().AnyAsync(o => o.ContactId == contact.Id, ct))
+        {
+            db.Add(new ContactOptOut
+            {
+                Id = Guid.NewGuid(),
+                ContactId = contact.Id,
+                Reason = OptOutReason.Requested,
+                Evidence = text!.Length > 200 ? text[..200] : text,
+                CreatedAt = timestamp,
+            });
+        }
 
         await dirtyDays.MarkAsync(db, number.Id, timestamp, ct);
     }

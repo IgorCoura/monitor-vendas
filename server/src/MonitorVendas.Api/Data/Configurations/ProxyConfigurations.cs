@@ -26,6 +26,23 @@ public class ProxyConfiguration : IEntityTypeConfiguration<Proxy>
     }
 }
 
+public class ContactOptOutConfiguration : IEntityTypeConfiguration<MonitorVendas.Api.Features.Conversations.ContactOptOut>
+{
+    public void Configure(EntityTypeBuilder<MonitorVendas.Api.Features.Conversations.ContactOptOut> builder)
+    {
+        builder.ToTable("contact_opt_outs");
+        builder.HasKey(o => o.Id);
+        builder.Property(o => o.Reason).HasConversion<string>().HasMaxLength(24).IsRequired();
+        builder.Property(o => o.Evidence).HasMaxLength(200);
+
+        // Um opt-out por contato: pedir duas vezes não cria dois registros, e a
+        // exclusão da lista consulta por contato.
+        builder.HasIndex(o => o.ContactId).IsUnique();
+        builder.HasOne<MonitorVendas.Api.Features.Conversations.Contact>()
+            .WithMany().HasForeignKey(o => o.ContactId);
+    }
+}
+
 public class ProxySettingsConfiguration : IEntityTypeConfiguration<ProxySettings>
 {
     public void Configure(EntityTypeBuilder<ProxySettings> builder)

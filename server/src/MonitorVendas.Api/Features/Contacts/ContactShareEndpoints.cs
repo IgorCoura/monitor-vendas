@@ -69,6 +69,15 @@ public static class ContactShareEndpoints
                 return Results.Conflict(new { error = $"O número {sender.Phone} não está conectado — escolha outro remetente." });
 
             var rows = await queries.ListAsync(filter, ct);
+
+            // Opt-out sai na MONTAGEM, que é onde o conteúdo é congelado: quem
+            // pediu para parar não pode reaparecer numa lista montada depois.
+            // Além de anti-ban, é exigência da LGPD.
+            var optedOut = await db.Set<Conversations.ContactOptOut>().AsNoTracking()
+                .Select(o => o.ContactId).ToListAsync(ct);
+            if (optedOut.Count > 0)
+                rows = [.. rows.Where(r => !optedOut.Contains(r.ContactId))];
+
             if (rows.Count == 0)
                 return Results.Conflict(new { error = "Nenhum contato com os filtros atuais." });
 

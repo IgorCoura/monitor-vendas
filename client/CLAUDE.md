@@ -190,6 +190,12 @@ client/src/
 │   │               #   já cadastrado o código sai só no clique em "Gerar código"
 │   │               #   (recria a instância na Evolution; vir junto do QR daria um
 │   │               #   código de sessão vencida, que o WhatsApp recusa).
+│   ├── proxies/    # ProxiesPage (rota /proxies): tela SÓ de monitoramento — a
+│   │               #   compra é no portal do fornecedor. Ocupação (números/capacidade),
+│   │               #   vendedores distintos e bans por proxy no período; expandir mostra
+│   │               #   os números. "Distribuir"/"Redistribuir" abrem a PRÉVIA do plano,
+│   │               #   avisando quantos números conectados reiniciam a sessão. O
+│   │               #   interruptor "Usar proxies" não mexe em sessão conectada.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,

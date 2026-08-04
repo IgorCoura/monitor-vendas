@@ -8,6 +8,7 @@ const links = [
   { to: '/contacts', label: 'Contatos' },
   { to: '/ai', label: 'Análises IA' },
   { to: '/labels', label: 'Etiquetas' },
+  { to: '/proxies', label: 'Proxies' },
   { to: '/holidays', label: 'Feriados' },
 ]
 

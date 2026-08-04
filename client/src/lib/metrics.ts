@@ -51,6 +51,22 @@ export const healthSignalLabel: Record<string, string> = {
   ban: 'Bans no período',
 }
 
+// Tela de proxies — cada métrica exibida leva o "?" com um destes textos.
+export const proxyHelp = {
+  ativos:
+    'Proxies contratados que estão saudáveis e recebendo números novos. Pausados, suspeitos, vencidos e revogados não entram.',
+  atribuidos: 'Números que hoje saem por um proxy dedicado em vez do IP do servidor.',
+  semProxy:
+    'Números que não couberam em nenhum proxy (capacidade esgotada) ou foram criados com o uso de proxies desligado. Contrate mais proxies no portal do fornecedor e clique em "Distribuir números".',
+  ocupacao:
+    'Números neste proxy sobre a capacidade dele. A capacidade vem do limite de dispositivos do plano, de um ajuste manual, ou do padrão configurado — nessa ordem.',
+  vendedores:
+    'Quantos vendedores distintos têm número neste proxy. O algoritmo evita concentrar os números de um mesmo vendedor num proxy só: se o IP queimar, o vendedor não fica inteiro fora do ar.',
+  bans:
+    'Bans (statusReason 403) ocorridos no período enquanto o número estava neste proxy. O vínculo é histórico: mover um número depois não muda o ban do mês passado.',
+  numerosBanidos: 'Quantos números distintos foram banidos neste proxy no período.',
+} as const
+
 export const healthHelp =
   'Score de risco de banimento (0–100) dos últimos 7 dias, montado com sinais medidos: ' +
   'taxa de entrega (mensagem enviada que nunca chega é o aviso clássico de restrição), ' +

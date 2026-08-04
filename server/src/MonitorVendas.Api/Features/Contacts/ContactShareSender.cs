@@ -2,8 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Common;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
+using MonitorVendas.Api.Features.Numbers.Warmup;
 using MonitorVendas.Api.Integrations.Evolution;
 
 namespace MonitorVendas.Api.Features.Contacts;
@@ -20,6 +22,7 @@ public sealed class ContactShareSender(
     IServiceScopeFactory scopeFactory,
     IOptions<ContactShareOptions> options,
     IOptions<AntiBanOptions> antiBan,
+    IOptions<Numbers.Warmup.WarmupOptions> warmup,
     IRandomSource random,
     ILogger<ContactShareSender> logger) : IContactShareSender
 {
@@ -92,6 +95,17 @@ public sealed class ContactShareSender(
             return 0;
         }
 
+        // Teto do dia: o MENOR entre a curva de aquecimento (número novo) e a
+        // cota fixa. Nenhum dos dois envia nada — os dois só limitam o que o
+        // vendedor já faria.
+        var quota = await RemainingQuotaAsync(db, number, ct);
+        if (quota <= 0)
+        {
+            logger.LogWarning("Envio {ShareId} adiado: número {Phone} atingiu o teto de mensagens do dia.",
+                shareId, number.Phone);
+            return 0;
+        }
+
         var instance = number.InstanceName;
 
         var pending = await db.Set<ContactShareMessage>()
@@ -104,6 +118,16 @@ public sealed class ContactShareSender(
 
         foreach (var message in pending)
         {
+            // Estourou o teto no meio da lista: o envio fica pendente e retoma
+            // quando a janela virar. Metade da lista hoje e metade amanhã é
+            // melhor que queimar o número.
+            if (sent >= quota)
+            {
+                logger.LogInformation("Envio {ShareId} pausado no teto do dia ({Quota} mensagens).", shareId, quota);
+                await db.SaveChangesAsync(ct);
+                return sent;
+            }
+
             if (sent > 0)
             {
                 // O "digitando" da mensagem anterior já é espera real (o delay é
@@ -174,6 +198,33 @@ public sealed class ContactShareSender(
         await db.SaveChangesAsync(ct);
 
         return sent;
+    }
+
+    // Quantas mensagens este número ainda pode enviar hoje. Vale o MENOR entre a
+    // curva de aquecimento e a cota fixa, descontando o que já saiu — inclusive
+    // o que o vendedor mandou pelo celular, porque o WhatsApp conta tudo junto.
+    private async Task<int> RemainingQuotaAsync(AppDbContext db, WhatsappNumber number, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var limits = WarmupPolicy.LimitsFor(number.WarmupStartedAt, now, warmup.Value);
+        var settings = antiBan.Value;
+
+        // Zero significa ZERO: uma cota configurada como 0 pausa o envio por
+        // config, e "corrigi-la" para 1 seria a configuração mentindo para quem
+        // a escreveu. Só o negativo é tratado como engano.
+        var dailyCap = Math.Min(limits.MessagesPerDay ?? int.MaxValue, Math.Max(0, settings.MaxMessagesPerDay));
+
+        var sentToday = await db.Set<Message>().CountAsync(m =>
+            m.WhatsappNumberId == number.Id
+            && m.Direction == MessageDirection.Outbound
+            && m.Timestamp >= now.Date, ct);
+
+        var sentLastHour = await db.Set<Message>().CountAsync(m =>
+            m.WhatsappNumberId == number.Id
+            && m.Direction == MessageDirection.Outbound
+            && m.Timestamp >= now.AddHours(-1), ct);
+
+        return Math.Min(dailyCap - sentToday, Math.Max(0, settings.MaxMessagesPerHour) - sentLastHour);
     }
 
     // Cauda pesada: a maioria dos intervalos cai perto do mínimo e de vez em

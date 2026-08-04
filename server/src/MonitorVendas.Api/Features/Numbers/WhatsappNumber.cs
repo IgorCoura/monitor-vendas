@@ -23,6 +23,11 @@ public class WhatsappNumber
     // Cooldown pós-ban: reconectar antes disso exige confirmação explícita,
     // porque a reconexão insistente é o que promove ban temporário a permanente.
     public DateTime? BannedUntil { get; set; }
+
+    // Quando o aquecimento começou (primeira vez que o número ficou Active).
+    // REINICIA a cada ban: número banido volta ao dia 1 da curva, porque voltar
+    // ao volume de antes é o caminho mais curto para o próximo ban.
+    public DateTime? WarmupStartedAt { get; set; }
 }
 
 public enum NumberStatus

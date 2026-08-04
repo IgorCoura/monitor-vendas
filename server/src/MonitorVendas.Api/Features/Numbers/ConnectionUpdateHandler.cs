@@ -90,9 +90,21 @@ public sealed class ConnectionUpdateHandler(
         // vitalício). 401/428/515 não são punição e não travam nada. Conectar
         // de novo encerra o cooldown — se o WhatsApp aceitou, o ban acabou.
         if (statusReason == 403)
+        {
             number.BannedUntil = occurredAt.AddHours(Math.Max(1, antiBan.Value.BanCooldownHours));
+
+            // Volta ao dia 1 da curva de aquecimento: retomar o volume de antes
+            // é o caminho mais curto para o próximo ban, e a escalada seguinte é
+            // mais longa que a anterior.
+            number.WarmupStartedAt = occurredAt;
+        }
         else if (state == "open")
+        {
             number.BannedUntil = null;
+
+            // Primeira conexão do número: é daqui que a curva conta.
+            number.WarmupStartedAt ??= occurredAt;
+        }
         db.Add(new NumberStatusEvent
         {
             WhatsappNumberId = number.Id,

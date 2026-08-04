@@ -58,6 +58,7 @@ public static class NumbersEndpoints
                 }
 
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
                 qr = await evolution.ConnectAsync(instanceName, phone, ct);
             }
             catch (HttpRequestException)
@@ -172,6 +173,7 @@ public static class NumbersEndpoints
                     var created = await evolution.CreateInstanceAsync(
                         instanceName, phone: null, await proxies.CredentialsForNumberAsync(id, ct), ct);
                     await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
 
                     await db.Set<WhatsappNumber>()
                         .Where(n => n.Id == id)
@@ -246,6 +248,7 @@ public static class NumbersEndpoints
                 }
 
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
 
                 // O cadastro passa a apontar para a instância nova: é por ela que os
                 // webhooks deste número vão chegar daqui para frente.

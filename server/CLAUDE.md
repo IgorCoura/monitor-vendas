@@ -152,6 +152,71 @@ recebimento** — webhook, métricas e IA seguem em qualquer situação.
   número novo não dispara alarme. Faixas: 0–29 baixo · 30–59 médio · 60–84 alto ·
   85–100 crítico.
 
+## Proxy por número (`Features/Proxies`, Fase 2)
+
+Cada número sai por um IP dedicado, contratado no ProxyBR. **A compra é feita no
+portal do fornecedor** — o sistema só lê o catálogo, distribui e aplica.
+
+- **O banco do ProxyBR não é fonte de verdade — só o nosso.** Ele é catálogo e
+  executor; quem decide qual número está em qual proxy é `NumberProxyAssignment`.
+- **`ProxyAllocator` é puro** e escolhe por custo **lexicográfico**: números do
+  mesmo vendedor naquele proxy → carga → bans recentes → desempate determinístico
+  (`CreatedAt`, `Id`). A ordem resolve sozinha o conflito entre "distribuir
+  igualmente" e "não concentrar vendedor": sem número do vendedor no proxy, o 1º
+  critério empata em zero e a carga decide. Com mais números que proxies,
+  converge para a distribuição uniforme sem caso especial.
+- **`CreateInstanceAsync` exige o parâmetro `proxy`** (sem default). A instância
+  nasce em **cinco** lugares (pareamento, código do pareamento, código da
+  reconexão, reparo de instância sumida, cadastro legado); um que esquecesse
+  criaria número saindo pelo IP do servidor em silêncio. Passar `null` é decisão
+  explícita, visível no diff — esquecer não compila.
+- **Capacidade em cascata**: `CapacityOverride` (manual) → `DeviceLimit` (lido do
+  fornecedor) → `Proxy:DefaultCapacity` (2). O limite de dispositivos é escolhido
+  proxy a proxy na contratação, então nunca é constante no código. O campo
+  `devices` é documentado pelo fornecedor só como ENTRADA da compra: o mapeamento
+  é `int?` e tolerante.
+- **O vínculo é histórico** (índice único parcial `WHERE "ReleasedAt" IS NULL`),
+  pelo mesmo motivo de `Conversation.SellerId`: o ban de julho continua contando
+  para o proxy de julho, e mover um número não reescreve o passado.
+- **Degradações, todas explícitas**: `400 Invalid proxy` → proxy vira `Failed` e a
+  instância é recriada **sem** proxy (pareamento é uma pessoa com o celular na
+  mão); sem vaga → número nasce sem proxy e a tela avisa; credencial mudou no
+  fornecedor → atribuições vigentes voltam a "não aplicadas"; proxy que sumiu →
+  `Expired`, **nunca apagado** (o histórico de bans dele é o dado que justifica
+  trocar de plano).
+- **`ProxyApplierService`**: `proxy/set` + `restart` **só** se o número está
+  `Active` (o agent do Baileys é fixado na criação do socket). Uma tentativa por
+  passada.
+- **Interruptor "Usar proxies"** em `proxy_settings` (linha única), não em
+  appsettings — muda pela tela sem redeploy. Desligado, número novo nasce sem
+  proxy e o applier para; **sessões conectadas não são mexidas**, porque tirar o
+  proxy de todas de uma vez reiniciaria todos os sockets juntos.
+- `Proxy:Enabled` e `ProxyBr:Enabled` são master switches de infraestrutura
+  (desligados nos testes, que dirigem `IProxySyncService.RunOnceAsync()` e
+  `IProxyApplier.ProcessPendingAsync()` direto).
+
+## Aquecimento, opt-out e cotas (Fase 3)
+
+- **`WarmupPolicy` é puro** e devolve o teto do dia a partir de
+  `WhatsappNumber.WarmupStartedAt` (gravado na 1ª conexão) e da curva em config
+  (`Warmup:Curve`). **Ban reinicia a curva no dia 1.** Número sem data é tratado
+  como maduro — travar quem já operava seria punir o histórico existente.
+- **O aquecimento não envia NADA**: é teto sobre o tráfego real do vendedor.
+  Tráfego sintético (números do sistema conversando entre si) foi descartado —
+  é clique fechada com reciprocidade perfeita e horários correlacionados, o
+  padrão que detector de comportamento coordenado procura, e contaminaria as
+  próprias métricas do produto.
+- **Cotas** (`AntiBan:MaxMessagesPerHour/PerDay`) convivem com o warmup: vale o
+  **menor** dos dois tetos, descontando o que já saiu no dia (inclusive o que o
+  vendedor mandou pelo celular). **Zero significa zero** — corrigir para 1 seria
+  a config mentindo para quem a escreveu.
+- **`ContactOptOut`**: cliente que responde "SAIR"/"PARE" (`OptOutDetector`, puro
+  e conservador — falso positivo silencia cliente ativo) sai das listas **na
+  montagem**, onde o conteúdo é congelado. Além de anti-ban, é LGPD.
+- **`SetSettingsAsync`** é aplicado junto do webhook em toda instância:
+  `readMessages: true` (marcar como lido é sinal humano), `alwaysOnline: false`
+  (presença 24/7 é assinatura de servidor), `groupsIgnore: true`.
+
 ## Pipeline de dados (como funciona)
 
 1. Webhook chega, é validado pelo secret do path e persiste **bruto** em
@@ -775,7 +840,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FixedRandomSource), 468 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 524 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

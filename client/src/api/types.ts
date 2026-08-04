@@ -29,6 +29,59 @@ export interface NumberResponse {
   sendingPauseReason: string | null
 }
 
+// Proxies contratados no fornecedor. A senha nunca vem na resposta.
+export type ProxyStatus = 'Active' | 'Paused' | 'Suspect' | 'Expired' | 'Revoked' | 'Failed'
+
+export interface ProxyNumberDto {
+  numberId: string
+  phone: string
+  sellerName: string
+  status: NumberStatus
+}
+
+export interface ProxyDto {
+  id: string
+  shortId: string
+  label: string
+  kind: string
+  host: string
+  port: number
+  status: ProxyStatus
+  numbersCount: number
+  capacity: number
+  sellersCount: number
+  bansCount: number
+  bannedNumbersCount: number
+  expiresAt: string | null
+  lastTestedAt: string | null
+  lastTestOk: boolean | null
+  numbers: ProxyNumberDto[]
+}
+
+export interface ProxyOverviewDto {
+  enabled: boolean
+  activeProxies: number
+  assignedNumbers: number
+  numbersWithoutProxy: number
+  bansInPeriod: number
+  proxies: ProxyDto[]
+  unassigned: ProxyNumberDto[]
+}
+
+export interface ProxyMoveDto {
+  numberId: string
+  phone: string
+  sellerName: string
+  fromLabel: string | null
+  toLabel: string
+  restartsSocket: boolean
+}
+
+export interface AllocationPreviewDto {
+  moves: ProxyMoveDto[]
+  stillWithoutProxy: string[]
+}
+
 // Aviso de risco anti-ban: a ação pode prosseguir, mas quem opera vê isto antes.
 export interface RiskWarning {
   code: string

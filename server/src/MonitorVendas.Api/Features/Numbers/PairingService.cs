@@ -96,6 +96,7 @@ public sealed class PairingService(
         {
             await CreateWithProxyAsync(session, session.InstanceName, phone: null, ct);
             await evolution.SetWebhookAsync(session.InstanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+            await evolution.SetSettingsAsync(session.InstanceName, ct);
         }
         catch (HttpRequestException)
         {
@@ -237,6 +238,7 @@ public sealed class PairingService(
             }
 
             await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+            await evolution.SetSettingsAsync(instanceName, ct);
 
             session.InstanceName = instanceName;
             session.PairingCode = qr.PairingCode;

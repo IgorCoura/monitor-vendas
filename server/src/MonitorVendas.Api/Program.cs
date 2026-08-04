@@ -47,6 +47,8 @@ if (builder.Configuration.GetValue("AiJob:Enabled", true))
     builder.Services.AddHostedService<AiJobBackgroundService>();
 builder.Services.AddScoped<ReportExportBuilder>();
 builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(AntiBanOptions.Section));
+builder.Services.Configure<MonitorVendas.Api.Features.Numbers.Warmup.WarmupOptions>(
+    builder.Configuration.GetSection(MonitorVendas.Api.Features.Numbers.Warmup.WarmupOptions.Section));
 builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
 
 builder.Services.AddProxyBr(builder.Configuration);

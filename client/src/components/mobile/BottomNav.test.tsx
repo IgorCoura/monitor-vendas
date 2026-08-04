@@ -24,6 +24,7 @@ describe('BottomNav', () => {
       '/contacts',
       '/ai',
       '/labels',
+      '/proxies',
       '/holidays',
     ])
   })

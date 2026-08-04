@@ -20,6 +20,8 @@ import type {
   QrCodeDto,
   RankingEntryDto,
   ReportExportFilters,
+  AllocationPreviewDto,
+  ProxyOverviewDto,
   ReportMetricOption,
   RiskWarning,
   SellerReportDto,
@@ -275,6 +277,28 @@ export const api = {
         },
       ),
     shareStatus: (id: string) => request<ContactShareDto>(`/contacts/share/${id}`),
+  },
+  proxies: {
+    overview: () => request<ProxyOverviewDto>('/proxies'),
+    settings: (enabled: boolean) =>
+      request<{ enabled: boolean }>('/proxies/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    sync: () => request<{ synced: number }>('/proxies/sync', { method: 'POST' }),
+    test: (id: string) => request<{ tested: boolean | null }>(`/proxies/${id}/test`, { method: 'POST' }),
+    pause: (id: string) => request<{ status: string }>(`/proxies/${id}/pause`, { method: 'POST' }),
+    resume: (id: string) => request<{ status: string }>(`/proxies/${id}/resume`, { method: 'POST' }),
+    // Prévia antes de aplicar: cada número conectado que muda de proxy custa um
+    // restart de socket, então o operador vê o plano primeiro.
+    preview: (rebalance: boolean) =>
+      request<AllocationPreviewDto>(`/proxies/allocation/preview?rebalance=${rebalance}`),
+    apply: (rebalance: boolean) =>
+      request<{ moved: number; withoutProxy: number }>(
+        `/proxies/allocation/apply?rebalance=${rebalance}`,
+        { method: 'POST' },
+      ),
+    detach: (numberId: string) => request<void>(`/numbers/${numberId}/proxy`, { method: 'DELETE' }),
   },
   holidays: {
     list: () => request<HolidayResponse[]>('/holidays'),

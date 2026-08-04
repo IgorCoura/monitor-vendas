@@ -56,14 +56,25 @@ function HolidaysIcon() {
   )
 }
 
-// Os rótulos são mais curtos que os da sidebar ("Painel", "IA"): com seis abas
-// em 390px sobram ~65px para cada uma.
+function ProxiesIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-5 w-5">
+      <path d="M10 1.75a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5ZM3.3 10c0-.7.11-1.36.31-1.99h2.2a15.6 15.6 0 0 0 0 3.98h-2.2A6.7 6.7 0 0 1 3.3 10Zm4.02 0c0-.69.05-1.35.13-1.99h5.1a15.6 15.6 0 0 1 0 3.98h-5.1A15.6 15.6 0 0 1 7.32 10Zm6.87-1.99h2.2a6.73 6.73 0 0 1 0 3.98h-2.2a15.6 15.6 0 0 0 0-3.98ZM10 3.3c.74 0 1.7 1.13 2.2 3.21H7.8C8.3 4.43 9.26 3.3 10 3.3Zm0 13.4c-.74 0-1.7-1.13-2.2-3.21h4.4c-.5 2.08-1.46 3.21-2.2 3.21Z" />
+    </svg>
+  )
+}
+
+// Os rótulos são mais curtos que os da sidebar ("Painel", "IA"). Com SETE abas
+// em 390px sobram ~56px para cada uma, e um rótulo de 9 caracteres passa disso:
+// o `truncate` no rótulo faz o excesso virar reticências em vez de quebrar em
+// duas linhas e desalinhar a altura da barra inteira.
 const items: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/', label: 'Painel', icon: <DashboardIcon /> },
   { to: '/registry', label: 'Cadastros', icon: <RegistryIcon /> },
   { to: '/contacts', label: 'Contatos', icon: <ContactsIcon /> },
   { to: '/ai', label: 'IA', icon: <AiIcon /> },
   { to: '/labels', label: 'Etiquetas', icon: <LabelsIcon /> },
+  { to: '/proxies', label: 'Proxies', icon: <ProxiesIcon /> },
   { to: '/holidays', label: 'Feriados', icon: <HolidaysIcon /> },
 ]
 
@@ -87,7 +98,7 @@ export function BottomNav() {
           }
         >
           {item.icon}
-          {item.label}
+          <span className="w-full truncate">{item.label}</span>
         </NavLink>
       ))}
     </nav>
