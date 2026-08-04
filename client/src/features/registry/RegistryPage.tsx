@@ -9,7 +9,6 @@ import {
   useNumberPairingCode,
   useNumbers,
   useNumbersHealth,
-  useWarmup,
   usePairingStatus,
   useRequestPairingCode,
   useRestartNumber,
@@ -466,7 +465,6 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
   const { data: numbers, isLoading } = useNumbers(seller.id)
   // Mesma queryKey em todos os cards: o TanStack Query deduplica a busca.
   const { data: health } = useNumbersHealth()
-  const { data: warmup } = useWarmup()
   const updateSeller = useUpdateSeller()
   const connectNumber = useConnectNumber()
   const banPermanent = useBanPermanent()
@@ -614,18 +612,6 @@ function SellerCard({ seller }: { seller: SellerResponse }) {
               <span className="text-sm font-medium">{fmtPhone(n.phone)}</span>
               <StatusBadge status={n.status} />
               <HealthBadge health={health?.find((h) => h.numberId === n.id)} />
-              {/* Mesmo dado da tela de Aquecimento, no lugar onde o operador já
-                  olha quando um número dá problema. */}
-              {(() => {
-                const w = warmup?.numbers.find((x) => x.numberId === n.id)
-                if (!w || w.state === 'Mature' || w.state === 'NoData') return null
-                return (
-                  <span className={`text-xs ${w.atCeiling ? 'text-danger' : 'text-ink-muted'}`}>
-                    {w.state === 'Paused' ? 'Aquecimento pausado' : `Aquecendo — dia ${w.day} de ${w.totalDays}`}
-                    {w.atCeiling && ' · no teto'}
-                  </span>
-                )
-              })()}
               {/* Avisos de proteção do número: cooldown pós-ban e pausa de envio.
                   Ficam na linha porque explicam por que uma ação vai ser recusada. */}
               {n.bannedUntil && new Date(n.bannedUntil) > new Date() && (

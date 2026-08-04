@@ -51,28 +51,6 @@ export const healthSignalLabel: Record<string, string> = {
   ban: 'Bans no período',
 }
 
-// Tela de aquecimento — espelha o WarmupPolicy do server.
-export const warmupStateLabel = {
-  NoData: 'Nunca conectou',
-  Warming: 'Em aquecimento',
-  Paused: 'Pausado',
-  Mature: 'Aquecido',
-} as const
-
-export const warmupHelp = {
-  emAquecimento:
-    'Números dentro da curva progressiva (inclusive os pausados). O sistema não envia nada por eles — apenas limita quanto podem enviar por dia.',
-  aquecidos:
-    'Números que passaram da curva ou foram liberados manualmente: vale só a cota normal.',
-  noTeto:
-    'Números que já atingiram o teto de mensagens de hoje. É a resposta para "por que este número parou de enviar?" — ele volta a enviar amanhã, com o teto do dia seguinte.',
-  dia: 'Em que dia da curva o número está. Ban devolve ao dia 1: retomar o volume de antes é o caminho mais curto para o próximo ban.',
-  enviadas:
-    'Mensagens que saíram por este número hoje sobre o teto do dia. Conta TUDO que saiu, inclusive o que o vendedor mandou pelo celular — é assim que o WhatsApp conta.',
-  novosContatos:
-    'Conversas iniciadas por nós hoje sobre o teto do dia. Mensagem para quem nunca escreveu antes é o principal motivo de banimento.',
-} as const
-
 // Tela de proxies — cada métrica exibida leva o "?" com um destes textos.
 export const proxyHelp = {
   ativos:

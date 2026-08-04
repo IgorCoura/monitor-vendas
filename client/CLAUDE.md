@@ -196,13 +196,6 @@ client/src/
 │   │               #   já cadastrado o código sai só no clique em "Gerar código"
 │   │               #   (recria a instância na Evolution; vir junto do QR daria um
 │   │               #   código de sessão vencida, que o WhatsApp recusa).
-│   ├── warmup/     # WarmupPage (rota /warmup): em que dia da curva cada número
-│   │               #   está, teto do dia e quanto já usou ("18/50"), com quem
-│   │               #   bateu o teto destacado — é a resposta para "por que este
-│   │               #   número parou de enviar?". Ações no "⋯": reiniciar curva,
-│   │               #   pausar/retomar e marcar como aquecido (confirma antes:
-│   │               #   é a única que afrouxa proteção). A curva configurada
-│   │               #   aparece sob demanda, para o teto não parecer arbitrário.
 │   ├── proxies/    # ProxiesPage (rota /proxies): tela SÓ de monitoramento — a
 │   │               #   compra é no portal do fornecedor. Ocupação (números/capacidade),
 │   │               #   vendedores distintos e bans por proxy no período; expandir mostra

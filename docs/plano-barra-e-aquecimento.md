@@ -1,5 +1,11 @@
 # Plano — barra inferior com "⋯" e tela de Aquecimento
 
+> **Histórico:** a barra inferior foi implementada e está no ar. A parte de
+> **aquecimento foi implementada e depois REMOVIDA a pedido do usuário**
+> (2026-08-04): ele esperava um maturador que gerasse conversas, e o que foi
+> construído era um teto sobre o tráfego real. O documento fica como registro
+> da decisão; nada de aquecimento existe hoje no código.
+
 Escopo revisado: a tela de **consumo/uso de proxies saiu**. Ficam duas entregas —
 a reorganização da barra inferior no celular e a tela de Aquecimento.
 

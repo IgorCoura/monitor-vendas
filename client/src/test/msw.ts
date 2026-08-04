@@ -72,9 +72,6 @@ export const mswServer = setupServer(
   http.get('/api/v1/holidays', () => HttpResponse.json([])),
   http.get('/api/v1/numbers', () => HttpResponse.json([])),
   http.get('/api/v1/numbers/health', () => HttpResponse.json([])),
-  http.get('/api/v1/warmup', () =>
-    HttpResponse.json({ enabled: true, warming: 0, mature: 0, atCeiling: 0, curve: [], numbers: [] }),
-  ),
   http.get('/api/v1/proxies', () =>
     HttpResponse.json({
       enabled: true,

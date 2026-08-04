@@ -32,7 +32,6 @@ describe('BottomNav', () => {
     await user.click(screen.getByRole('button', { name: 'Mais telas' }))
 
     const sheet = await screen.findByTestId('more-sheet')
-    expect(within(sheet).getByRole('button', { name: 'Aquecimento' })).toBeInTheDocument()
     expect(within(sheet).getByRole('button', { name: 'Proxies' })).toBeInTheDocument()
     expect(within(sheet).getByRole('button', { name: 'Etiquetas' })).toBeInTheDocument()
     expect(within(sheet).getByRole('button', { name: 'Feriados' })).toBeInTheDocument()

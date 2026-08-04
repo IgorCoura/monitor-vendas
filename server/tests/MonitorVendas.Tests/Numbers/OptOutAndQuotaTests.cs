@@ -12,7 +12,7 @@ using MonitorVendas.Tests.Infrastructure;
 
 namespace MonitorVendas.Tests.Numbers;
 
-public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIntegrationTest(factory)
+public class OptOutAndQuotaTests(IntegrationTestWebAppFactory factory) : BaseIntegrationTest(factory)
 {
     private const string Instance = "mv-5511900007777";
     private const string Destination = "5511777770000";
@@ -75,36 +75,6 @@ public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIn
         Client.PostAsJsonAsync($"/api/v1/contacts/share?{Period}&confirmRisk=true",
             new { senderNumberId = _numberId, destination = Destination });
 
-    // O número conectou: a curva de aquecimento começa a contar dali.
-    [Fact]
-    public async Task FirstConnection_StartsTheWarmupClock()
-    {
-        await SeedAsync();
-
-        var number = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().SingleAsync());
-        Assert.NotNull(number.WarmupStartedAt);
-    }
-
-    // Ban devolve o número ao dia 1 da curva: retomar o volume de antes é o
-    // caminho mais curto para o próximo ban, e a escalada seguinte é mais longa.
-    [Fact]
-    public async Task Ban_RestartsTheWarmupCurve()
-    {
-        await SeedAsync();
-        var before = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().Select(n => n.WarmupStartedAt).SingleAsync());
-
-        await PostWebhookAsync($$"""
-            { "event": "connection.update", "instance": "{{Instance}}",
-              "data": { "state": "close", "statusReason": 403 }, "date_time": "2026-07-20T12:00:00Z" }
-            """);
-        await ProcessAsync();
-
-        var after = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().Select(n => n.WarmupStartedAt).SingleAsync());
-        Assert.NotEqual(before, after);
-        Assert.Equal(new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc), after);
-    }
-
-    // Teto do dia atingido: o envio para com motivo e fica pendente para a
     // próxima janela. Metade hoje e metade amanhã é melhor que queimar o número.
     [Fact]
     public async Task Sender_StopsAtTheDailyCeiling()
@@ -122,7 +92,6 @@ public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal("Pending", status.GetProperty("status").GetString());
     }
 
-    // Cliente que responde "SAIR" entra em opt-out e some das listas montadas
     // depois. Além de anti-ban, é exigência da LGPD.
     [Fact]
     public async Task OptOutRequest_RemovesTheContactFromFutureLists()
@@ -143,7 +112,6 @@ public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal(1, share.GetProperty("totalContacts").GetInt32());
     }
 
-    // Conversa normal não vira opt-out: um falso positivo silenciaria um cliente
     // ativo, erro pior que deixar passar.
     [Fact]
     public async Task NormalMessage_DoesNotCreateOptOut()
@@ -156,84 +124,6 @@ public class WarmupAndOptOutTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal(0, await InDbAsync(db => db.Set<ContactOptOut>().CountAsync()));
     }
 
-    // A tela lê dia da curva, teto e consumo do dia — e o consumo conta TUDO que
-    // saiu pelo número, inclusive o que o vendedor mandou pelo celular.
-    [Fact]
-    public async Task Overview_ReportsTheDayAndTodaysUsage()
-    {
-        await SeedAsync();
-        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/restart", null);
-
-        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
-
-        var number = overview.GetProperty("numbers").EnumerateArray().Single();
-        Assert.Equal("Warming", number.GetProperty("state").GetString());
-        Assert.Equal(1, number.GetProperty("day").GetInt32());
-        Assert.Equal(30, number.GetProperty("totalDays").GetInt32());
-        Assert.Equal(20, number.GetProperty("messagesPerDay").GetInt32());
-        Assert.True(overview.GetProperty("curve").GetArrayLength() > 0);
-    }
-
-    // Pausar congela o dia; retomar devolve o número ao MESMO dia em que parou,
-    // em vez de tê-lo envelhecido de graça.
-    [Fact]
-    public async Task PauseAndResume_PreserveTheCurveDay()
-    {
-        await SeedAsync();
-        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/restart", null);
-
-        var paused = await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/pause", null);
-        paused.EnsureSuccessStatusCode();
-
-        var afterPause = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
-        Assert.Equal("Paused", afterPause.GetProperty("numbers").EnumerateArray().Single().GetProperty("state").GetString());
-
-        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/resume", null);
-
-        var afterResume = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
-        var number = afterResume.GetProperty("numbers").EnumerateArray().Single();
-        Assert.Equal("Warming", number.GetProperty("state").GetString());
-        Assert.Equal(1, number.GetProperty("day").GetInt32());
-    }
-
-    // Concluir à mão libera o teto: é a única ação que afrouxa a proteção.
-    [Fact]
-    public async Task Complete_ReleasesTheCeiling()
-    {
-        await SeedAsync();
-
-        var response = await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/complete", null);
-
-        response.EnsureSuccessStatusCode();
-        var number = (await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup"))
-            .GetProperty("numbers").EnumerateArray().Single();
-        Assert.Equal("Mature", number.GetProperty("state").GetString());
-        Assert.Equal(JsonValueKind.Null, number.GetProperty("messagesPerDay").ValueKind);
-    }
-
-    // Regressão: o ban reinicia a curva mesmo em número pausado ou concluído —
-    // é o caso que alguém vai quebrar no futuro ao mexer no handler.
-    [Fact]
-    public async Task Ban_RestartsTheCurveEvenWhenPausedOrCompleted()
-    {
-        await SeedAsync();
-        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/complete", null);
-        await Client.PostAsync($"/api/v1/numbers/{_numberId}/warmup/pause", null);
-
-        await PostWebhookAsync($$"""
-            { "event": "connection.update", "instance": "{{Instance}}",
-              "data": { "state": "close", "statusReason": 403 }, "date_time": "2026-07-25T12:00:00Z" }
-            """);
-        await ProcessAsync();
-
-        var number = await InDbAsync(db => db.Set<WhatsappNumber>().AsNoTracking().SingleAsync());
-        Assert.Equal(new DateTime(2026, 7, 25, 12, 0, 0, DateTimeKind.Utc), number.WarmupStartedAt);
-        Assert.Null(number.WarmupCompletedAt);
-        Assert.Null(number.WarmupPausedAt);
-    }
-
-    // As settings da instância são aplicadas no pareamento: readMessages ligado
-    // (marcar como lido é sinal humano) e alwaysOnline desligado (presença 24/7
     // é assinatura de servidor).
     [Fact]
     public async Task Pairing_AppliesTheInstanceSettings()

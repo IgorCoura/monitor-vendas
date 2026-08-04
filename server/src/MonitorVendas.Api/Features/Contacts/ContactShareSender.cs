@@ -5,7 +5,6 @@ using MonitorVendas.Api.Data;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
-using MonitorVendas.Api.Features.Numbers.Warmup;
 using MonitorVendas.Api.Integrations.Evolution;
 
 namespace MonitorVendas.Api.Features.Contacts;
@@ -22,7 +21,6 @@ public sealed class ContactShareSender(
     IServiceScopeFactory scopeFactory,
     IOptions<ContactShareOptions> options,
     IOptions<AntiBanOptions> antiBan,
-    IOptions<Numbers.Warmup.WarmupOptions> warmup,
     IRandomSource random,
     ILogger<ContactShareSender> logger) : IContactShareSender
 {
@@ -95,9 +93,7 @@ public sealed class ContactShareSender(
             return 0;
         }
 
-        // Teto do dia: o MENOR entre a curva de aquecimento (número novo) e a
-        // cota fixa. Nenhum dos dois envia nada — os dois só limitam o que o
-        // vendedor já faria.
+        // Cota do dia: limita o que o vendedor já faria, sem enviar nada.
         var quota = await RemainingQuotaAsync(db, number, ct);
         if (quota <= 0)
         {
@@ -200,20 +196,18 @@ public sealed class ContactShareSender(
         return sent;
     }
 
-    // Quantas mensagens este número ainda pode enviar hoje. Vale o MENOR entre a
-    // curva de aquecimento e a cota fixa, descontando o que já saiu — inclusive
-    // o que o vendedor mandou pelo celular, porque o WhatsApp conta tudo junto.
+    // Quantas mensagens este número ainda pode enviar hoje, pela cota fixa,
+    // descontando o que já saiu — inclusive o que o vendedor mandou pelo
+    // celular, porque o WhatsApp conta tudo junto.
     private async Task<int> RemainingQuotaAsync(AppDbContext db, WhatsappNumber number, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var limits = WarmupPolicy.LimitsFor(
-            number.WarmupStartedAt, now, warmup.Value, number.WarmupPausedAt, number.WarmupCompletedAt);
         var settings = antiBan.Value;
 
         // Zero significa ZERO: uma cota configurada como 0 pausa o envio por
         // config, e "corrigi-la" para 1 seria a configuração mentindo para quem
         // a escreveu. Só o negativo é tratado como engano.
-        var dailyCap = Math.Min(limits.MessagesPerDay ?? int.MaxValue, Math.Max(0, settings.MaxMessagesPerDay));
+        var dailyCap = Math.Max(0, settings.MaxMessagesPerDay);
 
         var sentToday = await db.Set<Message>().CountAsync(m =>
             m.WhatsappNumberId == number.Id

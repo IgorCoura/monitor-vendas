@@ -195,34 +195,20 @@ portal do fornecedor** — o sistema só lê o catálogo, distribui e aplica.
   (desligados nos testes, que dirigem `IProxySyncService.RunOnceAsync()` e
   `IProxyApplier.ProcessPendingAsync()` direto).
 
-## Aquecimento, opt-out e cotas (Fase 3)
+## Opt-out e cotas (Fase 3)
 
-- **`WarmupPolicy` é puro** e devolve o teto do dia a partir de
-  `WhatsappNumber.WarmupStartedAt` (gravado na 1ª conexão) e da curva em config
-  (`Warmup:Curve`). **Ban reinicia a curva no dia 1 e apaga pausa e conclusão** —
-  um número liberado à mão que toma ban voltaria maduro e dispararia no volume
-  cheio, o oposto do necessário. Número sem data é `NoData` (nunca conectou ou é
-  anterior à feature), não "maduro": travar quem já operava seria punir o
-  histórico existente.
-- **Pausa e conclusão manual** (`WarmupPausedAt`, `WarmupCompletedAt`): pausado, o
-  relógio para no instante da pausa e retomar empurra `WarmupStartedAt` pelo tempo
-  parado — o número volta no MESMO dia da curva em vez de envelhecer de graça. A
-  função continua pura: recebe as datas, não consulta nada.
-- **`GET /api/v1/warmup`** devolve a lista (dia, teto, consumo do dia, contatos
-  novos) mais a curva configurada. O consumo conta **tudo** que saiu pelo número,
-  inclusive o que o vendedor mandou pelo celular — é assim que o WhatsApp conta, e
-  mostrar só o que o sistema enviou daria uma falsa folga. Ações em
-  `POST /numbers/{id}/warmup/restart|pause|resume|complete`; `complete` é a única
-  que afrouxa proteção e fica registrada em log.
-- **O aquecimento não envia NADA**: é teto sobre o tráfego real do vendedor.
-  Tráfego sintético (números do sistema conversando entre si) foi descartado —
-  é clique fechada com reciprocidade perfeita e horários correlacionados, o
-  padrão que detector de comportamento coordenado procura, e contaminaria as
-  próprias métricas do produto.
-- **Cotas** (`AntiBan:MaxMessagesPerHour/PerDay`) convivem com o warmup: vale o
-  **menor** dos dois tetos, descontando o que já saiu no dia (inclusive o que o
-  vendedor mandou pelo celular). **Zero significa zero** — corrigir para 1 seria
-  a config mentindo para quem a escreveu.
+**Não existe feature de aquecimento.** Houve uma (curva progressiva por número,
+com tela e endpoints) e ela foi **removida a pedido do usuário em 2026-08-04**:
+ele esperava um maturador que gerasse conversas, e o que existia era só um teto
+sobre o tráfego real — inútil para o caso dele. Se voltar a fazer sentido, a
+decisão de NÃO gerar tráfego sintético continua registrada em
+`../docs/plano-antiban-sugestoes.md` §B1.1, com o porquê.
+
+- **Cotas** (`AntiBan:MaxMessagesPerHour/PerDay`): limitam o envio da lista de
+  contatos por número, descontando o que já saiu no dia — inclusive o que o
+  vendedor mandou pelo celular, porque o WhatsApp conta tudo junto e olhar só o
+  que o sistema enviou daria uma falsa folga. **Zero significa zero** — corrigir
+  para 1 seria a config mentindo para quem a escreveu.
 - **`ContactOptOut`**: cliente que responde "SAIR"/"PARE" (`OptOutDetector`, puro
   e conservador — falso positivo silencia cliente ativo) sai das listas **na
   montagem**, onde o conteúdo é congelado. Além de anti-ban, é LGPD.
@@ -853,7 +839,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 524 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 513 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
