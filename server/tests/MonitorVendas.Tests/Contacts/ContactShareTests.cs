@@ -77,6 +77,18 @@ public class ContactShareTests(IntegrationTestWebAppFactory factory) : BaseInteg
         Client.PostAsJsonAsync($"/api/v1/contacts/share?{Period}{extraQuery}",
             new { senderNumberId = _numberId, destination = Destination });
 
+    // Deixa o número remetente restringido pelo WhatsApp (estado que o 463 produz).
+    private Task PauseSenderAsync() =>
+        InDbAsync(async db =>
+        {
+            await db.Set<MonitorVendas.Api.Features.Numbers.WhatsappNumber>()
+                .Where(n => n.Id == _numberId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.SendingPausedUntil, DateTime.UtcNow.AddHours(6))
+                    .SetProperty(n => n.SendingPauseReason, "O WhatsApp restringiu o envio deste número."));
+            return 0;
+        });
+
     // O corpo trafega como JSON (acento vira ã): compara-se o texto decodificado.
     private static JsonElement LastSend(FakeEvolutionHandler fake) =>
         JsonDocument.Parse(fake.Requests.Last(r => r.Path.StartsWith("/message/sendText/")).Body!).RootElement;
@@ -187,6 +199,101 @@ public class ContactShareTests(IntegrationTestWebAppFactory factory) : BaseInteg
         Assert.Equal(0, status.GetProperty("sentMessages").GetInt32());
         Assert.Equal(1, await InDbAsync(db => db.Set<ContactShareMessage>()
             .Where(m => m.ContactShareId == id).MaxAsync(m => m.Attempts)));
+    }
+
+    // Erro 463 (limite de contato frio) no meio do envio encerra ESTE envio como
+    // falho, com o motivo visível, e pausa o número — sem gastar tentativa.
+    // Deixá-lo pendente o faria voltar sozinho sem ninguém decidir.
+    [Fact]
+    public async Task Sender_OnReachoutRestriction_FailsTheShareAndPausesTheNumber()
+    {
+        await SeedAsync();
+        FakeEvolution.Reset();
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/",
+            """{"status":500,"error":{"code":463,"message":"NackCallerReachoutTimelocked"}}""",
+            HttpStatusCode.InternalServerError);
+        var share = await (await ShareAsync()).Content.ReadFromJsonAsync<JsonElement>();
+        var id = share.GetProperty("id").GetGuid();
+
+        await Factory.Services.GetRequiredService<IContactShareSender>().ProcessPendingAsync();
+
+        var status = await Client.GetFromJsonAsync<JsonElement>($"/api/v1/contacts/share/{id}");
+        Assert.Equal("Failed", status.GetProperty("status").GetString());
+        Assert.Contains("restringiu", status.GetProperty("error").GetString());
+        var number = await InDbAsync(db => db.Set<MonitorVendas.Api.Features.Numbers.WhatsappNumber>().SingleAsync());
+        Assert.NotNull(number.SendingPausedUntil);
+        Assert.True(number.SendingPausedUntil > DateTime.UtcNow.AddHours(1));
+        Assert.Equal(0, await InDbAsync(db => db.Set<ContactShareMessage>()
+            .Where(m => m.ContactShareId == id).MaxAsync(m => m.Attempts)));
+    }
+
+    // Número restringido: pedir um envio novo devolve o AVISO com o motivo, sem
+    // criar nada — o operador precisa ver o risco antes de decidir.
+    [Fact]
+    public async Task Share_WhenNumberIsRestricted_WarnsInsteadOfSending()
+    {
+        await SeedAsync();
+        await PauseSenderAsync();
+
+        var response = await ShareAsync();
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.GetProperty("requiresConfirmation").GetBoolean());
+        Assert.Contains(body.GetProperty("warnings").EnumerateArray(),
+            w => w.GetProperty("code").GetString() == "sendingPaused");
+        Assert.Equal(0, await InDbAsync(db => db.Set<ContactShare>().CountAsync()));
+    }
+
+    // Confirmado o aviso, o envio acontece mesmo com o número pausado: a proteção
+    // é conselho, não trava — quem decide é quem opera.
+    [Fact]
+    public async Task Share_WithConfirmedRisk_SendsEvenWhilePaused()
+    {
+        await SeedAsync();
+        await PauseSenderAsync();
+
+        var response = await ShareAsync("&confirmRisk=true");
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await Factory.Services.GetRequiredService<IContactShareSender>().ProcessPendingAsync();
+
+        Assert.Contains(FakeEvolution.Requests, r => r.Path.StartsWith("/message/sendText/"));
+    }
+
+    // Fora do expediente o envio comum espera a janela útil (não é recusa, é
+    // agendamento); o confirmado pelo operador sai na hora. A janela de zero
+    // horas fecha o calendário em qualquer dia/hora em que a suíte rode.
+    [Fact]
+    public async Task Sender_OutsideBusinessHours_HoldsNormalShareButSendsAcknowledgedOne()
+    {
+        await SeedAsync();
+        var share = await (await ShareAsync()).Content.ReadFromJsonAsync<JsonElement>();
+        var id = share.GetProperty("id").GetGuid();
+
+        using var host = Factory.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("ContactShare:BusinessHoursOnly", "true");
+            b.UseSetting("Metrics:BusinessDayStartHour", "9");
+            b.UseSetting("Metrics:BusinessDayEndHour", "9");
+            b.UseSetting("Metrics:SaturdayEnabled", "false");
+        });
+        await host.Services.GetRequiredService<IContactShareSender>().ProcessPendingAsync();
+
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Path.StartsWith("/message/sendText/"));
+        var status = await Client.GetFromJsonAsync<JsonElement>($"/api/v1/contacts/share/{id}");
+        Assert.Equal("Pending", status.GetProperty("status").GetString());
+
+        // O mesmo envio, agora marcado como confirmado pelo operador, sai.
+        await InDbAsync(async db =>
+        {
+            await db.Set<ContactShare>().Where(s => s.Id == id)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.RiskAcknowledged, true));
+            return 0;
+        });
+        await host.Services.GetRequiredService<IContactShareSender>().ProcessPendingAsync();
+
+        Assert.Contains(FakeEvolution.Requests, r => r.Path.StartsWith("/message/sendText/"));
     }
 
     // Esgotadas as tentativas, o envio é marcado como falho com o motivo.

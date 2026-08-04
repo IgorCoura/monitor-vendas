@@ -48,6 +48,33 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('Nenhum vendedor com dados no período.')).toBeInTheDocument()
   })
 
+  // Número em risco no semáforo de saúde vira faixa de alerta no topo, com o
+  // telefone formatado e o caminho para Cadastros. Sem risco, nada aparece.
+  it('mostra a faixa de saúde quando há número em risco', async () => {
+    mswServer.use(
+      http.get('/api/v1/numbers/health', () =>
+        HttpResponse.json([
+          {
+            numberId: 'n1',
+            phone: '5511968608425',
+            sellerId: 's1',
+            sellerName: 'Ana',
+            status: 'Active',
+            score: 70,
+            level: 'High',
+            signals: [{ key: 'delivery', value: '40%', points: 30 }],
+          },
+        ]),
+      ),
+    )
+
+    renderWithProviders(<DashboardPage />)
+
+    const alert = await screen.findByTestId('health-alert')
+    expect(alert).toHaveTextContent('1 número precisa de atenção')
+    expect(alert).toHaveTextContent('+55 11 96860-8425')
+  })
+
   // Espera de resposta do time: média ponderada pela quantidade de respostas de cada
   // vendedor (10min×1 + 30min×3 = 25min), com mín dos mínimos e máx dos máximos no hint.
   it('agrega a espera de resposta ponderada pelo volume de cada vendedor', async () => {

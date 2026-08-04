@@ -13,6 +13,16 @@ public class WhatsappNumber
     // substitui a janela fixa: uma queda de 5h com lookback de 2h perdia 3h em
     // silêncio. Só avança quando a Evolution respondeu — falha não pula trecho.
     public DateTime? LastReconciledAt { get; set; }
+
+    // Pausa de envio depois de o WhatsApp sinalizar restrição (erro 463): o
+    // ContactShareSender não manda nada por este número até vencer. Só trava o
+    // que NÓS enviamos — receber e monitorar seguem normais.
+    public DateTime? SendingPausedUntil { get; set; }
+    public string? SendingPauseReason { get; set; }
+
+    // Cooldown pós-ban: reconectar antes disso exige confirmação explícita,
+    // porque a reconexão insistente é o que promove ban temporário a permanente.
+    public DateTime? BannedUntil { get; set; }
 }
 
 public enum NumberStatus

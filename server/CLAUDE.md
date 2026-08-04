@@ -93,6 +93,65 @@ vendedor.
   canal continua sendo o `connection.update`. Recusa 409 em número que nunca
   pareou (não há sessão para reiniciar).
 
+## Anti-ban (Fase 1, implementada em 2026-08-03)
+
+Mitigações contra banimento dos números — plano completo em
+`../docs/plano-implementacao.md` e a pesquisa em `../docs/plano-antiban-sugestoes.md`.
+
+**Princípio: as proteções AVISAM, não impedem.** Nenhuma delas recusa uma ação em
+definitivo — todas descrevem o risco e aceitam um "sim" explícito
+(`?confirmRisk=true` no envio, `?confirmCooldown=true` na reconexão/reinício),
+no mesmo idioma do `confirmBanned` que já existia. O 409 com
+`requiresConfirmation: true` é pergunta, não recusa. Quem decide é quem opera; o
+sistema garante que a decisão seja informada. **Nada nunca bloqueia o
+recebimento** — webhook, métricas e IA seguem em qualquer situação.
+
+- **Todo `sendText` sai com digitação simulada**: `presence: "composing"` +
+  `delay` proporcional ao texto (`Common/HumanDelay`: ~30ms/char × ruído
+  gaussiano, clamp 1,2–15s). A regra mora no `EvolutionApiClient` — nenhum envio
+  futuro pode esquecer. É a única mitigação com fonte primária da Meta (conta que
+  envia sem disparar o indicador de digitação é sinal declarado de abuso).
+  **O `delay` é SÍNCRONO na Evolution v2.3.7** (medido: delay 8000 → resposta em
+  9s): o envio tem timeout próprio (delay + 15s) e o delay usado volta no
+  `SendResult` para o chamador descontar do intervalo.
+- **`IRandomSource`** (`Common/RandomSource`) é a fonte de ruído injetável —
+  testes usam `FixedRandomSource`. Determinismo de teste é obrigatório.
+- **`ContactShareSender`**: intervalo entre mensagens **sorteado** (cauda pesada,
+  `MinDelaySeconds`/`MaxDelaySeconds`, 12–30s; substituiu o fixo de 5s que era
+  assinatura de bot), descontando o delay de digitação; **gate de horário
+  comercial** (`BusinessHoursOnly`, reusa o `BusinessHoursCalendar` via
+  `ReportQueries.BuildCalendarAsync` — feriados incluídos); fora do expediente a
+  fila espera, nada é descartado.
+- **Erro 463** (`NackCallerReachoutTimelocked` = limite de contato frio): o
+  `SendTextAsync` detecta (marcadores `reachout`/`timelock`/`"code": 463` — "463"
+  solto não vale, telefone tem 463 no meio) e devolve `Restricted`; o sender
+  **pausa o número** (`SendingPausedUntil` = +`AntiBan:SendPauseHours`, 12h) e
+  marca **o envio como `Failed`** com o motivo, **sem gastar tentativa** — deixá-lo
+  pendente o faria voltar sozinho sem ninguém decidir. Corpo cru de toda falha de
+  envio vai na exceção/log — é dele que sai o parser preciso.
+- **`POST /contacts/share` avisa antes de enviar**: `RiskWarningsAsync` junta os
+  riscos conhecidos (número restringido pelo 463, fora do horário comercial,
+  saúde `High`/`Critical` nos últimos 7 dias) e devolve **409 com
+  `requiresConfirmation` + `warnings[]`** quando há algum. Com `?confirmRisk=true`
+  o envio é criado com `ContactShare.RiskAcknowledged = true`, e o sender ignora
+  a pausa e o gate de expediente **para aquele envio**. Envio sem confirmação
+  fora do expediente **espera** a janela útil (agendamento, não recusa).
+- **Cooldown pós-ban**: 403 grava `WhatsappNumber.BannedUntil`
+  (+`AntiBan:BanCooldownHours`, 24h); `connect`, `pairing-code` **e `restart`**
+  avisam com 409 + a data (`?confirmCooldown=true` prossegue, com confirmação na
+  tela). `restart` entra na lista porque sobe o socket de novo — sem ele, o aviso
+  do "Reconectar" seria contornável pelo botão ao lado. 401/428/515 NÃO geram
+  cooldown; `open` limpa. A escalada 24h → 48h → vitalício é dirigida por
+  reconexão insistente.
+- **Saúde do número** (`Features/Numbers/Health/`): `NumberHealth` (puro) agrega
+  em score 0–100 os sinais que preveem ban — taxa de entrega (enviadas sem
+  `DeliveredAt` 15 min depois; <60% é o aviso clássico de soft-ban), taxa de
+  resposta, conversas iniciadas por nós, desconexões 24h, novos contatos/dia,
+  463, ban. `NumberHealthQueries` carrega tudo em lote (sem N+1);
+  `GET /numbers/health?from&to` (default 7 dias). **"Sem dados" ≠ vermelho** —
+  número novo não dispara alarme. Faixas: 0–29 baixo · 30–59 médio · 60–84 alto ·
+  85–100 crítico.
+
 ## Pipeline de dados (como funciona)
 
 1. Webhook chega, é validado pelo secret do path e persiste **bruto** em
@@ -320,7 +379,9 @@ Mesma lista da tela de contatos, mandada por WhatsApp como texto
   contador; contato sem nome sai só com o número; linha que sozinha estoura o
   limite vira mensagem própria — **nenhum contato é descartado**.
 - `ContactShareSender` (gated `ContactShare:Enabled`) manda uma mensagem por vez
-  com `DelayBetweenMessagesSeconds` de intervalo. Falha registra `Attempts` e
+  com intervalo sorteado (`MinDelaySeconds`–`MaxDelaySeconds`, cauda pesada,
+  descontando o delay de digitação) e só dentro do expediente
+  (`BusinessHoursOnly`). Falha registra `Attempts` e
   **para o envio inteiro** (metade da lista é pior que nada); a passada seguinte
   retoma de onde parou. Um envio é tentado **uma vez por passada** — repescar na
   mesma passada gastaria as tentativas todas sem intervalo (bug corrigido, com
@@ -332,10 +393,11 @@ Mesma lista da tela de contatos, mandada por WhatsApp como texto
 - Recusas (nada é enviado): destino sem DDI/DDD, remetente inexistente ou não
   `Active`, filtro sem contatos, e lista que daria mais de
   `MaxMessagesPerShare` mensagens.
-- Config `ContactShare`: `Enabled`, `IntervalSeconds`,
-  `DelayBetweenMessagesSeconds`, `MaxCharsPerMessage`, `MaxMessagesPerShare`,
-  `MaxAttempts`. Nos testes o serviço fica desligado e o delay é 0 —
-  `IContactShareSender.ProcessPendingAsync()` é chamado direto.
+- Config `ContactShare`: `Enabled`, `IntervalSeconds`, `MinDelaySeconds`,
+  `MaxDelaySeconds`, `BusinessHoursOnly`, `MaxCharsPerMessage`,
+  `MaxMessagesPerShare`, `MaxAttempts`. Nos testes o serviço fica desligado, o
+  delay é 0 e o gate de expediente é falso (a hora em que a suíte roda não pode
+  decidir teste) — `IContactShareSender.ProcessPendingAsync()` é chamado direto.
 
 ## Relatório em Excel (`Features/ReportExport`)
 
@@ -613,7 +675,7 @@ faixas estreitas até 30 min, larga na cauda) e a mediana é estimada por
 interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exata**.
 
 **Endpoints**: `POST/GET/PUT /api/v1/sellers`, `GET /sellers/{id}/numbers`,
-`GET /numbers` (todos, com vendedor),
+`GET /numbers` (todos, com vendedor), `GET /numbers/health` (semáforo anti-ban),
 `POST /sellers/{id}/pairings` + `GET /pairings/{id}` + `/confirm` + `/cancel` + `/pairing-code`,
 `POST /numbers/{id}/connect` (novo QR; `?confirmBanned=true` para número banido),
 `POST /numbers/{id}/pairing-code` (código de pareamento, recria a instância),
@@ -681,7 +743,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 429 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FixedRandomSource), 452 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -696,7 +758,8 @@ server/
 - **`Ai:ApiKey` em dev vem do user-secrets** (`UserSecretsId` no csproj do Api —
   sem essa propriedade o host ignora o `secrets.json` em silêncio). Em Docker/produção
   o cofre não existe: use env (`Ai__ApiKey`).
-- Config via appsettings/env: blocos `Ai` (`Provider`, `BaseUrl`, `ApiKey`,
+- Config via appsettings/env: bloco `AntiBan` (`SendPauseHours`,
+  `BanCooldownHours`); blocos `Ai` (`Provider`, `BaseUrl`, `ApiKey`,
   `Model`, `MaxOutputTokens`, `ThinkingBudgetTokens`, `MaxConcurrency`,
   `MaxAttempts`, `RetryBackoffSeconds`, `UsdBrlRate` e a tabela `Pricing` por
   modelo em USD/1M tokens), `AiBudget` (`Enabled`, `AmountPerWindow`,

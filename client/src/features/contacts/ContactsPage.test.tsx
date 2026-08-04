@@ -140,6 +140,85 @@ describe('ContactsPage', () => {
     expect(await screen.findByText(/Enviado: 2 contatos em 1 mensagem/)).toBeInTheDocument()
   })
 
+  // Risco anti-ban não impede: o servidor devolve os avisos, a tela mostra e o
+  // botão vira "Enviar mesmo assim", que repete o pedido com confirmRisk=true.
+  it('mostra os avisos de risco e envia mesmo assim quando confirmado', async () => {
+    const urls: URL[] = []
+    mswServer.use(
+      contactsHandler(),
+      http.get('/api/v1/numbers', () =>
+        HttpResponse.json([
+          { id: 'num-1', phone: '5511900002222', status: 'Active', sellerId: 's1', sellerName: 'Ana' },
+        ]),
+      ),
+      http.post('/api/v1/contacts/share', ({ request }) => {
+        const url = new URL(request.url)
+        urls.push(url)
+        if (url.searchParams.get('confirmRisk') !== 'true') {
+          return HttpResponse.json(
+            {
+              error: 'Enviar por este número agora tem risco de banimento.',
+              requiresConfirmation: true,
+              warnings: [
+                { code: 'sendingPaused', message: 'O WhatsApp restringiu o envio por este número há pouco (erro 463).' },
+                { code: 'outsideBusinessHours', message: 'Agora está fora do horário comercial.' },
+              ],
+            },
+            { status: 409 },
+          )
+        }
+        return HttpResponse.json(
+          {
+            id: 'share-1',
+            senderNumberId: 'num-1',
+            senderPhone: '5511900002222',
+            destination: '5511777770000',
+            totalContacts: 2,
+            totalMessages: 1,
+            sentMessages: 0,
+            status: 'Pending',
+            error: null,
+            createdAt: '2026-07-30T12:00:00Z',
+            completedAt: null,
+          },
+          { status: 202 },
+        )
+      }),
+      http.get('/api/v1/contacts/share/share-1', () =>
+        HttpResponse.json({
+          id: 'share-1',
+          senderNumberId: 'num-1',
+          senderPhone: '5511900002222',
+          destination: '5511777770000',
+          totalContacts: 2,
+          totalMessages: 1,
+          sentMessages: 1,
+          status: 'Completed',
+          error: null,
+          createdAt: '2026-07-30T12:00:00Z',
+          completedAt: '2026-07-30T12:00:10Z',
+        }),
+      ),
+    )
+
+    renderWithProviders(<ContactsPage />)
+    const user = userEvent.setup()
+    await screen.findByTestId('contacts-table')
+
+    await user.click(screen.getByRole('button', { name: 'Enviar por WhatsApp' }))
+    await user.type(screen.getByLabelText('Enviar para'), '5511777770000')
+    await user.click(screen.getByRole('button', { name: 'Enviar' }))
+
+    const warnings = await screen.findByTestId('share-warnings')
+    expect(warnings).toHaveTextContent('erro 463')
+    expect(warnings).toHaveTextContent('fora do horário comercial')
+
+    await user.click(screen.getByRole('button', { name: 'Enviar mesmo assim' }))
+
+    expect(await screen.findByText(/Enviado: 2 contatos/)).toBeInTheDocument()
+    expect(urls.map((u) => u.searchParams.get('confirmRisk'))).toEqual([null, 'true'])
+  })
+
   // O link de exportação carrega exatamente os mesmos filtros da prévia.
   it('exporta com os mesmos filtros da tela', async () => {
     mswServer.use(contactsHandler())

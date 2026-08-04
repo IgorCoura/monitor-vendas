@@ -64,13 +64,20 @@ export function useAllNumbers() {
   return useQuery({ queryKey: ['numbers', 'all'], queryFn: api.numbers.listAll })
 }
 
+// Semáforo de saúde dos números. Busca em segundo plano: sem círculo de
+// progresso — o sinal de atualização é o do UpdateControls, como nas métricas.
+export function useNumbersHealth() {
+  return useQuery({ queryKey: ['numbers', 'health'], queryFn: api.numbers.health })
+}
+
 export function useCreateContactShare() {
   return useMutation({
-    mutationFn: ({ filters, senderNumberId, destination }: {
+    mutationFn: ({ filters, senderNumberId, destination, confirmRisk }: {
       filters: ContactFilters
       senderNumberId: string
       destination: string
-    }) => api.contacts.share(filters, senderNumberId, destination),
+      confirmRisk?: boolean
+    }) => api.contacts.share(filters, senderNumberId, destination, confirmRisk),
   })
 }
 
@@ -228,8 +235,15 @@ export function useUpdateSeller() {
 
 export function useConnectNumber() {
   return useMutation({
-    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
-      api.numbers.connect(id, confirmBanned),
+    mutationFn: ({
+      id,
+      confirmBanned,
+      confirmCooldown,
+    }: {
+      id: string
+      confirmBanned?: boolean
+      confirmCooldown?: boolean
+    }) => api.numbers.connect(id, confirmBanned, confirmCooldown),
   })
 }
 
@@ -273,8 +287,15 @@ export function useConfirmPairing() {
 // Código de pareamento de um número JÁ cadastrado (reconexão).
 export function useNumberPairingCode() {
   return useMutation({
-    mutationFn: ({ id, confirmBanned }: { id: string; confirmBanned?: boolean }) =>
-      api.numbers.pairingCode(id, confirmBanned),
+    mutationFn: ({
+      id,
+      confirmBanned,
+      confirmCooldown,
+    }: {
+      id: string
+      confirmBanned?: boolean
+      confirmCooldown?: boolean
+    }) => api.numbers.pairingCode(id, confirmBanned, confirmCooldown),
   })
 }
 
@@ -308,7 +329,8 @@ export function useDisconnectNumber() {
 export function useRestartNumber() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: api.numbers.restart,
+    mutationFn: ({ id, confirmCooldown }: { id: string; confirmCooldown?: boolean }) =>
+      api.numbers.restart(id, confirmCooldown),
     onSuccess: () => client.invalidateQueries({ queryKey: ['numbers'] }),
   })
 }

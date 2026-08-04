@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import { useAllNumbers, useContactShareStatus, useCreateContactShare } from '../../api/queries'
-import type { ContactFilters, ContactRowDto } from '../../api/types'
+import type { ContactFilters, ContactRowDto, RiskWarning } from '../../api/types'
 import { Button, Dialog, ErrorState, Input, Select } from '../../components/ui'
 import { fmtPhone } from '../../lib/format'
 
@@ -30,6 +30,7 @@ export function ShareDialog({
   const [destination, setDestination] = useState('')
   const [shareId, setShareId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<RiskWarning[]>([])
   const { data: share } = useContactShareStatus(shareId)
 
   const active = (numbers ?? []).filter((n) => n.status === 'Active')
@@ -38,15 +39,29 @@ export function ShareDialog({
   function close() {
     setShareId(null)
     setError(null)
+    setWarnings([])
     onClose()
   }
 
-  async function send() {
+  // As proteções anti-ban avisam em vez de impedir: o primeiro envio vem sem
+  // confirmação e, se houver risco, o servidor descreve qual — a decisão de
+  // seguir mesmo assim é de quem opera.
+  async function send(confirmRisk = false) {
     setError(null)
     try {
-      const created = await createShare.mutateAsync({ filters, senderNumberId: sender, destination })
+      const created = await createShare.mutateAsync({
+        filters,
+        senderNumberId: sender,
+        destination,
+        confirmRisk,
+      })
+      setWarnings([])
       setShareId(created.id)
     } catch (err) {
+      if (err instanceof ApiError && err.requiresConfirmation) {
+        setWarnings(err.warnings)
+        return
+      }
       setError(err instanceof ApiError ? err.message : 'Falha ao iniciar o envio.')
     }
   }
@@ -66,9 +81,22 @@ export function ShareDialog({
             <Button variant="ghost" onClick={close}>
               Cancelar
             </Button>
-            <Button onClick={send} disabled={sendDisabled} loading={createShare.isPending}>
-              Enviar
-            </Button>
+            {warnings.length > 0 ? (
+              // O rótulo muda de propósito: o segundo clique é uma decisão
+              // diferente da primeira, tomada já sabendo do risco.
+              <Button
+                variant="danger"
+                onClick={() => send(true)}
+                disabled={sendDisabled}
+                loading={createShare.isPending}
+              >
+                Enviar mesmo assim
+              </Button>
+            ) : (
+              <Button onClick={() => send()} disabled={sendDisabled} loading={createShare.isPending}>
+                Enviar
+              </Button>
+            )}
           </div>
         )
       }
@@ -125,6 +153,25 @@ export function ShareDialog({
                   {rows.length > 3 ? '\n…' : ''}
                 </pre>
               </div>
+
+              {warnings.length > 0 && (
+                <div
+                  data-testid="share-warnings"
+                  className="rounded-lg border border-danger/40 bg-danger-soft p-3"
+                >
+                  <p className="text-xs font-semibold text-danger">
+                    Enviar por este número agora tem risco de banimento:
+                  </p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-danger">
+                    {warnings.map((w) => (
+                      <li key={w.code}>{w.message}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-ink-muted">
+                    Você pode enviar mesmo assim — a decisão é sua.
+                  </p>
+                </div>
+              )}
 
               {error && <ErrorState message={error} />}
             </>

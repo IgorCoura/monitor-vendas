@@ -9,14 +9,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { useRanking } from '../../api/queries'
+import { useNumbersHealth, useRanking } from '../../api/queries'
 import type { RankingEntryDto } from '../../api/types'
 import { KpiCard } from '../../components/KpiCard'
 import { Button, Card, Dialog, EmptyState, ErrorState, InfoTip, Select, Spinner } from '../../components/ui'
 import { MobilePeriodBar } from '../../components/mobile/PeriodBar'
 import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
 import { useIsMobile } from '../../lib/useIsMobile'
-import { fmtDateTime, fmtMinutes, fmtPercent, fmtPerHour, periodOptions } from '../../lib/format'
+import { fmtDateTime, fmtMinutes, fmtPercent, fmtPerHour, fmtPhone, periodOptions } from '../../lib/format'
 import { chartInk, chartSeries } from '../../lib/palette'
 import {
   chartMetricByKey,
@@ -33,6 +33,28 @@ import { usePeriodRange } from '../../lib/usePeriodRange'
 import { usePollMs } from '../../lib/polling'
 import { UpdateControls } from '../../components/UpdateControls'
 import { ExportReportDialog } from '../reports/ExportReportDialog'
+
+// Faixa discreta no topo: números em risco/crítico no semáforo de saúde. Só
+// aparece quando há algo a fazer — dashboard limpo é o estado normal.
+function HealthAlert() {
+  const { data: health } = useNumbersHealth()
+  const atRisk = (health ?? []).filter((h) => h.level === 'High' || h.level === 'Critical')
+  if (atRisk.length === 0) return null
+
+  const phones = atRisk.map((h) => fmtPhone(h.phone)).join(', ')
+  return (
+    <Card data-testid="health-alert" className="border-danger/40 bg-danger-soft">
+      <p className="text-sm text-danger">
+        {atRisk.length === 1
+          ? `1 número precisa de atenção: ${phones}.`
+          : `${atRisk.length} números precisam de atenção: ${phones}.`}{' '}
+        <Link to="/registry" className="font-medium underline">
+          Ver em Cadastros
+        </Link>
+      </p>
+    </Card>
+  )
+}
 
 type ChartLayout = 'list' | 'grid2' | 'grid3'
 
@@ -464,6 +486,8 @@ export function DashboardPage() {
 
       {isLoading && <Spinner />}
       {isError && <ErrorState message="Não foi possível carregar o ranking. A API está de pé?" />}
+
+      <HealthAlert />
 
       {ranking && (
         <>

@@ -1,23 +1,75 @@
 using System.Text.Json;
+using MonitorVendas.Api.Common;
 
 namespace MonitorVendas.Api.Integrations.Evolution;
 
-public sealed class EvolutionApiClient(HttpClient http)
+public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
 {
-    // Devolve o id da mensagem criada: o webhook dela volta como MESSAGES_UPSERT e
-    // seria contado como mensagem enviada pelo vendedor dono do número.
-    public async Task<string?> SendTextAsync(string instanceName, string number, string text, CancellationToken cancellationToken = default)
-    {
-        var response = await http.PostAsJsonAsync(
-            $"message/sendText/{instanceName}",
-            new { number, text },
-            cancellationToken);
+    // Folga de rede além do "digitando". O delay é SÍNCRONO na Evolution
+    // (v2.3.7, medido: delay 8000 → resposta em 9,07s), então o teto do envio é
+    // delay + esta folga — sem ele, um envio travado seguraria a fila pelos
+    // 100s do default do HttpClient.
+    private static readonly TimeSpan SendNetworkBudget = TimeSpan.FromSeconds(15);
 
-        response.EnsureSuccessStatusCode();
+    // Devolve o id da mensagem criada (o webhook dela volta como MESSAGES_UPSERT e
+    // seria contado como mensagem enviada pelo vendedor dono do número) e o delay
+    // de digitação usado, para o chamador descontar do intervalo entre mensagens.
+    // O `presence: composing` vive AQUI, não no chamador: a Meta cita a conta que
+    // envia sem disparar o indicador de digitação como sinal de abuso, e nenhum
+    // envio futuro pode esquecer disso.
+    public async Task<SendResult> SendTextAsync(string instanceName, string number, string text, CancellationToken cancellationToken = default)
+    {
+        var delayMs = HumanDelay.ForText(text.Length, random);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(delayMs) + SendNetworkBudget);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.PostAsJsonAsync(
+                $"message/sendText/{instanceName}",
+                new { number, text, delay = delayMs, presence = "composing" },
+                cts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Timeout nosso, não cancelamento de quem chamou: vira falha de envio
+            // comum, que o chamador já sabe contar e retomar.
+            throw new HttpRequestException($"O envio por {instanceName} não respondeu dentro do tempo esperado.");
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            // 463 = a conta chegou ao limite de contato frio. Não é falha
+            // transitória para tentar de novo: é o WhatsApp mandando parar.
+            if (LooksRestricted(errorBody))
+                return new SendResult(null, delayMs, (int)response.StatusCode, Restricted: true);
+
+            // O corpo cru vai na exceção de propósito: o formato dos erros da
+            // Evolution não é documentado, e é deste log que sai o parser preciso.
+            var detail = errorBody.Length > 500 ? errorBody[..500] : errorBody;
+            throw new HttpRequestException($"Evolution respondeu {(int)response.StatusCode} ao envio: {detail}");
+        }
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-        return doc.RootElement.TryGetProperty("key", out var key) ? GetString(key, "id") : null;
+        var keyId = doc.RootElement.TryGetProperty("key", out var key) ? GetString(key, "id") : null;
+        return new SendResult(keyId, delayMs);
     }
+
+    // "463" solto não basta: o corpo de erro pode ecoar o texto enviado, e uma
+    // lista de contatos tem telefones com "463" no meio. Só vale como restrição
+    // quando aparece como código (`"code": 463`) ou pelos nomes do Baileys.
+    private static readonly System.Text.RegularExpressions.Regex RestrictedCode = new(
+        """["'](?:status|statusCode|code|reason)["']\s*:\s*["']?463""",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool LooksRestricted(string body) =>
+        body.Contains("reachout", StringComparison.OrdinalIgnoreCase)
+        || body.Contains("timelock", StringComparison.OrdinalIgnoreCase)
+        || RestrictedCode.IsMatch(body);
 
     // Baixa a mídia de uma mensagem (áudio, imagem) em base64. Devolve null em vez
     // de estourar: mídia expirada ou instância fora do ar não pode derrubar a
@@ -207,6 +259,8 @@ public sealed class EvolutionApiClient(HttpClient http)
             : null;
 
     public sealed record QrCode(string? Code, string? Base64, string? PairingCode);
+
+    public sealed record SendResult(string? KeyId, int DelayMs, int? ErrorCode = null, bool Restricted = false);
 
     public sealed record Media(string Base64, string MimeType);
 
