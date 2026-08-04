@@ -202,16 +202,50 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
         return new QrCode(GetString(root, "code"), GetString(root, "base64"), GetString(root, "pairingCode"));
     }
 
-    public async Task<string?> GetConnectionStateAsync(string instanceName, CancellationToken cancellationToken = default)
+    // O 404 aqui é RESPOSTA, não falha: a instância não existe mais na Evolution.
+    // Tratá-lo como "fora do ar" (exceção) foi o que deixava número fantasma
+    // aparecendo conectado para sempre — quem chama precisa distinguir os dois.
+    public async Task<InstanceState> GetConnectionStateAsync(string instanceName, CancellationToken cancellationToken = default)
     {
         var response = await http.GetAsync($"instance/connectionState/{instanceName}", cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return new InstanceState(null, Missing: true);
+
         response.EnsureSuccessStatusCode();
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         if (doc.RootElement.TryGetProperty("instance", out var instance))
-            return GetString(instance, "state");
+            return new InstanceState(GetString(instance, "state"), Missing: false);
 
-        return null;
+        return new InstanceState(null, Missing: false);
+    }
+
+    // Lista o que existe do lado da Evolution — é a metade dela da conciliação:
+    // instância órfã (sem número nem sessão de pareamento viva) é lixo a varrer.
+    public async Task<IReadOnlyList<InstanceInfo>> FetchInstancesAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await http.GetAsync("instance/fetchInstances", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var result = new List<InstanceInfo>();
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            if (GetString(item, "name") is not { Length: > 0 } name)
+                continue;
+
+            DateTime? createdAt = DateTime.TryParse(
+                GetString(item, "createdAt"), null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
+                ? parsed
+                : null;
+
+            result.Add(new InstanceInfo(name, createdAt));
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<FoundMessage>> FindMessagesAsync(string instanceName, CancellationToken cancellationToken = default)
@@ -261,6 +295,10 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
     public sealed record QrCode(string? Code, string? Base64, string? PairingCode);
 
     public sealed record SendResult(string? KeyId, int DelayMs, int? ErrorCode = null, bool Restricted = false);
+
+    public sealed record InstanceState(string? State, bool Missing);
+
+    public sealed record InstanceInfo(string Name, DateTime? CreatedAt);
 
     public sealed record Media(string Base64, string MimeType);
 

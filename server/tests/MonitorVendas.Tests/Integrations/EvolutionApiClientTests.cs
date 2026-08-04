@@ -91,7 +91,8 @@ public class EvolutionApiClientTests
 
         var state = await client.GetConnectionStateAsync("mv-1");
 
-        Assert.Equal("open", state);
+        Assert.Equal("open", state.State);
+        Assert.False(state.Missing);
     }
 
     // Sem o objeto `instance` na resposta não há estado: devolver null é o que faz
@@ -101,7 +102,41 @@ public class EvolutionApiClientTests
     {
         var (client, _) = Build(body: """{"error":"not found"}""");
 
-        Assert.Null(await client.GetConnectionStateAsync("mv-1"));
+        var state = await client.GetConnectionStateAsync("mv-1");
+
+        Assert.Null(state.State);
+        Assert.False(state.Missing);
+    }
+
+    // Regressão do número fantasma: o 404 de instância inexistente é RESPOSTA
+    // (Missing), não exceção — tratado como "fora do ar", o número ficava
+    // conectado para sempre no painel.
+    [Fact]
+    public async Task GetConnectionStateAsync_WhenInstanceDoesNotExist_ReportsMissing()
+    {
+        var (client, _) = Build(HttpStatusCode.NotFound,
+            """{"status":404,"error":"Not Found","response":{"message":["The \"mv-1\" instance does not exist"]}}""");
+
+        var state = await client.GetConnectionStateAsync("mv-1");
+
+        Assert.True(state.Missing);
+        Assert.Null(state.State);
+    }
+
+    // fetchInstances devolve nome e data de criação de cada instância — é a
+    // matéria-prima da varredura de órfãs.
+    [Fact]
+    public async Task FetchInstancesAsync_ParsesNamesAndCreatedAt()
+    {
+        var (client, _) = Build(body:
+            """[{"name":"mv-abc","createdAt":"2026-08-01T23:55:28.986Z"},{"name":"outro-app"},{"noname":true}]""");
+
+        var instances = await client.FetchInstancesAsync();
+
+        Assert.Equal(2, instances.Count);
+        Assert.Equal("mv-abc", instances[0].Name);
+        Assert.Equal(new DateTime(2026, 8, 1, 23, 55, 28, 986, DateTimeKind.Utc), instances[0].CreatedAt);
+        Assert.Null(instances[1].CreatedAt);
     }
 
     // A Evolution devolve as mensagens ora como array, ora aninhadas em

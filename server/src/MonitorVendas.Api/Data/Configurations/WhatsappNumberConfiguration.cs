@@ -43,5 +43,11 @@ public class PairingSessionConfiguration : IEntityTypeConfiguration<PairingSessi
         // convivem, mas só existe um `true`. É o banco decidindo quem chegou
         // primeiro, em vez de duas pessoas criando duas instâncias.
         builder.HasIndex(s => s.Active).IsUnique().HasFilter("\"Active\"");
+
+        // Dois escritores disputam a mesma sessão: o webhook que a completa e a
+        // faxina que a cancela (e apaga a instância). Sem token, a última escrita
+        // vencia em silêncio — a faxina apagava a instância de um número que
+        // acabara de conectar, deixando-o "conectado" sem instância na Evolution.
+        builder.Property<uint>("xmin").HasColumnName("xmin").IsRowVersion();
     }
 }
