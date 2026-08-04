@@ -28,6 +28,10 @@ public sealed record OutcomeTotals(int Count, int TimeToCloseCount, double TimeT
 // Resultado por número; os *Samples ficam expostos para agregação por vendedor
 // (mediana não se combina a partir de medianas parciais). EffectiveBusinessHours
 // permite reagregar as médias por hora útil (soma de mensagens ÷ soma de horas).
+//
+// Uptime sai de DOIS somáveis — tempo coberto e tempo fora do ar — em vez de um
+// percentual pronto. Percentual não soma entre números nem entre dias, e era daí
+// que vinha o vendedor de canal derrubado aparecendo com 100%.
 public sealed record MetricsResult(
     int ConversationsStarted,
     int ConversationsAnswered,
@@ -40,7 +44,8 @@ public sealed record MetricsResult(
     int SilenceGapsFollowedUp,
     IReadOnlyDictionary<string, OutcomeTotals> Outcomes,
     int BanCount,
-    double UptimePercent,
+    double CoveredSeconds,
+    double DowntimeSeconds,
     double EffectiveBusinessHours,
     DateTime? LastOutboundMessageAt,
     IReadOnlyList<double> FirstResponseMinutesSamples,
@@ -57,6 +62,12 @@ public sealed record MetricsResult(
     public double? FollowUpRate => SilenceGaps == 0 ? null : (double)SilenceGapsFollowedUp / SilenceGaps;
     public double? AvgSentPerBusinessHour => EffectiveBusinessHours > 0 ? MessagesSent / EffectiveBusinessHours : null;
     public double? AvgReceivedPerBusinessHour => EffectiveBusinessHours > 0 ? MessagesReceived / EffectiveBusinessHours : null;
+
+    // Sem tempo coberto não há uptime a informar — devolve null ("—"), nunca 100%.
+    // Vendedor sem número no ar não tem canal perfeito: não tem canal.
+    public double? UptimePercent => CoveredSeconds <= 0
+        ? null
+        : Math.Clamp((CoveredSeconds - DowntimeSeconds) / CoveredSeconds * 100, 0, 100);
 
     // Venda continua em destaque (compatibilidade do painel); os demais tipos
     // saem de Outcomes.
@@ -76,7 +87,7 @@ public sealed record MetricsResult(
     }
 
     public static MetricsResult Aggregate(IReadOnlyList<MetricsResult> parts) => parts.Count == 0
-        ? new(0, 0, 0, 0, 0, 0, 0, 0, 0, new Dictionary<string, OutcomeTotals>(), 0, 100, 0, null, [], [])
+        ? new(0, 0, 0, 0, 0, 0, 0, 0, 0, new Dictionary<string, OutcomeTotals>(), 0, 0, 0, 0, null, [], [])
         : new(
             parts.Sum(p => p.ConversationsStarted),
             parts.Sum(p => p.ConversationsAnswered),
@@ -89,7 +100,8 @@ public sealed record MetricsResult(
             parts.Sum(p => p.SilenceGapsFollowedUp),
             MergeOutcomes(parts.Select(p => p.Outcomes)),
             parts.Sum(p => p.BanCount),
-            parts.Average(p => p.UptimePercent),
+            parts.Sum(p => p.CoveredSeconds),
+            parts.Sum(p => p.DowntimeSeconds),
             parts.Sum(p => p.EffectiveBusinessHours),
             parts.Max(p => p.LastOutboundMessageAt),
             [.. parts.SelectMany(p => p.FirstResponseMinutesSamples)],
@@ -111,12 +123,16 @@ public sealed record MetricsResult(
 
 public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOptions options)
 {
+    // `coveredSeconds` é o denominador do uptime: quanto tempo da janela este canal
+    // realmente respondia por este vendedor (o número pode ter nascido no meio do
+    // período, ou ter sido de outra pessoa). Nulo = a janela inteira.
     public MetricsResult Compute(
         DateTime fromUtc,
         DateTime toUtc,
         IReadOnlyList<ConversationData> conversations,
         IReadOnlyList<DowntimeInterval> downtimes,
-        int banCount)
+        int banCount,
+        double? coveredSeconds = null)
     {
         var merged = MergeAndClip(downtimes, fromUtc, toUtc);
         var answerWindow = TimeSpan.FromHours(options.AnswerWindowBusinessHours);
@@ -226,7 +242,8 @@ public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOpt
         return new MetricsResult(
             started, answered, outboundStarted, outboundEngaged, sent, received, outboundRead,
             withGap, followedUp, outcomes, banCount,
-            ComputeUptimePercent(fromUtc, toUtc, merged),
+            coveredSeconds ?? Math.Max(0, (toUtc - fromUtc).TotalSeconds),
+            DowntimeSecondsOf(merged),
             calendar.BusinessTimeBetween(fromUtc, toUtc, merged).TotalHours,
             lastOutbound,
             firstResponseSamples, responseSamples);
@@ -235,18 +252,14 @@ public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOpt
     private static bool InRange(DateTime value, DateTime fromUtc, DateTime toUtc) =>
         value >= fromUtc && value < toUtc;
 
-    private static double ComputeUptimePercent(DateTime fromUtc, DateTime toUtc, IReadOnlyList<DowntimeInterval> merged)
+    // Os intervalos já chegam recortados na janela e sem sobreposição.
+    private static double DowntimeSecondsOf(IReadOnlyList<DowntimeInterval> merged)
     {
-        var period = toUtc - fromUtc;
-        if (period <= TimeSpan.Zero)
-            return 100;
-
-        var downtime = TimeSpan.Zero;
+        var total = TimeSpan.Zero;
         foreach (var interval in merged)
-            downtime += interval.End - interval.Start;
+            total += interval.End - interval.Start;
 
-        var uptime = (period - downtime).TotalSeconds / period.TotalSeconds * 100;
-        return Math.Clamp(uptime, 0, 100);
+        return total.TotalSeconds;
     }
 
     private static List<DowntimeInterval> MergeAndClip(IReadOnlyList<DowntimeInterval> downtimes, DateTime fromUtc, DateTime toUtc)

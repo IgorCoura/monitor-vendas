@@ -49,7 +49,6 @@ public sealed class DailyMetricsBuilder(
 
             var (fromUtc, toUtc) = DayRangeUtc(group.Key);
             var results = await queries.ComputeForNumbersAsync(numbers, calculator, fromUtc, toUtc, ct);
-            var periodSeconds = (toUtc - fromUtc).TotalSeconds;
 
             // O dono do dia sai do carimbo das próprias mensagens; dia sem mensagem
             // (só downtime, por exemplo) fica com o dono atual do número. A troca
@@ -82,9 +81,7 @@ public sealed class DailyMetricsBuilder(
             {
                 var numberId = byNumber.Key;
 
-                // O downtime em segundos sai do uptime (mesma fórmula, sem perda).
-                var snapshot = MetricsSnapshot.Merge(byNumber.Select(kv =>
-                    MetricsSnapshot.FromResult(kv.Value, periodSeconds * (1 - kv.Value.UptimePercent / 100.0))));
+                var snapshot = MetricsSnapshot.Merge(byNumber.Select(kv => MetricsSnapshot.FromResult(kv.Value)));
 
                 var row = existing.FirstOrDefault(d => d.WhatsappNumberId == numberId);
                 if (row is null)

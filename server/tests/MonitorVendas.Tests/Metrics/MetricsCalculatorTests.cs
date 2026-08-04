@@ -140,11 +140,12 @@ public class MetricsCalculatorTests
 
         var result = NewCalculator().Compute(From, To, [], downtimes, 1);
 
-        Assert.Equal(90, result.UptimePercent, precision: 5);
+        Assert.Equal(90, result.UptimePercent!.Value, precision: 5);
     }
 
     // Agregação por vendedor: somas de contagens, mediana recalculada sobre as amostras
-    // unidas, média/h reagregada por soma de horas úteis e último envio pelo máximo.
+    // unidas, média/h reagregada por soma de horas úteis, último envio pelo máximo e
+    // uptime recomposto dos dois somáveis (200s cobertos, 20s fora = 90%).
     [Fact]
     public void Aggregate_MergesCountsAndSamples()
     {
@@ -152,8 +153,8 @@ public class MetricsCalculatorTests
         var lastB = Local(5, 11);
         var saleOnce = new Dictionary<string, OutcomeTotals> { [OutcomeTypeCodes.Sale] = new(1, 1, 2) };
         var lostOnce = new Dictionary<string, OutcomeTotals> { [OutcomeTypeCodes.Lost] = new(1, 1, 3) };
-        var a = new MetricsResult(2, 1, 1, 0, 10, 8, 5, 1, 1, saleOnce, 0, 100, 10, lastA, [10], [10]);
-        var b = new MetricsResult(2, 2, 0, 0, 6, 4, 3, 1, 0, lostOnce, 2, 80, 10, lastB, [20, 30], [20]);
+        var a = new MetricsResult(2, 1, 1, 0, 10, 8, 5, 1, 1, saleOnce, 0, 100, 0, 10, lastA, [10], [10]);
+        var b = new MetricsResult(2, 2, 0, 0, 6, 4, 3, 1, 0, lostOnce, 2, 100, 20, 10, lastB, [20, 30], [20]);
 
         var merged = MetricsResult.Aggregate([a, b]);
 

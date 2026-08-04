@@ -28,6 +28,8 @@ export function metrics(overrides: Partial<MetricsDto> = {}): MetricsDto {
     effectiveBusinessHours: 0,
     lastOutboundMessageAt: null,
     uptimePercent: 100,
+    uptimeCoveredSeconds: 86400,
+    uptimeDowntimeSeconds: 0,
     banCount: 0,
     outcomes: [
       { typeCode: 'sale', name: 'Vendas', count: 0, rate: null, avgTimeToCloseBusinessHours: null },

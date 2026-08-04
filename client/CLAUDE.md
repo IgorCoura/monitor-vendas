@@ -191,6 +191,11 @@ client/src/
   lib/format.ts) → `Spinner`/`ErrorState` → conteúdo; agregados do time são
   recalculados a partir de somas (nunca média de taxas; médias por hora =
   soma de mensagens ÷ soma de `effectiveBusinessHours`).
+- **Uptime sai por `fmtUptime`, nunca por `toFixed`**: a métrica existe para
+  denunciar canal fora do ar, então arredondar para cima é a única coisa que ela
+  não pode fazer. 99,53% vira "99,5%" e "100%" só quando é 100 mesmo; `null`
+  (vendedor sem número a medir) vira "—". Regressão de 04/08/2026, quando um
+  número banido no dia anterior apareceu como 100%.
 - **Toda métrica exibida leva o `InfoTip` ("?")** com o texto de
   `lib/metrics.ts#metricHelp` — os textos espelham o `MetricsCalculator` do
   server; mudou a regra lá, atualize aqui.

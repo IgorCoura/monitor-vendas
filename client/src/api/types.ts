@@ -68,7 +68,11 @@ export interface MetricsDto {
   avgReceivedPerBusinessHour: number | null
   effectiveBusinessHours: number
   lastOutboundMessageAt: string | null
-  uptimePercent: number
+  // Null quando não há canal a medir (sem número, ou número que já não é dele).
+  uptimePercent: number | null
+  // Os dois lados da fração, para totais recompostos por soma.
+  uptimeCoveredSeconds: number
+  uptimeDowntimeSeconds: number
   banCount: number
   outcomes: OutcomeMetricDto[]
 }

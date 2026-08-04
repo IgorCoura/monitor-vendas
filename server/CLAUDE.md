@@ -226,7 +226,10 @@ fechado.
   agrupa os pares por vendedor; `GetSellerReportAsync` inclui os números que já
   foram dele e produziram dado no período.
 - **Downtime, uptime e ban ficam com o dono vigente** — descrevem o canal, não o
-  atendimento. Rateá-los contaria o mesmo ban duas vezes.
+  atendimento. Rateá-los contaria o mesmo ban duas vezes. Para o **dono anterior**
+  o número sai com cobertura zero, e portanto uptime **`null` ("—")**: ele aparece
+  no relatório dele (o histórico é dele) sem afirmar nada sobre um canal que já não
+  é seu. Antes saía **100%**, que é a afirmação oposta.
 - **`POST /numbers/{id}/transfer`** troca o dono a partir de agora (botão
   "Transferir" ao lado do ban, com a lista de vendedores); a contagem de
   bans (`CountBanTransitions`) segue contando as transições **do período**, então
@@ -677,6 +680,40 @@ condição para fechar o número por dia), vendas, conversão
 (vendas/atendidas), tempo até fechar, **última mensagem enviada**
 (`LastOutboundMessageAt`, agregado por máximo), uptime % e contagem de bans.
 
+### Uptime: canal-horas, nunca "ausência de queda"
+
+Corrigido em 2026-08-04, depois de uma vendedora com **um único número banido**
+aparecer com **100%** no painel. O cálculo antigo era *período menos downtime
+provado*, então **ausência de prova virava canal perfeito**.
+
+- A conta é `(CoveredSeconds − DowntimeSeconds) / CoveredSeconds`. Os dois lados
+  são **somáveis** entre números e entre dias — percentual não soma, e era por isso
+  que `Aggregate` fazia média de percentuais e o time herdava o 100% de quem não
+  tinha número. `MetricsResult`/`MetricsSnapshot`/`DailyNumberMetrics` carregam os
+  dois; o DTO expõe `UptimeCoveredSeconds`/`UptimeDowntimeSeconds` para o
+  `TeamTotals` recompor por soma (mesmo papel de `ResponseSamplesCount`).
+- **Cobertura** = tempo, dentro da janela, em que o número existia **e** era daquele
+  vendedor. Número nascido no meio do período só é cobrado do nascimento em diante;
+  dono anterior tem cobertura zero. **Sem cobertura o uptime é `null`, exibido como
+  "—"** — vendedor sem número não tem canal perfeito, não tem canal.
+- **100% exige TODOS os números no ar o período inteiro**: com dois números e um
+  fora o tempo todo o total é 50%, não 0% (denominador antigo) nem 100%.
+- **`WhatsappNumber.Status` fecha a janela.** O log de `number_status_events` conta
+  o passado, mas o status é fato do presente: se nenhum evento foi gravado depois do
+  `to` e o log termina em `Active` enquanto o cadastro diz banido/desconectado, o
+  histórico está furado e o trecho final **conta como fora do ar** (com
+  `LogWarning`). Só nessa direção — nunca creditamos tempo no ar que o log não
+  prova. É o que impedia badge "Banido" e uptime 100% de conviverem, e por isso a
+  consulta de eventos **não tem teto** (`>= from`, sem `< to`): é a presença de
+  evento posterior que diz se aquele trecho do histórico está completo.
+- **Toda mudança manual de estado marca o dia como sujo** (`ban-permanent`,
+  `disconnect`, `transfer`) — antes só o `ConnectionUpdateHandler` marcava, e a
+  linha já fechada do dia do ban seguia com o uptime de antes dele, fazendo o
+  relatório longo (que soma dias fechados) mostrar o canal como se estivesse no ar.
+- Exibição: `fmtUptime` no front **nunca arredonda para cima** — 99,53% sai como
+  "99,5%", e "100%" só quando é 100 mesmo. O `toFixed(0)` anterior transformava
+  qualquer coisa acima de 99,5% em 100%.
+
 ## Project layout
 
 ```
@@ -713,7 +750,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 443 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 453 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -780,7 +817,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (429 testes; 443 desde 2026-08-03): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (429 testes; 453 desde 2026-08-04): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

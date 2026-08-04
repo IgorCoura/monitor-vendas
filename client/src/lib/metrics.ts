@@ -23,7 +23,8 @@ export const metricHelp = {
   mediaEnviadas: 'Mensagens enviadas ÷ horas úteis do período (descontando quedas do número).',
   mediaRecebidas: 'Mensagens recebidas ÷ horas úteis do período (descontando quedas do número).',
   fechamento: 'Tempo útil médio entre o início da conversa e a marcação da venda.',
-  uptime: 'Percentual do tempo do período em que o número esteve conectado.',
+  uptime:
+    'Percentual do tempo em que os números do vendedor estiveram conectados. A conta é sobre o tempo em que cada número existia e era dele: 100% só aparece quando TODOS ficaram no ar o período inteiro, e "—" quando não há número a medir.',
   bans: 'Quantas vezes o número entrou em estado banido (statusReason 403) no período.',
   ultimoEnvio: 'Data e hora da última mensagem enviada pelo vendedor no período.',
   msgsEnviadas: 'Total de mensagens enviadas pelo vendedor no período.',

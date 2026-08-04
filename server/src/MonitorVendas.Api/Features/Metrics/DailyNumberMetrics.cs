@@ -34,6 +34,10 @@ public class DailyNumberMetrics
     public double? ResponseMinutesMax { get; set; }
 
     public double EffectiveBusinessHours { get; set; }
+
+    // Denominador do uptime do dia: quanto do dia este número respondia por este
+    // vendedor. Normalmente o dia inteiro; menos no dia em que o número nasceu.
+    public double CoveredSeconds { get; set; }
     public double DowntimeSeconds { get; set; }
     public DateTime? LastOutboundMessageAt { get; set; }
 

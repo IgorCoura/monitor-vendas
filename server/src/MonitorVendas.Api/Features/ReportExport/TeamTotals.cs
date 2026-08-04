@@ -27,6 +27,9 @@ public static class TeamTotals
         var withSamples = all.Where(m => m.ResponseSamplesCount > 0).ToList();
         var samples = all.Sum(m => m.ResponseSamplesCount);
 
+        var covered = all.Sum(m => m.UptimeCoveredSeconds);
+        var downtime = all.Sum(m => m.UptimeDowntimeSeconds);
+
         return new MetricsDto(
             started,
             answered,
@@ -51,9 +54,12 @@ public static class TeamTotals
             hours > 0 ? received / hours : null,
             hours,
             all.Max(m => m.LastOutboundMessageAt),
-            // Uptime é a única taxa que pode ser somada por média simples: o
-            // denominador é o período, igual para todo vendedor.
-            all.Average(m => m.UptimePercent),
+            // Uptime também é taxa recalculada das somas: média simples contaria
+            // vendedor sem número (uptime nulo) como se fosse 100% e puxaria o
+            // time para cima. O denominador é canal-segundos, não o período.
+            Uptime(covered, downtime),
+            covered,
+            downtime,
             all.Sum(m => m.BanCount),
             Outcomes(all, answered));
     }
@@ -69,6 +75,10 @@ public static class TeamTotals
 
     private static double? Rate(int part, int total) => total > 0 ? (double)part / total : null;
 
+    private static double? Uptime(double coveredSeconds, double downtimeSeconds) => coveredSeconds > 0
+        ? Math.Clamp((coveredSeconds - downtimeSeconds) / coveredSeconds * 100, 0, 100)
+        : null;
+
     private static MetricsDto Empty() =>
-        new(0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, null, null, null, 0, null, null, null, null, 0, null, 0, 0, []);
+        new(0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, null, null, null, 0, null, null, null, null, 0, null, null, 0, 0, 0, []);
 }
