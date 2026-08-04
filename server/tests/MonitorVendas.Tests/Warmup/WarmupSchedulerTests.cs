@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Warmup;
 using MonitorVendas.Tests.Infrastructure;
@@ -49,7 +50,7 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         return number.GetProperty("number").GetProperty("id").GetGuid();
     }
 
-    private async Task SeedPoolAsync(bool enabled = true, bool withLink = true)
+    private async Task SeedPoolAsync(bool enabled = true, bool withLink = true, int joinedDaysAgo = 60)
     {
         FakeEvolution.When(HttpMethod.Post, "/instance/create", "{}");
         FakeEvolution.When(HttpMethod.Post, "/webhook/set/", "{}");
@@ -83,12 +84,12 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
             db.Add(new WarmupPeer
             {
                 Id = _peerA, WhatsappNumberId = _numberA,
-                Persona = WarmupPersona.Seco, JoinedAt = DateTime.UtcNow.AddDays(-60),
+                Persona = WarmupPersona.Seco, JoinedAt = DateTime.UtcNow.AddDays(-joinedDaysAgo),
             });
             db.Add(new WarmupPeer
             {
                 Id = _peerB, WhatsappNumberId = _numberB,
-                Persona = WarmupPersona.Falante, JoinedAt = DateTime.UtcNow.AddDays(-60),
+                Persona = WarmupPersona.Falante, JoinedAt = DateTime.UtcNow.AddDays(-joinedDaysAgo),
             });
 
             if (withLink)
@@ -149,6 +150,40 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         return conversationId;
     }
 
+    // Mensagens de verdade para cliente, saídas hoje: é o que abate a meta.
+    private Task SeedRealOutboundAsync(Guid numberId, int count) =>
+        SeedAsync(db =>
+        {
+            var number = db.Set<WhatsappNumber>().AsNoTracking().Single(n => n.Id == numberId);
+            var contactId = Guid.NewGuid();
+            var conversationId = Guid.NewGuid();
+
+            db.Add(new Contact
+            {
+                // O contato é global e o JID é único: cada número precisa do seu.
+                Id = contactId, RemoteJid = $"{contactId:N}@s.whatsapp.net",
+                PushName = "Aluno", CreatedAt = DateTime.UtcNow,
+            });
+            db.Add(new Conversation
+            {
+                Id = conversationId, WhatsappNumberId = numberId, ContactId = contactId,
+                SellerId = number.SellerId, StartedAt = DateTime.UtcNow, LastMessageAt = DateTime.UtcNow,
+            });
+
+            for (var i = 0; i < count; i++)
+            {
+                db.Add(new Message
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, WhatsappNumberId = numberId,
+                    SellerId = number.SellerId, WaMessageId = $"REAL-{numberId}-{i}",
+                    Direction = MessageDirection.Outbound, Timestamp = DateTime.UtcNow,
+                    Text = "oi", Type = "conversation",
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
     private Task<WarmupSettings> SettingsAsync() =>
         InDbAsync(db => db.Set<WarmupSettings>().AsNoTracking().SingleAsync());
 
@@ -174,6 +209,66 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.True(turns[1].ScheduledAt > turns[0].ScheduledAt);
         // E os dois lados falam.
         Assert.Equal(2, turns.Select(t => t.FromPeerId).Distinct().Count());
+    }
+
+    // O CENÁRIO REAL de quem liga a feature pela primeira vez: dois números
+    // entram hoje, sem aresta nenhuma no banco. O agendador precisa fazer o
+    // grafo nascer e já agendar — se este teste falhar, ligar o aquecimento não
+    // produz mensagem nenhuma e ninguém descobre por quê.
+    [Fact]
+    public async Task BrandNewPool_GrowsTheGraphAndSchedulesOnTheFirstDay()
+    {
+        await SeedPoolAsync(withLink: false, joinedDaysAgo: 0);
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupLink>().CountAsync()));
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Número que já conversou bastante com aluno de verdade hoje NÃO recebe
+    // aquecimento: a meta é piso, e com dois números o piso é a capacidade do
+    // grafo (1 colega × 6 = 6 mensagens/dia).
+    [Fact]
+    public async Task WhenRealTrafficAlreadyCoversTheFloor_NothingIsScheduled()
+    {
+        await SeedPoolAsync();
+        await SeedRealOutboundAsync(_numberA, 6);
+        await SeedRealOutboundAsync(_numberB, 6);
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // REGRESSÃO: conversa cujos turnos esgotaram as tentativas nunca mais era
+    // selecionada pelo executor (o `due` filtra por Attempts), então nunca
+    // chegava a Completed — e o agendador pula quem tem conversa Scheduled ou
+    // Running. O par ficava preso em "ocupado" PARA SEMPRE: bastavam três falhas
+    // de envio para o pool inteiro emudecer sem nenhum aviso.
+    [Fact]
+    public async Task AfterTheTurnsExhaustTheirAttempts_ThePairIsNotStuckForever()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(
+            HttpMethod.Post, "/message/sendText/", """{"message":"boom"}""", HttpStatusCode.InternalServerError);
+        await SeedDueConversationAsync(turns: 1);
+
+        // Três passadas queimam as três tentativas do turno.
+        for (var i = 0; i < 3; i++)
+            await Executor.ProcessPendingAsync();
+
+        // A quarta não tem o que enviar e precisa fechar a conversa.
+        await Executor.ProcessPendingAsync();
+
+        var conversation = await InDbAsync(db => db.Set<WarmupConversation>().AsNoTracking().SingleAsync());
+        Assert.Equal(WarmupConversationStatus.Failed, conversation.Status);
+
+        // E o par volta a poder conversar.
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-9"}}""");
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(2, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
     }
 
     // Interruptor desligado: nada é agendado, nem uma chamada de IA é gasta.

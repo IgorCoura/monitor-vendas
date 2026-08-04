@@ -80,6 +80,10 @@ public sealed class WarmupExecutor(
         var now = DateTime.UtcNow;
         var maxAttempts = Math.Max(1, options.Value.MaxAttemptsPerTurn);
 
+        // Antes de qualquer envio: fecha o que não tem mais como andar. Sem isso
+        // o par fica preso em "ocupado" para sempre — ver ReleaseStuckAsync.
+        await ReleaseStuckAsync(db, evolution, maxAttempts, ct);
+
         var due = await db.Set<WarmupTurn>()
             .Where(t => t.SentAt == null && t.ScheduledAt <= now && t.Attempts < maxAttempts)
             .OrderBy(t => t.ScheduledAt)
@@ -136,10 +140,27 @@ public sealed class WarmupExecutor(
             }
 
             await db.SaveChangesAsync(ct);
-            await FinishIfDoneAsync(db, evolution, conversation, ct);
+            await FinishIfDoneAsync(db, evolution, conversation, maxAttempts, ct);
         }
 
         return sent;
+    }
+
+    // Conversa cujos turnos esgotaram as tentativas nunca mais entra no `due`
+    // (ele filtra por Attempts), então nunca chegava a Completed — e o agendador
+    // pula quem tem conversa Scheduled ou Running. O par emudecia PARA SEMPRE
+    // depois de três falhas de envio, sem nenhum aviso. É o mesmo espírito do
+    // ReleaseStuckJobsAsync da IA: a vaga presa tem que ser devolvida.
+    private async Task ReleaseStuckAsync(
+        AppDbContext db, EvolutionApiClient evolution, int maxAttempts, CancellationToken ct)
+    {
+        var open = await db.Set<WarmupConversation>()
+            .Where(c => c.Status == WarmupConversationStatus.Scheduled
+                || c.Status == WarmupConversationStatus.Running)
+            .ToListAsync(ct);
+
+        foreach (var conversation in open)
+            await FinishIfDoneAsync(db, evolution, conversation, maxAttempts, ct);
     }
 
     private static async Task<(string FromInstance, string ToPhone, WarmupConversation Conversation)?> RoutingAsync(
@@ -169,10 +190,14 @@ public sealed class WarmupExecutor(
     // remetente e no do destinatário, e os dois são nossos. É isso que impede o
     // celular do vendedor de encher de conversa de colega.
     private async Task FinishIfDoneAsync(
-        AppDbContext db, EvolutionApiClient evolution, WarmupConversation conversation, CancellationToken ct)
+        AppDbContext db, EvolutionApiClient evolution, WarmupConversation conversation,
+        int maxAttempts, CancellationToken ct)
     {
+        // "Pendente" é o turno que ainda PODE ser enviado. Turno que queimou as
+        // tentativas não segura mais a conversa: ele nunca vai sair.
         var pending = await db.Set<WarmupTurn>()
-            .AnyAsync(t => t.ConversationId == conversation.Id && t.SentAt == null, ct);
+            .AnyAsync(t => t.ConversationId == conversation.Id
+                && t.SentAt == null && t.Attempts < maxAttempts, ct);
         if (pending)
             return;
 
@@ -181,13 +206,23 @@ public sealed class WarmupExecutor(
             .OrderByDescending(t => t.Sequence)
             .FirstOrDefaultAsync(ct);
 
-        conversation.Status = WarmupConversationStatus.Completed;
+        var failed = await db.Set<WarmupTurn>()
+            .AnyAsync(t => t.ConversationId == conversation.Id && t.SentAt == null, ct);
+
+        // Nada saiu: falhou. Saiu parte: acabou no meio, que é uma conversa
+        // abandonada — e abandonada é coisa que acontece de verdade.
+        conversation.Status = last is null
+            ? WarmupConversationStatus.Failed
+            : failed ? WarmupConversationStatus.Abandoned : WarmupConversationStatus.Completed;
         conversation.CompletedAt = DateTime.UtcNow;
+        if (failed)
+            conversation.Error = "Turnos esgotaram as tentativas de envio.";
 
         var a = await NumberOfAsync(db, conversation.PeerAId, ct);
         var b = await NumberOfAsync(db, conversation.PeerBId, ct);
 
-        if (a is not null && b is not null)
+        // Sem nenhuma mensagem enviada não há chat para arquivar.
+        if (a is not null && b is not null && last is not null)
         {
             // Best-effort dos dois lados: chat que não arquivou é feio, não
             // quebrado, e não pode desfazer um envio que já deu certo.

@@ -170,6 +170,14 @@ export function WarmupPage() {
             </Card>
           )}
 
+          {data.idleReason && (
+            <Card className="border-edge bg-card" data-testid="warmup-idle">
+              <p className="text-sm">
+                <span className="font-semibold">Nada sendo agendado agora.</span> {data.idleReason}
+              </p>
+            </Card>
+          )}
+
           {!data.enabled && !data.haltedAt && (
             <Card className="border-warn/40 bg-warn-soft">
               <p className="text-sm text-warn">

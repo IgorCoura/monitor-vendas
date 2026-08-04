@@ -435,6 +435,8 @@ export interface WarmupOverviewDto {
   enabled: boolean
   haltedAt: string | null
   haltReason: string | null
+  // Por que nada está sendo agendado agora, mesmo com tudo ligado.
+  idleReason: string | null
   peersInPool: number
   messagesToday: number
   conversationsToday: number

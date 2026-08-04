@@ -10,6 +10,7 @@ function overview(overrides: Record<string, unknown> = {}) {
     enabled: true,
     haltedAt: null,
     haltReason: null,
+    idleReason: null,
     peersInPool: 2,
     messagesToday: 12,
     conversationsToday: 3,
@@ -233,6 +234,18 @@ describe('WarmupPage', () => {
     expect(banner).toHaveTextContent(/Religar é decisão manual/)
     // E não dá para parar de novo o que já está parado.
     expect(screen.getByRole('button', { name: 'Parar tudo agora' })).toBeDisabled()
+  })
+
+  // Ligado e mesmo assim parado: a tela precisa dizer POR QUÊ. Silêncio sem
+  // explicação é indistinguível de feature quebrada.
+  it('explica por que nada está sendo agendado', async () => {
+    stub({ idleReason: 'Todos os números já cobriram a meta de hoje.' })
+
+    renderWithProviders(<WarmupPage />)
+
+    expect(await screen.findByTestId('warmup-idle')).toHaveTextContent(
+      'Todos os números já cobriram a meta de hoje.',
+    )
   })
 
   // Desligado, a tela diz em texto que nada é gerado nem enviado.

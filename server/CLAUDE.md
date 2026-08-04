@@ -265,6 +265,19 @@ reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
   entrega abaixo de `MinDeliveryRate` (60%) numa amostra de pelo menos
   `DeliverySampleMinimum` (20) mensagens com mais de 15 minutos. **Religar é
   decisão manual** (`PUT /warmup/settings` limpa o `HaltedAt`).
+- **Turno que esgota as tentativas NÃO segura mais a conversa** (regressão em
+  `AfterTheTurnsExhaustTheirAttempts_ThePairIsNotStuckForever`). O `due` do
+  executor filtra por `Attempts`, então a conversa nunca voltava e nunca chegava
+  a `Completed` — e o agendador pula quem tem conversa `Scheduled`/`Running`. O
+  par ficava preso em "ocupado" **para sempre**: três falhas de envio emudeciam
+  o pool inteiro sem nenhum aviso. `ReleaseStuckAsync` roda antes de qualquer
+  envio e fecha o que não tem como andar (`Failed` se nada saiu, `Abandoned` se
+  saiu parte), no mesmo espírito do `ReleaseStuckJobsAsync` da IA.
+- **`GET /warmup` devolve `IdleReason`**: por que NENHUMA conversa está sendo
+  agendada agora, mesmo com tudo ligado (pool com menos de dois elegíveis, fora
+  da janela de envio, círculo ainda não montado, meta do dia já coberta pelo
+  tráfego real). Silêncio sem explicação é indistinguível de feature quebrada —
+  foi exatamente assim que o aquecimento pareceu morto no primeiro teste real.
 - **Conversa terminada é ARQUIVADA nos dois lados** (`chat/archiveChat`,
   best-effort): o chat existe no WhatsApp do remetente e no do destinatário, e os
   dois são nossos. É isso que impede o celular do vendedor de encher de conversa
@@ -932,7 +945,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 577 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 580 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

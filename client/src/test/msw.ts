@@ -88,6 +88,7 @@ export const mswServer = setupServer(
       enabled: false,
       haltedAt: null,
       haltReason: null,
+      idleReason: null,
       peersInPool: 0,
       messagesToday: 0,
       conversationsToday: 0,

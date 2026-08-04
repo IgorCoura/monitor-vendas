@@ -25,7 +25,7 @@ public record WarmupConversationDto(
     DateTime CreatedAt, DateTime? CompletedAt, bool Archived, IReadOnlyList<WarmupTurnDto> Turns);
 
 public record WarmupOverviewDto(
-    bool Enabled, DateTime? HaltedAt, string? HaltReason,
+    bool Enabled, DateTime? HaltedAt, string? HaltReason, string? IdleReason,
     int PeersInPool, int MessagesToday, int ConversationsToday, double? DeliveryRate,
     IReadOnlyList<WarmupPeerDto> Numbers, IReadOnlyList<WarmupConversationDto> Conversations);
 
@@ -184,6 +184,7 @@ public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> optio
             Enabled: settings?.Enabled ?? false,
             HaltedAt: settings?.HaltedAt,
             HaltReason: settings?.HaltReason,
+            IdleReason: IdleReason(settings, rows, now),
             PeersInPool: peers.Count(p => p.LeftAt == null),
             MessagesToday: warmupToday.Values.Sum(),
             ConversationsToday: conversations.Count(c => c.CreatedAt >= dayStart),
@@ -197,6 +198,37 @@ public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> optio
                 [.. turns.Where(t => t.ConversationId == c.Id).Select(t => new WarmupTurnDto(
                     t.Sequence, phoneByPeer.GetValueOrDefault(t.FromPeerId, "—"), t.Text,
                     t.ScheduledAt, t.SentAt, t.DeliveredAt is not null))]))]);
+    }
+
+    // Por que NENHUMA conversa está sendo agendada agora, mesmo com tudo ligado.
+    // Silêncio sem explicação é indistinguível de feature quebrada — foi
+    // exatamente assim que o aquecimento pareceu morto no primeiro teste real.
+    private string? IdleReason(WarmupSettings? settings, List<WarmupPeerDto> rows, DateTime now)
+    {
+        // Desligado e parado já têm o próprio aviso, bem mais visível.
+        if (settings is not { Enabled: true } || settings.HaltedAt is not null)
+            return null;
+
+        var pool = rows.Where(r => r.InPool && r.IneligibleReason is null).ToList();
+        if (pool.Count < 2)
+            return "Menos de dois números elegíveis no pool: não há com quem conversar.";
+
+        var opts = options.Value;
+        var local = clock.LocalNow(now);
+        if (local.Hour < opts.MorningFromHour || local.Hour >= opts.EveningUntilHour)
+            return $"Fora da janela de envio ({opts.MorningFromHour}h às {opts.EveningUntilHour}h). "
+                + "Nada sai de madrugada porque colega nenhum conversa a essa hora.";
+
+        if (pool.Any(p => p.CoreCircle + p.OccasionalCircle == 0))
+            return "O círculo ainda não foi montado. Ele nasce na primeira passada do agendador, "
+                + "em até dois minutos com o aquecimento ligado.";
+
+        if (pool.All(p => p.RealMessagesToday + p.WarmupMessagesToday >= p.EffectiveGoal))
+            return "Todos os números já cobriram a meta de hoje — a maior parte com conversa real "
+                + "de cliente, que é justamente o que o aquecimento existe para completar. "
+                + "Com poucos números no pool a meta é baixa, então o tráfego real a cobre sozinho.";
+
+        return null;
     }
 
     // Por que este número não pode participar agora. A tela mostra o motivo —
