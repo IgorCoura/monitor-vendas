@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MonitorVendas.Api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MonitorVendas.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260804025418_Proxies")]
+    partial class Proxies
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -806,9 +809,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
-                    b.Property<Guid?>("ProxyId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("QrBase64")
                         .HasColumnType("text");
 
@@ -1109,22 +1109,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("proxies", (string)null);
-                });
-
-            modelBuilder.Entity("MonitorVendas.Api.Features.Proxies.ProxySettings", b =>
-                {
-                    b.Property<int>("Id")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("Enabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("proxy_settings", (string)null);
                 });
 
             modelBuilder.Entity("MonitorVendas.Api.Features.Sellers.Seller", b =>

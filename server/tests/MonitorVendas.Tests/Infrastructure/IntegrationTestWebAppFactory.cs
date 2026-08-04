@@ -21,6 +21,8 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
 
     public FakeAiHandler FakeAi { get; } = new();
 
+    public FakeProxyBrHandler FakeProxyBr { get; } = new();
+
     public const string WebhookSecret = "test-secret";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -46,6 +48,14 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
         builder.UseSetting("ContactShare:BusinessHoursOnly", "false");
         builder.UseSetting("Evolution:BaseUrl", "http://evolution.fake/");
         builder.UseSetting("Evolution:ApiKey", "test-key");
+
+        // Proxy: os background services ficam desligados e os testes dirigem
+        // IProxySyncService.RunOnceAsync() e IProxyApplier.ProcessPendingAsync()
+        // direto, como o resto do pipeline.
+        builder.UseSetting("Proxy:Enabled", "false");
+        builder.UseSetting("ProxyBr:Enabled", "false");
+        builder.UseSetting("ProxyBr:BaseUrl", "http://proxybr.fake/");
+        builder.UseSetting("ProxyBr:Token", "test-token");
 
         // Preço redondo de propósito: R$ 5,00/dólar e US$ 1,00 por milhão de
         // tokens fazem a conta de custo caber na cabeça de quem lê o teste.
@@ -78,6 +88,11 @@ public sealed class IntegrationTestWebAppFactory : WebApplicationFactory<Program
             {
                 http.BaseAddress = new Uri("http://ai.fake/");
             }).ConfigurePrimaryHttpMessageHandler(() => FakeAi);
+
+            services.AddHttpClient<MonitorVendas.Api.Integrations.ProxyBr.ProxyBrClient>((_, http) =>
+            {
+                http.BaseAddress = new Uri("http://proxybr.fake/");
+            }).ConfigurePrimaryHttpMessageHandler(() => FakeProxyBr);
         });
     }
 

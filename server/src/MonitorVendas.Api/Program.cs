@@ -8,6 +8,8 @@ using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Outcomes;
+using MonitorVendas.Api.Features.Proxies;
+using MonitorVendas.Api.Integrations.ProxyBr;
 using MonitorVendas.Api.Features.Reconciliation;
 using MonitorVendas.Api.Features.ReportExport;
 using MonitorVendas.Api.Features.Sellers;
@@ -46,6 +48,20 @@ if (builder.Configuration.GetValue("AiJob:Enabled", true))
 builder.Services.AddScoped<ReportExportBuilder>();
 builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(AntiBanOptions.Section));
 builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
+
+builder.Services.AddProxyBr(builder.Configuration);
+builder.Services.Configure<ProxyOptions>(builder.Configuration.GetSection(ProxyOptions.Section));
+builder.Services.AddSingleton<IProxySwitch, ProxySwitch>();
+builder.Services.AddScoped<ProxyResolver>();
+builder.Services.AddScoped<ProxyQueries>();
+builder.Services.AddSingleton<IProxySyncService, ProxySyncService>();
+builder.Services.AddSingleton<IProxyApplier, ProxyApplierService>();
+if (builder.Configuration.GetValue("Proxy:Enabled", true))
+{
+    builder.Services.AddHostedService<ProxyApplierBackgroundService>();
+    if (builder.Configuration.GetValue("ProxyBr:Enabled", false))
+        builder.Services.AddHostedService<ProxySyncBackgroundService>();
+}
 builder.Services.Configure<PairingOptions>(builder.Configuration.GetSection(PairingOptions.Section));
 builder.Services.AddScoped<PairingService>();
 if (builder.Configuration.GetValue("Pairing:CleanupEnabled", true))
@@ -110,6 +126,7 @@ v1.MapContactShareEndpoints();
 v1.MapAiBudgetEndpoints();
 v1.MapReportExportEndpoints();
 v1.MapAiAnalysisEndpoints();
+v1.MapProxiesEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

@@ -108,13 +108,49 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
     // Devolve o QR da criação — e é AQUI que sai o código de pareamento: pedi-lo
     // depois, em `instance/connect/{name}?number=`, devolve `pairingCode: null`
     // quando a instância nasceu sem número (confirmado contra a v2.3.7).
-    public async Task<QrCode?> CreateInstanceAsync(string instanceName, string? phone = null, CancellationToken cancellationToken = default)
+    //
+    // `proxy` é OBRIGATÓRIO (sem default) de propósito: a instância nasce em
+    // cinco lugares diferentes, e um que esquecesse o proxy criaria um número
+    // saindo pelo IP do servidor sem ninguém notar. Passar null é uma decisão
+    // explícita, visível no diff; esquecer não compila.
+    public async Task<QrCode?> CreateInstanceAsync(
+        string instanceName,
+        string? phone,
+        ProxyCredentials? proxy,
+        CancellationToken cancellationToken = default)
     {
-        object body = string.IsNullOrWhiteSpace(phone)
-            ? new { instanceName, qrcode = true, integration = "WHATSAPP-BAILEYS" }
-            : new { instanceName, number = phone, qrcode = true, integration = "WHATSAPP-BAILEYS" };
+        // Campos PLANOS, não objeto aninhado, e `proxyPort` é STRING — o
+        // contrato real da v2.3.7 (a doc nova descreve outra coisa).
+        var body = new Dictionary<string, object?>
+        {
+            ["instanceName"] = instanceName,
+            ["qrcode"] = true,
+            ["integration"] = "WHATSAPP-BAILEYS",
+        };
+
+        if (!string.IsNullOrWhiteSpace(phone))
+            body["number"] = phone;
+
+        if (proxy is not null)
+        {
+            body["proxyHost"] = proxy.Host;
+            body["proxyPort"] = proxy.Port.ToString();
+            body["proxyProtocol"] = proxy.Protocol;
+            body["proxyUsername"] = proxy.Username ?? string.Empty;
+            body["proxyPassword"] = proxy.Password ?? string.Empty;
+        }
 
         var response = await http.PostAsJsonAsync("instance/create", body, cancellationToken);
+
+        // A Evolution testa o proxy antes de criar e ABORTA a instância inteira
+        // com 400 quando ele falha. Quem chama precisa distinguir isso de uma
+        // falha de rede para degradar sem proxy em vez de travar o operador.
+        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && proxy is not null)
+        {
+            var detail = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (detail.Contains("proxy", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidProxyException(detail.Length > 300 ? detail[..300] : detail);
+        }
 
         response.EnsureSuccessStatusCode();
 
@@ -295,6 +331,37 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
     public sealed record QrCode(string? Code, string? Base64, string? PairingCode);
 
     public sealed record SendResult(string? KeyId, int DelayMs, int? ErrorCode = null, bool Restricted = false);
+
+    // Troca o proxy de uma instância existente. A Evolution só grava — o agent
+    // do Baileys é fixado na criação do socket, então a sessão viva continua
+    // saindo pelo IP antigo até um restart. Quem chama decide se reinicia.
+    public async Task<bool> SetProxyAsync(string instanceName, ProxyCredentials? proxy, CancellationToken cancellationToken = default)
+    {
+        // `enabled: false` zera os campos no banco da Evolution — é o jeito
+        // oficial de remover. O schema ainda exige host/port/protocol não
+        // vazios, então vão valores de descarte.
+        object body = proxy is null
+            ? new { enabled = false, host = "0.0.0.0", port = "0", protocol = "http", username = "", password = "" }
+            : new
+            {
+                enabled = true,
+                host = proxy.Host,
+                port = proxy.Port.ToString(),
+                protocol = proxy.Protocol,
+                username = proxy.Username ?? string.Empty,
+                password = proxy.Password ?? string.Empty,
+            };
+
+        try
+        {
+            var response = await http.PostAsJsonAsync($"proxy/set/{instanceName}", body, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
 
     public sealed record InstanceState(string? State, bool Missing);
 
