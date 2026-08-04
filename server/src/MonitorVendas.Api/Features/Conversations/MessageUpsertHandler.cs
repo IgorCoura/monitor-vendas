@@ -12,6 +12,7 @@ namespace MonitorVendas.Api.Features.Conversations;
 public sealed class MessageUpsertHandler(
     IOptions<MetricsOptions> options,
     IDirtyDayTracker dirtyDays,
+    Warmup.IWarmupPool warmupPool,
     ILogger<MessageUpsertHandler> logger) : IWebhookEventHandler
 {
     public string EventType => "MESSAGES_UPSERT";
@@ -49,6 +50,20 @@ public sealed class MessageUpsertHandler(
         if (number.Status == NumberStatus.WrongNumber)
         {
             logger.LogWarning("Número {Phone} está em quarentena; mensagem descartada.", number.Phone);
+            return;
+        }
+
+        // FILTRO ÚNICO DO AQUECIMENTO: conversa entre dois números do próprio
+        // pool não é atendimento a aluno e não pode entrar no pipeline do
+        // produto — contaminaria tempo de resposta, conversão, ranking, carteira,
+        // exportações e a análise de IA. O aquecimento guarda o que precisa nas
+        // tabelas dele.
+        //
+        // Consequência aceita: mensagem de trabalho REAL entre dois vendedores
+        // também fica de fora. É o comportamento correto — não é venda.
+        if (await warmupPool.IsInternalTrafficAsync(number.Id, remoteJid, db, ct))
+        {
+            logger.LogDebug("Mensagem interna do pool de aquecimento ({Instance}); fora das métricas.", evt.InstanceName);
             return;
         }
 

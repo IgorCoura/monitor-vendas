@@ -210,6 +210,41 @@ public sealed class EvolutionApiClient(HttpClient http, IRandomSource random)
         }
     }
 
+    // Arquiva (ou desarquiva) uma conversa. É o que impede o WhatsApp do
+    // vendedor de encher com conversa de colega do aquecimento.
+    //
+    // Best-effort: falhar aqui não pode derrubar o envio que já deu certo — o
+    // chat fica visível, o que é feio, não quebrado. O contrato exato do corpo
+    // não está documentado; os campos abaixo são os da v2 e a resposta é
+    // tratada com tolerância.
+    //
+    // Atenção operacional: o WhatsApp DESARQUIVA um chat quando chega mensagem
+    // nova, a menos que "Manter conversas arquivadas" esteja ligado no aparelho.
+    // Sem isso, o arquivamento vale até a próxima conversa.
+    public async Task<bool> ArchiveChatAsync(
+        string instanceName, string remoteJid, string? lastMessageId, bool archive = true,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await http.PostAsJsonAsync(
+                $"chat/archiveChat/{instanceName}",
+                new
+                {
+                    lastMessage = new { key = new { remoteJid, id = lastMessageId, fromMe = true } },
+                    chat = remoteJid,
+                    archive,
+                },
+                cancellationToken);
+
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     // Ajustes de comportamento da instância. `readMessages` marca como lido, que
     // é sinal humano; `alwaysOnline` fica FALSO de propósito — presença 24/7 é
     // assinatura de servidor, não de vendedor que dorme. Best-effort: falhar

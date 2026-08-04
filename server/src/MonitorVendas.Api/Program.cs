@@ -49,6 +49,10 @@ builder.Services.AddScoped<ReportExportBuilder>();
 builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(AntiBanOptions.Section));
 builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
 
+builder.Services.Configure<MonitorVendas.Api.Features.Warmup.WarmupOptions>(
+    builder.Configuration.GetSection(MonitorVendas.Api.Features.Warmup.WarmupOptions.Section));
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupPool, MonitorVendas.Api.Features.Warmup.WarmupPool>();
+
 builder.Services.AddProxyBr(builder.Configuration);
 builder.Services.Configure<ProxyOptions>(builder.Configuration.GetSection(ProxyOptions.Section));
 builder.Services.AddSingleton<IProxySwitch, ProxySwitch>();
