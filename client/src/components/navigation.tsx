@@ -64,6 +64,15 @@ function ProxiesIcon() {
   )
 }
 
+function WarmupIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-5 w-5">
+      <path d="M11.2 1.5c.2 2.2-.5 3.5-1.7 4.7-1.3 1.3-2.9 2.5-2.9 4.9a4.9 4.9 0 0 0 9.8 0c0-2.6-1.5-4.2-2.8-5.6-1-1.1-1.8-2.2-2.4-4Zm-.9 10.1c.6.7.9 1.4.9 2.2a1.9 1.9 0 0 1-3.8 0c0-1 .6-1.7 1.3-2.5.5.7 1 1 1.6.3Z" />
+      <path d="M4.6 8.6c-1 1-1.6 2.3-1.6 3.8a5.2 5.2 0 0 0 2.2 4.2 6.4 6.4 0 0 1-1.3-3.9c0-1.6.3-2.9 .7-4.1Z" />
+    </svg>
+  )
+}
+
 export interface NavRoute {
   to: string
   // Rótulo da sidebar (desktop), onde há espaço.
@@ -81,6 +90,7 @@ export const navRoutes: NavRoute[] = [
   { to: '/contacts', label: 'Contatos', mobileLabel: 'Contatos', icon: <ContactsIcon />, primary: true },
   { to: '/ai', label: 'Análises IA', mobileLabel: 'IA', icon: <AiIcon />, primary: true },
   { to: '/proxies', label: 'Proxies', mobileLabel: 'Proxies', icon: <ProxiesIcon />, primary: false },
+  { to: '/warmup', label: 'Aquecimento', mobileLabel: 'Aquecer', icon: <WarmupIcon />, primary: false },
   { to: '/labels', label: 'Etiquetas', mobileLabel: 'Etiquetas', icon: <LabelsIcon />, primary: false },
   { to: '/holidays', label: 'Feriados', mobileLabel: 'Feriados', icon: <HolidaysIcon />, primary: false },
 ]

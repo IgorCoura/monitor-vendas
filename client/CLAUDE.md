@@ -10,7 +10,8 @@ Front-end do monitor de desempenho de vendedores. Consome a API REST em
 - **Tailwind CSS v4** (plugin `@tailwindcss/vite`; tema via `@theme` em
   `src/index.css`) — sem shadcn/CLI; componentes próprios em `src/components/ui.tsx`.
 - **Recharts** para gráficos; **TanStack Query** para dados; **React Router**
-  para as rotas (Dashboard, vendedor, Cadastros, Contatos, Etiquetas, Feriados).
+  para as rotas (Dashboard, vendedor, Cadastros, Contatos, IA, Proxies,
+  Aquecimento, Etiquetas, Feriados).
   A exportação do relatório é dialog no Dashboard ("Exportar Excel"), não rota —
   só escolhe filtros; o arquivo é um `<a>` para `GET /reports/export`.
 
@@ -70,7 +71,8 @@ componente só — queries, totais, filtros e polling não são duplicados. Só 
   ali** e aparece nos dois lugares — antes eram dois arrays independentes e era
   fácil esquecer um. A sidebar some abaixo de `md` e entra a
   `components/mobile/BottomNav`: as 4 rotas `primary` (Painel, Cadastros,
-  Contatos, IA) mais um "⋯ Mais" que abre as demais numa folha de baixo. Com
+  Contatos, IA) mais um "⋯ Mais" que abre as demais (Proxies, Aquecimento,
+  Etiquetas, Feriados) numa folha de baixo. Com
   todas na barra cada aba caía para ~56px e os rótulos truncavam; com quatro
   sobram ~78px. O "⋯" **acende quando a rota atual está dentro dele**, senão a
   barra ficaria toda apagada e o usuário não saberia onde está. O conteúdo
@@ -126,7 +128,7 @@ client/src/
 ├── api/            # types.ts (espelho dos DTOs), client.ts (fetch + ApiError), queries.ts (hooks)
 ├── components/     # Layout (sidebar md+ / barra inferior no celular), ui.tsx
 │   │               #   (Card/Button/Input/Select/Badge/Dialog/InfoTip/estados), KpiCard
-│   └── mobile/     #   BottomNav (5 rotas), PeriodBar (período + atualização),
+│   └── mobile/     #   BottomNav (4 primárias + "⋯ Mais"), PeriodBar (período + atualização),
 │                   #   MetricList/ExpandableMetricCard (as tabelas viram cards)
 ├── features/
 │   ├── dashboard/  # Faixa HealthAlert no topo quando algum número está em risco/
@@ -202,6 +204,21 @@ client/src/
 │   │               #   os números. "Distribuir"/"Redistribuir" abrem a PRÉVIA do plano,
 │   │               #   avisando quantos números conectados reiniciam a sessão. O
 │   │               #   interruptor "Usar proxies" não mexe em sessão conectada.
+│   ├── warmup/     # WarmupPage (rota /warmup): acompanha o aquecimento orgânico —
+│   │               #   os números conversando ENTRE SI para mascarar o número
+│   │               #   profissional. KPIs do pool (números, mensagens e conversas
+│   │               #   do dia, taxa de entrega), lista de números com a meta do dia
+│   │               #   ("2 de 6", quanto veio de cliente de verdade, aviso quando a
+│   │               #   meta foi capada pela capacidade do grafo) e o círculo de cada
+│   │               #   um ao expandir. Número que não pode participar mostra o
+│   │               #   motivo — "fora do pool" sem explicação vira chamado de
+│   │               #   suporte. Colocar/tirar do pool é por número. As conversas
+│   │               #   abrem com o TEXTO INTEIRO: monitorar sem poder ler o que foi
+│   │               #   mandado seria confiar no escuro. Interruptor liga/desliga e
+│   │               #   "Parar tudo agora" (botão de pânico, com confirmação); o
+│   │               #   banner do kill switch mostra o motivo e diz que religar é
+│   │               #   manual. `useWarmup` refaz a busca a cada 30s — é busca em
+│   │               #   segundo plano, então sem círculo de progresso.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados
 ├── lib/            # format.ts (fmt* tolerantes a null → "—"; periodRange), palette.ts,

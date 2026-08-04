@@ -26,6 +26,7 @@ import type {
   RiskWarning,
   SellerReportDto,
   SellerResponse,
+  WarmupOverviewDto,
 } from './types'
 
 // Relativo por default: o navegador chama a própria origem e o nginx encaminha
@@ -299,6 +300,19 @@ export const api = {
         { method: 'POST' },
       ),
     detach: (numberId: string) => request<void>(`/numbers/${numberId}/proxy`, { method: 'DELETE' }),
+  },
+  warmup: {
+    overview: () => request<WarmupOverviewDto>('/warmup'),
+    settings: (enabled: boolean) =>
+      request<{ enabled: boolean }>('/warmup/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    // Botão de pânico: para tudo agora, sem desligar o interruptor.
+    halt: () => request<void>('/warmup/halt', { method: 'POST' }),
+    addPeer: (numberId: string) =>
+      request<void>('/warmup/peers', { method: 'POST', body: JSON.stringify({ numberId }) }),
+    removePeer: (numberId: string) => request<void>(`/warmup/peers/${numberId}`, { method: 'DELETE' }),
   },
   holidays: {
     list: () => request<HolidayResponse[]>('/holidays'),

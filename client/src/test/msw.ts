@@ -83,6 +83,19 @@ export const mswServer = setupServer(
       unassigned: [],
     }),
   ),
+  http.get('/api/v1/warmup', () =>
+    HttpResponse.json({
+      enabled: false,
+      haltedAt: null,
+      haltReason: null,
+      peersInPool: 0,
+      messagesToday: 0,
+      conversationsToday: 0,
+      deliveryRate: null,
+      numbers: [],
+      conversations: [],
+    }),
+  ),
   http.get('/api/v1/contacts', () =>
     HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
   ),

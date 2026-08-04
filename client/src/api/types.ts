@@ -390,3 +390,55 @@ export interface ReportExportFilters {
   charts: string[]
   includeNumbers: boolean
 }
+
+export interface WarmupPeerDto {
+  peerId: string | null
+  numberId: string
+  phone: string
+  sellerName: string
+  numberStatus: string
+  inPool: boolean
+  ineligibleReason: string | null
+  persona: string | null
+  coreCircle: number
+  occasionalCircle: number
+  circle: string[]
+  goal: number
+  effectiveGoal: number
+  cappedByGraph: boolean
+  realMessagesToday: number
+  warmupMessagesToday: number
+}
+
+export interface WarmupTurnDto {
+  sequence: number
+  fromPhone: string
+  text: string
+  scheduledAt: string
+  sentAt: string | null
+  delivered: boolean
+}
+
+export interface WarmupConversationDto {
+  id: string
+  theme: string
+  status: string
+  phoneA: string
+  phoneB: string
+  createdAt: string
+  completedAt: string | null
+  archived: boolean
+  turns: WarmupTurnDto[]
+}
+
+export interface WarmupOverviewDto {
+  enabled: boolean
+  haltedAt: string | null
+  haltReason: string | null
+  peersInPool: number
+  messagesToday: number
+  conversationsToday: number
+  deliveryRate: number | null
+  numbers: WarmupPeerDto[]
+  conversations: WarmupConversationDto[]
+}

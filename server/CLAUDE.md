@@ -195,14 +195,100 @@ portal do fornecedor** — o sistema só lê o catálogo, distribui e aplica.
   (desligados nos testes, que dirigem `IProxySyncService.RunOnceAsync()` e
   `IProxyApplier.ProcessPendingAsync()` direto).
 
-## Opt-out e cotas (Fase 3)
+## Aquecimento orgânico (`Features/Warmup`)
 
-**Não existe feature de aquecimento.** Houve uma (curva progressiva por número,
-com tela e endpoints) e ela foi **removida a pedido do usuário em 2026-08-04**:
-ele esperava um maturador que gerasse conversas, e o que existia era só um teto
-sobre o tráfego real — inútil para o caso dele. Se voltar a fazer sentido, a
-decisão de NÃO gerar tráfego sintético continua registrada em
-`../docs/plano-antiban-sugestoes.md` §B1.1, com o porquê.
+Os números cadastrados conversam **entre si** para que um número profissional
+tenha o grafo de quem realmente usa WhatsApp. Plano completo em
+`../docs/plano-aquecimento-organico.md`.
+
+Houve uma feature homônima antes — curva progressiva de volume por número — e ela
+foi **removida em 2026-08-04**: era um teto sobre o tráfego real, não um gerador
+de conversa. O que existe hoje é outra coisa.
+
+**A moldura defensável é "colegas da mesma empresa"**, não "pool de chips": são
+números reais de vendedores com tráfego real de aluno, e a conversa do pool é uma
+fatia minoritária de um grafo que já é legítimo. Cada decisão abaixo existe
+porque um dos cinco sinais de simulação (grafo fechado, correlação temporal,
+reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
+
+- **UM filtro, na ingestão** (`WarmupPool.IsInternalTrafficAsync`, chamado pelo
+  `MessageUpsertHandler` antes de qualquer escrita): mensagem entre dois números
+  do pool **não vira `Message`, `Conversation` nem `Contact`**. Flags espalhadas
+  pelo `MetricsCalculator`, `ContactQueries`, agregado diário, duas exportações e
+  a IA divergiriam um dia; um filtro na porta, não. **Os dois lados precisam
+  estar no pool** — mensagem de um número do pool para um aluno de verdade
+  continua sendo métrica (teste `MessageToARealContact_StillCounts`).
+- O ack dessas mensagens não acha `Message` nenhuma e é roteado pelo
+  `MessageUpdateHandler` para `WarmupTurn.DeliveredAt`/`ReadAt` — é dali que sai
+  a taxa de entrega que alimenta o kill switch.
+- **`WarmupGraph` é puro** e cresce o grafo **um colega por semana** desde a
+  entrada de cada número (`JoinedAt`). Três camadas: núcleo (fala quase todo dia,
+  estável), ocasional (uma vez por semana ou duas) e raro (falou uma vez e some
+  por meses) — a cauda é o que distingue uma rede real de uma malha desenhada.
+  `PeerAId` é sempre o menor Guid, senão o mesmo par entraria duas vezes.
+- **`WarmupPlan` é puro e a lógica é de PISO, não de teto**: a meta diária é
+  sorteada por **(número, dia)** entre `MinDailyMessages` e `MaxDailyMessages`
+  (20–40) — determinística para duas passadas do agendador concordarem, e
+  variável entre dias porque piso fixo é regularidade, e regularidade denuncia.
+  O aquecimento completa **só o déficit**: o que a conversa com aluno de verdade
+  não cobriu.
+- **Capacidade do grafo capa a meta**: `colegas × MaxMessagesPerPairPerDay`. Com
+  4 números cada um tem 3 colegas; sem esse teto seriam 10 mensagens/dia com o
+  mesmo colega, todo dia — exatamente o padrão a evitar. O teto sobe sozinho
+  conforme o pool cresce, e a tela mostra quando ele está mordendo.
+- **O dia é o dia LOCAL** (`WarmupClock`, fuso de `Metrics:TimeZone`). Em UTC o
+  contador zeraria às 21h de Brasília, no meio da janela da noite, e o pool
+  tentaria despejar uma cota inteira na última hora.
+- **`WarmupContentGenerator` — Gemini e só** (decisão explícita do usuário: sem
+  corpus híbrido, sem LLM local). Gera a **conversa inteira numa chamada**, não
+  mensagens soltas: resposta que não casa com a pergunta é sinal pior que
+  repetição. Cada número tem uma `Persona` fixa, senão os dois lados soariam como
+  a mesma pessoa. **Sem saldo de IA o aquecimento PARA** — não há queda para banco
+  de frases, porque com milhares de mensagens/mês repetição literal é o caminho
+  mais curto para o padrão ser pego.
+- **`WarmupContentValidator`** descarta o que voltou com link, sequência longa de
+  dígitos, texto com cara de anúncio, mensagem acima de 180 caracteres ou conversa
+  de um lado só. Descartar é barato; mandar um link não é.
+- **`WarmupScheduler`** escolhe o par cuja aresta está há mais tempo sem falar,
+  ponderada pela intensidade daquela relação, com ruído para a ordem não ser
+  sempre a mesma. **Uma conversa por vez por número** — duas em paralelo no mesmo
+  minuto é padrão de robô. Número banido, em cooldown, com envio pausado ou fora
+  do ar sai do pool sozinho e volta sozinho quando normaliza.
+- **`WarmupExecutor`** manda **um turno por passada** (repescar queimaria as
+  tentativas em sequência, o mesmo bug já corrigido no `ContactShareSender` e no
+  `WebhookProcessor`). O intervalo entre turnos é **log-normal**: mediana perto do
+  mínimo e cauda longa, porque gente responde em 40 segundos ou em duas horas,
+  quase nunca "sempre em 5 minutos". Abandono deliberado em parte das conversas —
+  reciprocidade perfeita é anomalia.
+- **Kill switch, duas frentes, e as duas param o POOL INTEIRO**: erro 463 no envio
+  (a conta avisou — se o padrão foi detectado, foi detectado no padrão) e taxa de
+  entrega abaixo de `MinDeliveryRate` (60%) numa amostra de pelo menos
+  `DeliverySampleMinimum` (20) mensagens com mais de 15 minutos. **Religar é
+  decisão manual** (`PUT /warmup/settings` limpa o `HaltedAt`).
+- **Conversa terminada é ARQUIVADA nos dois lados** (`chat/archiveChat`,
+  best-effort): o chat existe no WhatsApp do remetente e no do destinatário, e os
+  dois são nossos. É isso que impede o celular do vendedor de encher de conversa
+  de colega. **"Manter conversas arquivadas" precisa estar ligado no aparelho de
+  cada vendedor** — sem isso a próxima mensagem desarquiva o chat. O contrato do
+  `chat/archiveChat` **não foi confirmado contra a Evolution real**: é o primeiro
+  item do smoke test.
+- **Interruptor e estado ficam em `warmup_settings` (linha única)**, não no
+  appsettings — muda pela tela sem redeploy. **Nasce desligado**: a feature não
+  começa a mandar mensagem sozinha depois de um deploy. `Warmup:Enabled` é master
+  switch de infraestrutura (desligado nos testes, que dirigem
+  `IWarmupScheduler.RunOnceAsync()` e `IWarmupExecutor.ProcessPendingAsync()`
+  direto).
+- **Entrar no pool é opt-in explícito** (`POST /warmup/peers`); sair
+  (`DELETE /warmup/peers/{numberId}`) marca `LeftAt` e **não apaga histórico nem
+  arestas** — voltar reencontra o mesmo círculo, como uma relação que existia
+  antes.
+- Endpoints: `GET /warmup` (tela inteira), `PUT /warmup/settings`,
+  `POST /warmup/halt` (botão de pânico), `POST/DELETE /warmup/peers`.
+- Os gates de horário são **config** (`MorningFromHour`, `EveningUntilHour`,
+  `OffHoursChance`, `WeekendFactor`): a hora em que a suíte roda não pode decidir
+  teste, mesma regra do `ContactShare`.
+
+## Opt-out e cotas (Fase 3)
 
 - **Cotas** (`AntiBan:MaxMessagesPerHour/PerDay`): limitam o envio da lista de
   contatos por número, descontando o que já saiu no dia — inclusive o que o
@@ -787,6 +873,8 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `GET /ai/status`, `POST /ai/estimate`,
 `POST /ai/analyses/run`, `POST /ai/syntheses/run`, `GET /ai/jobs/{id}`,
 `GET /reports/sellers/{id}?from&to`, `GET /reports/ranking?from&to`,
+`GET /warmup`, `PUT /warmup/settings`, `POST /warmup/halt`,
+`POST /warmup/peers`, `DELETE /warmup/peers/{numberId}`,
 `GET /health`, `GET /api/v1/ping`.
 
 **Índices calculados**: conversas iniciadas/atendidas/**não respondidas**,
@@ -829,6 +917,11 @@ server/
 │   │   │                                  #   ContactShare + ContactMessageBuilder + ContactShareSender + ContactShareEndpoints (envio por WhatsApp)
 │   │   ├── Conversations/                 #   Contact, Conversation, Message, ConversationOutcome, ConversationLabel (histórico), WhatsappLabel, handlers de mensagem/labels, WebhookPayload (parsing)
 │   │   ├── Outcomes/                      #   ConversationOutcomeType + OutcomeLabelTerm + LabelNormalizer, OutcomeLabelMatcher (+CatalogVersion), OutcomeResolver (última etiqueta vence), OutcomeReconciler, OutcomeTypesEndpoints
+│   │   ├── Warmup/                        #   WarmupEntities (Peer/Link/Conversation/Turn/Settings), WarmupOptions,
+│   │   │                                  #   WarmupGraph + WarmupPlan (puros), WarmupPool (o filtro da ingestão),
+│   │   │                                  #   WarmupContent(+Generator, Gemini), WarmupClock (dia local),
+│   │   │                                  #   WarmupScheduler, WarmupExecutor (+kill switch, arquivamento,
+│   │   │                                  #   BackgroundService), WarmupEndpoints + WarmupQueries
 │   │   ├── Reconciliation/                #   ReconciliationService + BackgroundService + Options
 │   │   └── Metrics/                       #   MetricsOptions, BusinessHoursCalendar, MetricsCalculator (puro),
 │   │                                      #   ReportQueries (3 camadas de leitura), ReportsEndpoints (+rebuild),
@@ -839,7 +932,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 513 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 577 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

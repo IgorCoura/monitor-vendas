@@ -113,6 +113,34 @@ export function useDetachProxy() {
   return useProxyMutation((numberId: string) => api.proxies.detach(numberId))
 }
 
+// Estado do aquecimento. Busca em segundo plano a cada meio minuto: a conversa
+// anda sozinha, e sem isso a tela envelheceria enquanto o operador a olha.
+export function useWarmup() {
+  return useQuery({ queryKey: ['warmup'], queryFn: api.warmup.overview, refetchInterval: 30_000 })
+}
+
+function useWarmupMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['warmup'] }),
+  })
+}
+
+export function useToggleWarmup() {
+  return useWarmupMutation((enabled: boolean) => api.warmup.settings(enabled))
+}
+
+export function useHaltWarmup() {
+  return useWarmupMutation<void>(() => api.warmup.halt())
+}
+
+export function useWarmupPeer() {
+  return useWarmupMutation(({ numberId, inPool }: { numberId: string; inPool: boolean }) =>
+    inPool ? api.warmup.addPeer(numberId) : api.warmup.removePeer(numberId),
+  )
+}
+
 export function useCreateContactShare() {
   return useMutation({
     mutationFn: ({ filters, senderNumberId, destination, confirmRisk }: {
