@@ -24,8 +24,11 @@ public static class TeamTotals
         var received = all.Sum(m => m.MessagesReceived);
         var hours = all.Sum(m => m.EffectiveBusinessHours);
 
-        var withSamples = all.Where(m => m.ResponseSamplesCount > 0).ToList();
-        var samples = all.Sum(m => m.ResponseSamplesCount);
+        // Espera de resposta: os dias de TODOS os vendedores são combinados dia a
+        // dia e só então viram média, exatamente como no relatório de um vendedor.
+        // Ponderar as médias já prontas por quantidade de amostras dava um terceiro
+        // número, que não era o de ninguém.
+        var responseDays = ResponseDays(all);
 
         var covered = all.Sum(m => m.UptimeCoveredSeconds);
         var downtime = all.Sum(m => m.UptimeDowntimeSeconds);
@@ -38,10 +41,11 @@ public static class TeamTotals
             all.Sum(m => m.OutboundConversationsEngaged),
             Rate(answered, started),
             null,
-            samples > 0 ? withSamples.Sum(m => (m.AvgResponseMinutes ?? 0) * m.ResponseSamplesCount) / samples : null,
-            withSamples.Count > 0 ? withSamples.Min(m => m.MinResponseMinutes) : null,
-            withSamples.Count > 0 ? withSamples.Max(m => m.MaxResponseMinutes) : null,
-            samples,
+            responseDays.Count == 0 ? null : responseDays.Average(d => d.SumMinutes / d.Count),
+            responseDays.Count == 0 ? null : responseDays.Min(d => d.MinMinutes),
+            responseDays.Count == 0 ? null : responseDays.Max(d => d.MaxMinutes),
+            responseDays.Sum(d => d.Count),
+            responseDays,
             sent,
             received,
             received > 0 ? (double)sent / received : null,
@@ -64,6 +68,19 @@ public static class TeamTotals
             Outcomes(all, answered));
     }
 
+    // Um dia é um dia, não um dia por vendedor: as consolidações do mesmo dia se
+    // juntam antes de virar média, senão o dia entraria uma vez por vendedor.
+    private static IReadOnlyList<ResponseWaitDayDto> ResponseDays(List<MetricsDto> all) =>
+        [.. all.SelectMany(m => m.ResponseWaitDays)
+            .GroupBy(d => d.Day)
+            .OrderBy(g => g.Key)
+            .Select(g => new ResponseWaitDayDto(
+                g.Key,
+                g.Sum(d => d.Count),
+                g.Sum(d => d.SumMinutes),
+                g.Min(d => d.MinMinutes),
+                g.Max(d => d.MaxMinutes)))];
+
     private static IReadOnlyList<OutcomeMetricDto> Outcomes(List<MetricsDto> all, int answered) =>
         [.. all.SelectMany(m => m.Outcomes)
             .GroupBy(o => o.TypeCode)
@@ -80,5 +97,5 @@ public static class TeamTotals
         : null;
 
     private static MetricsDto Empty() =>
-        new(0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, null, null, null, 0, null, null, null, null, 0, null, null, 0, 0, 0, []);
+        new(0, 0, 0, 0, 0, null, null, null, null, null, 0, [], 0, 0, null, null, null, 0, null, null, null, null, 0, null, null, 0, 0, 0, []);
 }

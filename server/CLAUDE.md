@@ -669,9 +669,9 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 **Índices calculados**: conversas iniciadas/atendidas/**não respondidas**,
 taxa de resposta (janela `Metrics:AnswerWindowBusinessHours`), **disparos**
 (conversas iniciadas pelo vendedor) e **captações** (disparos com resposta do
-cliente), mediana da 1ª resposta, **espera de resposta mín/máx/média sobre toda
-mensagem do cliente respondida** (`Min/Max/AvgResponseMinutes` +
-`ResponseSamplesCount` para média ponderada no agregado), enviadas/recebidas
+cliente), mediana da 1ª resposta, **espera de resposta mín/máx/média, uma amostra
+por resposta do vendedor e consolidada por dia** (`Min/Max/AvgResponseMinutes` —
+ver a seção da espera de resposta abaixo), enviadas/recebidas
 + razão + **médias por hora útil** (mensagens ÷ `EffectiveBusinessHours`,
 reagregável por soma), taxa de leitura, follow-up = **silêncios resgatados ÷
 silêncios** (`SilenceGaps`/`SilenceGapsFollowedUp`, gap
@@ -679,6 +679,47 @@ silêncios** (`SilenceGaps`/`SilenceGapsFollowedUp`, gap
 condição para fechar o número por dia), vendas, conversão
 (vendas/atendidas), tempo até fechar, **última mensagem enviada**
 (`LastOutboundMessageAt`, agregado por máximo), uptime % e contagem de bans.
+
+### Espera de resposta: uma amostra por resposta, consolidada por dia
+
+Reescrita em 2026-08-04. Antes a varredura era pelas mensagens do CLIENTE que
+tiveram resposta, o que dava uma amostra por mensagem: cliente que mandava três
+seguidas pesava três vezes, e o mínimo era estruturalmente ~0 (a última mensagem
+antes de uma resposta sempre tem a menor espera).
+
+- A varredura é pelas mensagens do **vendedor**. Cada uma fecha a espera aberta
+  pela **primeira** mensagem do cliente ainda não respondida — é desde ela que o
+  cliente espera. Mensagem seguinte do vendedor não tem espera para fechar, e só
+  volta a contar depois que o cliente escreve de novo; **disparo** (conversa
+  aberta pelo vendedor) não conta, porque não há ninguém esperando.
+- O relógio continua **útil** (`BusinessTimeBetween`): cliente às 7h respondido
+  às 9h30 dá **30 min**, não 2h30.
+- **A amostra pertence ao dia da RESPOSTA**, não ao da pergunta. Além de ser o
+  dia que o usuário reconhece, é o dia que o pipeline marca como sujo — atribuir
+  à pergunta fazia resposta demorada mais de 2 dias (`LOOKBACK_DAYS` do
+  `DirtyDayTracker`) sumir do agregado para sempre.
+- **Consolidação diária** (`ResponseDayStats`): por dia guardamos contagem, soma,
+  mínimo e máximo. No período, mín é o menor dos mínimos, máx o maior dos máximos
+  e **a média é a média das médias diárias** — cada dia pesa igual, então um dia
+  ruim não é diluído por um dia de muitas respostas rápidas. `MergeResponseDays`
+  combina **por dia**: dois números do mesmo vendedor no mesmo dia viram um dia
+  só, senão o dia entraria duas vezes na média.
+- `DailyNumberMetrics` **não mudou de schema** — as colunas `ResponseCount`/
+  `Sum`/`Min`/`Max` já eram por (número, dia) e agora guardam essa consolidação.
+  Mas o **conteúdo** delas mudou de regra: depois de subir, rode
+  `POST /reports/rebuild` sobre o histórico, senão período longo mistura dias das
+  duas regras sem ninguém perceber.
+- **A carga de mensagens começa antes do período** (`Metrics:ResponseLookbackDays`,
+  2): quem responde às 9h fecha a espera de quem escreveu às 23h, e a pergunta
+  está fora da janela. Para a conversa que ficou quieta por mais tempo que isso,
+  quem salva é a mensagem de fronteira — que passou a carregar a **direção real**.
+  Gravá-la sempre como outbound (quando era só marco temporal do follow-up)
+  apagava a espera de quem estava dias sem resposta.
+- **O total do time usa a mesma regra**: o `MetricsDto` leva a série diária
+  (`ResponseWaitDays`) e o `TeamTotals` junta os dias de todos os vendedores
+  **antes** de tirar a média — um dia é um dia, não um dia por vendedor. Ponderar
+  as médias já prontas por quantidade de amostras dava um terceiro número, que não
+  era o de ninguém, e fazia o "Resumo" discordar da aba ao lado na mesma planilha.
 
 ### Uptime: canal-horas, nunca "ausência de queda"
 
@@ -750,7 +791,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 453 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler), 463 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -779,7 +820,7 @@ server/
   bloco `Metrics`
   (timezone, horas úteis seg–sex, sábado
   `SaturdayEnabled`/`SaturdayStartHour`/`SaturdayEndHour`, etiqueta de venda,
-  janelas de conversa/resposta/follow-up, `CacheSeconds`,
+  janelas de conversa/resposta/follow-up, `ResponseLookbackDays`, `CacheSeconds`,
   `AggregationEnabled`/`AggregationIntervalSeconds`, `UseDailyAggregates`,
   `LiveCalculationMaxDays`).
 - Todo `DateTime` persistido é UTC (Npgsql timestamptz); horário comercial é
@@ -817,7 +858,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (429 testes; 453 desde 2026-08-04): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (429 testes; 463 desde 2026-08-04): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

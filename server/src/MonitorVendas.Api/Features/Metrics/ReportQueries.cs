@@ -20,6 +20,10 @@ public record MetricsDto(
     double? MinResponseMinutes,
     double? MaxResponseMinutes,
     int ResponseSamplesCount,
+    // A consolidação por dia viaja junto para o total do time ser recomposto pela
+    // MESMA regra (média das médias diárias) em vez de estimado a partir das médias
+    // já prontas de cada vendedor. Mesmo motivo de UptimeCoveredSeconds abaixo.
+    IReadOnlyList<ResponseWaitDayDto> ResponseWaitDays,
     int MessagesSent,
     int MessagesReceived,
     double? SentReceivedRatio,
@@ -42,6 +46,16 @@ public record MetricsDto(
     double UptimeDowntimeSeconds,
     int BanCount,
     IReadOnlyList<OutcomeMetricDto> Outcomes);
+
+// Espera de resposta de um dia, já consolidada. Os quatro campos são o suficiente
+// para recombinar: somando contagem e soma sai a média do dia, e mín/máx combinam
+// por natureza. A média do período é a média destas médias.
+public record ResponseWaitDayDto(
+    DateOnly Day,
+    int Count,
+    double SumMinutes,
+    double MinMinutes,
+    double MaxMinutes);
 
 // Um desfecho por tipo: venda, cliente perdido e os que o usuário criar.
 // `Rate` usa a mesma base da conversão de venda (sobre conversas atendidas).
@@ -75,6 +89,7 @@ public sealed class ReportQueries(
 
     private sealed record ConversationRow(Guid Id, Guid NumberId, Guid SellerId, DateTime StartedAt, bool StartedByContact);
     private sealed record MessageRow(Guid ConversationId, DateTime Timestamp, MessageDirection Direction, DateTime? ReadAt);
+    private sealed record BoundaryRow(DateTime Timestamp, MessageDirection Direction);
     private sealed record PriorStateRow(Guid NumberId, NumberStatus? Status);
 
     // A métrica é sempre de um número SOB um vendedor. Número transferido tem um
@@ -373,28 +388,38 @@ public sealed class ReportQueries(
 
         var conversationIds = conversations.Select(c => c.Id).ToArray();
 
-        // Mensagens a partir do início do período: as posteriores ao `to` continuam
-        // vindo (uma resposta depois do fim do período ainda encerra uma espera).
+        // A carga começa ANTES do período: quem responde às 9h fecha a espera de
+        // quem escreveu às 23h, e sem essas mensagens a resposta da manhã não teria
+        // pergunta a que se referir. Elas entram só como contexto — toda contagem
+        // continua guardada por `InRange`. As posteriores ao `to` também vêm (a
+        // mediana da 1ª resposta ainda as usa).
+        var lookbackStart = fromUtc.AddDays(-Math.Max(0, options.Value.ResponseLookbackDays));
+
         var messages = conversationIds.Length == 0
             ? []
             : await db.Set<Message>().AsNoTracking()
-                .Where(m => conversationIds.Contains(m.ConversationId) && m.Timestamp >= fromUtc)
+                .Where(m => conversationIds.Contains(m.ConversationId) && m.Timestamp >= lookbackStart)
                 .OrderBy(m => m.Timestamp)
                 .Select(m => new MessageRow(m.ConversationId, m.Timestamp, m.Direction, m.ReadAt))
                 .ToListAsync(ct);
 
-        // Última mensagem ANTES do período em cada conversa que já vinha em curso:
-        // preserva o cálculo do gap de follow-up que atravessa a borda.
+        // Última mensagem antes da carga, para a conversa que ficou quieta por mais
+        // tempo que o lookback: preserva o gap de follow-up que atravessa a borda e,
+        // com a DIREÇÃO REAL, também a espera de um cliente que ficou dias sem
+        // resposta. Gravá-la sempre como outbound (o que se fazia quando ela era só
+        // marco temporal) apagava essa espera.
         var boundaries = conversationIds.Length == 0
             ? []
             : await db.Set<Conversation>().AsNoTracking()
-                .Where(c => conversationIds.Contains(c.Id) && c.StartedAt < fromUtc)
+                .Where(c => conversationIds.Contains(c.Id) && c.StartedAt < lookbackStart)
                 .Select(c => new
                 {
                     ConversationId = c.Id,
                     LastBefore = db.Set<Message>()
-                        .Where(m => m.ConversationId == c.Id && m.Timestamp < fromUtc)
-                        .Max(m => (DateTime?)m.Timestamp),
+                        .Where(m => m.ConversationId == c.Id && m.Timestamp < lookbackStart)
+                        .OrderByDescending(m => m.Timestamp)
+                        .Select(m => new BoundaryRow(m.Timestamp, m.Direction))
+                        .FirstOrDefault(),
                 })
                 .ToListAsync(ct);
 
@@ -428,7 +453,7 @@ public sealed class ReportQueries(
         var messagesByConversation = messages.ToLookup(m => m.ConversationId);
         var boundaryByConversation = boundaries
             .Where(b => b.LastBefore is not null)
-            .ToDictionary(b => b.ConversationId, b => b.LastBefore!.Value);
+            .ToDictionary(b => b.ConversationId, b => b.LastBefore!);
         var outcomeByConversation = outcomes
             .GroupBy(o => o.ConversationId)
             .ToDictionary(g => g.Key, g => g.OrderBy(o => o.MarkedAt).Select(o => (o.MarkedAt, o.OutcomeTypeCode)).First());
@@ -476,15 +501,18 @@ public sealed class ReportQueries(
     private static ConversationData BuildConversationData(
         ConversationRow conversation,
         ILookup<Guid, MessageRow> messagesByConversation,
-        Dictionary<Guid, DateTime> boundaryByConversation,
+        Dictionary<Guid, BoundaryRow> boundaryByConversation,
         Dictionary<Guid, (DateTime MarkedAt, string TypeCode)> outcomeByConversation)
     {
         var messages = new List<MessageData>();
 
-        // A mensagem de fronteira entra apenas como marco temporal (fora do período,
-        // nenhuma contagem a considera) — daí a direção não importar.
+        // Fora do período, nenhuma contagem a considera — mas a DIREÇÃO importa: é
+        // ela que diz se havia um cliente esperando quando a janela começou.
         if (boundaryByConversation.TryGetValue(conversation.Id, out var boundary))
-            messages.Add(new MessageData(boundary, IsInbound: false, ReadAt: null));
+            messages.Add(new MessageData(
+                boundary.Timestamp,
+                boundary.Direction == MessageDirection.Inbound,
+                ReadAt: null));
 
         messages.AddRange(messagesByConversation[conversation.Id]
             .Select(m => new MessageData(m.Timestamp, m.Direction == MessageDirection.Inbound, m.ReadAt)));

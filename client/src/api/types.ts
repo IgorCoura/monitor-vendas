@@ -56,6 +56,9 @@ export interface MetricsDto {
   minResponseMinutes: number | null
   maxResponseMinutes: number | null
   responseSamplesCount: number
+  // Espera consolidada por dia: viaja para que totais sejam recompostos pela mesma
+  // regra do servidor (média das médias diárias), nunca estimados das médias prontas.
+  responseWaitDays: ResponseWaitDayDto[]
   messagesSent: number
   messagesReceived: number
   sentReceivedRatio: number | null
@@ -75,6 +78,14 @@ export interface MetricsDto {
   uptimeDowntimeSeconds: number
   banCount: number
   outcomes: OutcomeMetricDto[]
+}
+
+export interface ResponseWaitDayDto {
+  day: string
+  count: number
+  sumMinutes: number
+  minMinutes: number
+  maxMinutes: number
 }
 
 // Um desfecho por tipo (venda, cliente perdido, e os que o usuário criar).

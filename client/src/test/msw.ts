@@ -27,6 +27,7 @@ export function metrics(overrides: Partial<MetricsDto> = {}): MetricsDto {
     avgReceivedPerBusinessHour: null,
     effectiveBusinessHours: 0,
     lastOutboundMessageAt: null,
+    responseWaitDays: [],
     uptimePercent: 100,
     uptimeCoveredSeconds: 86400,
     uptimeDowntimeSeconds: 0,

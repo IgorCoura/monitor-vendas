@@ -15,6 +15,11 @@ public sealed class MetricsOptions
     public int AnswerWindowBusinessHours { get; set; } = 24;
     public int FollowUpGapBusinessHours { get; set; } = 24;
 
+    // Quantos dias ANTES do período as mensagens são carregadas, só para achar de
+    // qual mensagem do cliente vem a espera que o vendedor fecha logo no começo da
+    // janela (cliente escreve 23h, vendedor responde 9h). Nada disso é contado.
+    public int ResponseLookbackDays { get; set; } = 2;
+
     // 0 desliga o cache de relatórios.
     public int CacheSeconds { get; set; } = 60;
 
