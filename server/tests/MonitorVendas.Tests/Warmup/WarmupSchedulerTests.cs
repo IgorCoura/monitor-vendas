@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Ai;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Warmup;
@@ -311,10 +312,10 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         using var scope = Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        await state.PauseGenerationAsync(db, "quota", default);
+        await state.PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
         var first = (await SettingsAsync()).GenerationPausedUntil!.Value;
 
-        await state.PauseGenerationAsync(db, "quota", default);
+        await state.PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
         var second = (await SettingsAsync()).GenerationPausedUntil!.Value;
 
         Assert.True(second - DateTime.UtcNow > (first - DateTime.UtcNow) * 1.8);
@@ -328,7 +329,7 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         using var scope = Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await scope.ServiceProvider.GetRequiredService<IWarmupState>()
-            .PauseGenerationAsync(db, "quota", default);
+            .PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
 
         // Passado o recuo, a próxima passada gera normalmente.
         await SeedAsync(async d => await d.Set<WarmupSettings>()
@@ -351,11 +352,49 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         using var scope = Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await scope.ServiceProvider.GetRequiredService<IWarmupState>()
-            .PauseGenerationAsync(db, "Gemini respondeu 429: cota diária esgotada.", default);
+            .PauseGenerationAsync(db, WarmupGenerationError.Quota, "Gemini respondeu 429: cota diária esgotada.", default);
 
         var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
 
         Assert.Contains("429", overview.GetProperty("idleReason").GetString());
+
+        // E vem classificado: "acabou a cota do Google" e "acabou o saldo em
+        // reais" pedem ações opostas de quem opera.
+        var alert = overview.GetProperty("aiAlert");
+        Assert.Equal("quota", alert.GetProperty("kind").GetString());
+        Assert.Contains("Gemini", alert.GetProperty("message").GetString());
+    }
+
+    // Saldo em reais zerado é o outro caso, e a tela avisa ANTES de a primeira
+    // conversa falhar — sem depender de já ter havido uma falha.
+    [Fact]
+    public async Task Overview_WarnsWhenTheAiBudgetIsGone()
+    {
+        await SeedPoolAsync();
+
+        // Consome a janela inteira com um gasto liquidado.
+        using var scope = Factory.Services.CreateScope();
+        var budget = scope.ServiceProvider.GetRequiredService<AiBudget>();
+        var reservation = await budget.TryReserveAsync("teste", "fake-model", 1.00m);
+        Assert.NotNull(reservation);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        var alert = overview.GetProperty("aiAlert");
+        Assert.Equal("budget", alert.GetProperty("kind").GetString());
+        Assert.Equal(0, overview.GetProperty("aiBudget").GetProperty("available").GetDecimal());
+    }
+
+    // Tudo certo com a IA: nenhum alerta, e o saldo vem para a tela mostrar.
+    [Fact]
+    public async Task Overview_HasNoAiAlertWhenEverythingIsFine()
+    {
+        await SeedPoolAsync();
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        Assert.Equal(JsonValueKind.Null, overview.GetProperty("aiAlert").ValueKind);
+        Assert.Equal(1.00m, overview.GetProperty("aiBudget").GetProperty("limit").GetDecimal());
     }
 
     // Interruptor desligado: nada é agendado, nem uma chamada de IA é gasta.

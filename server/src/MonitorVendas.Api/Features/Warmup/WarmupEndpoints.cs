@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Ai;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Sellers;
@@ -24,8 +25,16 @@ public record WarmupConversationDto(
     Guid Id, string Theme, string Status, string PhoneA, string PhoneB,
     DateTime CreatedAt, DateTime? CompletedAt, bool Archived, IReadOnlyList<WarmupTurnDto> Turns);
 
+// O aquecimento depende de DUAS torneiras que podem fechar por motivos
+// diferentes: o saldo em reais (nosso freio) e a cota do provedor (do Google).
+// A tela precisa dizer qual das duas fechou — as ações são opostas.
+public record WarmupAiAlertDto(string Kind, string Message, DateTime? RetryAt);
+
+public record WarmupAiBudgetDto(bool Enabled, decimal Limit, decimal Available, DateTime WindowEnd);
+
 public record WarmupOverviewDto(
     bool Enabled, DateTime? HaltedAt, string? HaltReason, string? IdleReason,
+    WarmupAiAlertDto? AiAlert, WarmupAiBudgetDto AiBudget,
     int PeersInPool, int MessagesToday, int ConversationsToday, double? DeliveryRate,
     IReadOnlyList<WarmupPeerDto> Numbers, IReadOnlyList<WarmupConversationDto> Conversations);
 
@@ -110,7 +119,8 @@ public static class WarmupEndpoints
     }
 }
 
-public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> options, WarmupClock clock)
+public sealed class WarmupQueries(
+    AppDbContext db, IOptions<WarmupOptions> options, WarmupClock clock, AiBudget budget)
 {
     public async Task<WarmupOverviewDto> OverviewAsync(CancellationToken ct)
     {
@@ -179,12 +189,16 @@ public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> optio
             .ToListAsync(ct);
 
         var sample = turns.Where(t => t.SentAt != null && t.SentAt <= now.AddMinutes(-15)).ToList();
+        var budgetStatus = await budget.GetStatusAsync(ct);
 
         return new WarmupOverviewDto(
             Enabled: settings?.Enabled ?? false,
             HaltedAt: settings?.HaltedAt,
             HaltReason: settings?.HaltReason,
             IdleReason: IdleReason(settings, rows, now),
+            AiAlert: AiAlert(settings, budgetStatus, now),
+            AiBudget: new WarmupAiBudgetDto(
+                budgetStatus.Enabled, budgetStatus.Limit, budgetStatus.Available, budgetStatus.WindowEnd),
             PeersInPool: peers.Count(p => p.LeftAt == null),
             MessagesToday: warmupToday.Values.Sum(),
             ConversationsToday: conversations.Count(c => c.CreatedAt >= dayStart),
@@ -198,6 +212,44 @@ public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> optio
                 [.. turns.Where(t => t.ConversationId == c.Id).Select(t => new WarmupTurnDto(
                     t.Sequence, phoneByPeer.GetValueOrDefault(t.FromPeerId, "—"), t.Text,
                     t.ScheduledAt, t.SentAt, t.DeliveredAt is not null))]))]);
+    }
+
+    // As duas torneiras da IA, cada uma com a sua ação. Aparece mesmo com o
+    // aquecimento desligado: quem for LIGAR precisa saber que não vai sair nada.
+    private static WarmupAiAlertDto? AiAlert(WarmupSettings? settings, AiBudgetStatus budget, DateTime now)
+    {
+        var paused = settings?.GenerationPausedUntil is { } until && until > now
+            ? settings.GenerationPausedUntil
+            : null;
+
+        if (settings?.LastGenerationErrorKind == WarmupGenerationError.Quota && paused is not null)
+            return new WarmupAiAlertDto(
+                WarmupGenerationError.Quota,
+                "A cota do Gemini acabou: o Google recusou as chamadas (429). Nenhuma conversa nova é "
+                + "gerada até a cota virar ou o faturamento ser habilitado no projeto do Google. "
+                + "O saldo em reais deste sistema não tem relação com isso.",
+                paused);
+
+        if (settings?.LastGenerationErrorKind == WarmupGenerationError.Budget && paused is not null)
+            return new WarmupAiAlertDto(
+                WarmupGenerationError.Budget,
+                "O saldo de IA da janela acabou. O aquecimento divide o mesmo saldo com a análise de "
+                + "conversas — aumente AiBudget:AmountPerWindow ou espere a janela virar.",
+                paused);
+
+        // Sem falha ainda, mas o saldo já zerou: avisa ANTES de a primeira
+        // conversa falhar.
+        if (budget.Enabled && budget.Available <= 0)
+            return new WarmupAiAlertDto(
+                WarmupGenerationError.Budget,
+                "O saldo de IA da janela está zerado. A próxima conversa do aquecimento não será gerada.",
+                budget.WindowEnd);
+
+        if (paused is not null && settings?.LastGenerationError is { } error)
+            return new WarmupAiAlertDto(
+                settings.LastGenerationErrorKind ?? WarmupGenerationError.Provider, error, paused);
+
+        return null;
     }
 
     // Por que NENHUMA conversa está sendo agendada agora, mesmo com tudo ligado.

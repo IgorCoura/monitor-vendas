@@ -299,6 +299,20 @@ reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
   por modelo**, e cada conversa custa uma chamada. Trocar de modelo não resolve:
   a cota é por projeto e se esgota junto. Aquecimento em produção exige
   faturamento habilitado no projeto do Google.
+- **`GET /warmup` devolve `AiAlert` + `AiBudget`**, e a falha é classificada na
+  ORIGEM (`WarmupGenerationError`: `budget`/`quota`/`content`/`provider`), não
+  por regex sobre a mensagem guardada. "Acabou o saldo em reais" (nosso freio,
+  `AiBudget:AmountPerWindow`) e "acabou a cota do Google" (429, resolve-se com
+  faturamento no projeto deles) pedem ações OPOSTAS de quem opera — a tela diz
+  qual é qual, e no caso da cota diz explicitamente que o saldo não tem relação.
+  O alerta de saldo zerado aparece **antes** da primeira falha, e mesmo com o
+  aquecimento desligado: quem for ligar precisa saber que não vai sair nada.
+- **O saldo de IA é compartilhado com a análise de conversas**, sem cota
+  separada por finalidade. O aquecimento roda sozinho em background e a análise
+  é disparada por gente, então na prática o background chega primeiro: uma
+  janela consumida pelo aquecimento faz o botão "Analisar conversas" responder
+  422. `AiUsage.Purpose` já distingue os gastos (`warmup`), mas não há teto por
+  finalidade nem quebra por finalidade na tela de saldo — **pendente**.
 - **`GET /warmup` devolve `IdleReason`**: por que NENHUMA conversa está sendo
   agendada agora, mesmo com tudo ligado (pool com menos de dois elegíveis, fora
   da janela de envio, círculo ainda não montado, meta do dia já coberta pelo
@@ -971,7 +985,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 586 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 588 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

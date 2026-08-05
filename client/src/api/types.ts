@@ -431,8 +431,25 @@ export interface WarmupConversationDto {
   turns: WarmupTurnDto[]
 }
 
+// As duas torneiras da IA fecham por motivos opostos: "budget" é o nosso saldo
+// em reais (config), "quota" é o limite do Google (faturamento no projeto deles).
+export interface WarmupAiAlertDto {
+  kind: 'budget' | 'quota' | 'content' | 'provider'
+  message: string
+  retryAt: string | null
+}
+
+export interface WarmupAiBudgetDto {
+  enabled: boolean
+  limit: number
+  available: number
+  windowEnd: string
+}
+
 export interface WarmupOverviewDto {
   enabled: boolean
+  aiAlert: WarmupAiAlertDto | null
+  aiBudget: WarmupAiBudgetDto
   haltedAt: string | null
   haltReason: string | null
   // Por que nada está sendo agendado agora, mesmo com tudo ligado.

@@ -217,7 +217,11 @@ client/src/
 │   │               #   mandado seria confiar no escuro. Interruptor liga/desliga e
 │   │               #   "Parar tudo agora" (botão de pânico, com confirmação); o
 │   │               #   banner do kill switch mostra o motivo e diz que religar é
-│   │               #   manual. `useWarmup` refaz a busca a cada 30s — é busca em
+│   │               #   manual. Faixa de alerta da IA quando a geração está
+│   │               #   travada: "cota do Gemini" (429, do Google) e "sem saldo"
+│   │               #   (nosso AiBudget) são avisos DIFERENTES, com o saldo da
+│   │               #   janela ao lado — as ações são opostas e confundi-las faz
+│   │               #   mexer na config errada. `useWarmup` refaz a busca a cada 30s — é busca em
 │   │               #   segundo plano, então sem círculo de progresso.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados

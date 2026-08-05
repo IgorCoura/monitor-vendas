@@ -6,13 +6,30 @@ using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Warmup;
 
+// Classificado na ORIGEM, não por regex sobre a mensagem guardada: "acabou o
+// saldo em reais" e "acabou a cota do Google" pedem ações opostas de quem opera,
+// e a tela precisa dizer qual é qual.
+public static class WarmupGenerationError
+{
+    // Saldo em reais da janela — nosso freio, controlado por config.
+    public const string Budget = "budget";
+
+    // Cota do provedor (429). Nenhuma config nossa resolve.
+    public const string Quota = "quota";
+
+    // A IA respondeu, mas o texto foi recusado na validação.
+    public const string Content = "content";
+
+    public const string Provider = "provider";
+}
+
 // O motivo da falha viaja junto: sem ele o agendador não sabe se deve recuar, e
 // a tela não tem o que mostrar além de silêncio.
-public sealed record GenerationOutcome(GeneratedConversation? Conversation, string? Error)
+public sealed record GenerationOutcome(GeneratedConversation? Conversation, string? Error, string? Kind = null)
 {
     public static GenerationOutcome Ok(GeneratedConversation conversation) => new(conversation, null);
 
-    public static GenerationOutcome Fail(string error) => new(null, error);
+    public static GenerationOutcome Fail(string kind, string error) => new(null, error, kind);
 }
 
 public interface IWarmupContentGenerator
@@ -102,6 +119,7 @@ public sealed class WarmupContentGenerator(
             // mais curto para o padrão ser pego.
             logger.LogWarning("Aquecimento sem saldo de IA: nenhuma conversa gerada.");
             return GenerationOutcome.Fail(
+                WarmupGenerationError.Budget,
                 "Sem saldo de IA na janela atual. O aquecimento divide o mesmo saldo com a análise de conversas.");
         }
 
@@ -119,7 +137,16 @@ public sealed class WarmupContentGenerator(
                 await budget.ReleaseAsync(reservation.Id, ct);
 
             logger.LogWarning(ex, "Falha ao gerar conversa de aquecimento.");
-            return GenerationOutcome.Fail(ex.Message.Length > 300 ? ex.Message[..300] : ex.Message);
+
+            // 429 do provedor é cota estourada: nenhuma config nossa resolve, e
+            // dizer "sem saldo" mandaria quem opera mexer no lugar errado.
+            var quota = ex.Message.Contains("429")
+                || ex.Message.Contains("quota", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase);
+
+            return GenerationOutcome.Fail(
+                quota ? WarmupGenerationError.Quota : WarmupGenerationError.Provider,
+                ex.Message.Length > 300 ? ex.Message[..300] : ex.Message);
         }
 
         await budget.SettleAsync(
@@ -129,14 +156,15 @@ public sealed class WarmupContentGenerator(
         if (parsed is null)
         {
             logger.LogWarning("Resposta de aquecimento ilegível; conversa descartada.");
-            return GenerationOutcome.Fail("A IA devolveu uma resposta ilegível.");
+            return GenerationOutcome.Fail(WarmupGenerationError.Content, "A IA devolveu uma resposta ilegível.");
         }
 
         // Descartar é barato; mandar um link não é.
         if (!WarmupContentValidator.IsAcceptable(parsed, out var reason))
         {
             logger.LogWarning("Conversa de aquecimento descartada ({Reason}).", reason);
-            return GenerationOutcome.Fail($"Conversa gerada foi recusada na validação: {reason}.");
+            return GenerationOutcome.Fail(
+                WarmupGenerationError.Content, $"Conversa gerada foi recusada na validação: {reason}.");
         }
 
         return GenerationOutcome.Ok(parsed);

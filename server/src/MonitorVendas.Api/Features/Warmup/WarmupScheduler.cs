@@ -100,7 +100,11 @@ public sealed class WarmupScheduler(
             {
                 // Uma falha para a passada inteira: se a IA recusou uma conversa,
                 // vai recusar as outras cinco do mesmo ciclo pelo mesmo motivo.
-                await state.PauseGenerationAsync(db, outcome.Error ?? "Falha desconhecida na geração.", ct);
+                await state.PauseGenerationAsync(
+                    db,
+                    outcome.Kind ?? WarmupGenerationError.Provider,
+                    outcome.Error ?? "Falha desconhecida na geração.",
+                    ct);
                 return created;
             }
 

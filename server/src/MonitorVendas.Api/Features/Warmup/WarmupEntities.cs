@@ -147,5 +147,9 @@ public class WarmupSettings
     public int GenerationFailures { get; set; }
     public string? LastGenerationError { get; set; }
 
+    // Classificação da última falha (ver WarmupGenerationError). "Acabou o saldo
+    // em reais" e "acabou a cota do Google" pedem ações opostas de quem opera.
+    public string? LastGenerationErrorKind { get; set; }
+
     public DateTime UpdatedAt { get; set; }
 }

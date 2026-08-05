@@ -10,7 +10,7 @@ public interface IWarmupState
 {
     Task<bool> IsRunningAsync(AppDbContext db, CancellationToken ct);
     Task HaltAsync(AppDbContext db, string reason, CancellationToken ct);
-    Task PauseGenerationAsync(AppDbContext db, string error, CancellationToken ct);
+    Task PauseGenerationAsync(AppDbContext db, string kind, string error, CancellationToken ct);
     Task ClearGenerationPauseAsync(AppDbContext db, CancellationToken ct);
 }
 
@@ -53,11 +53,12 @@ public sealed class WarmupState(IOptions<WarmupOptions> options, ILogger<WarmupS
     // Falhou a geração: recua, dobrando a cada falha seguida. Quota de LLM é
     // diária — insistir de 2 em 2 minutos não recupera nada, enche o log e ainda
     // deixa a análise de conversas sem cota nenhuma.
-    public async Task PauseGenerationAsync(AppDbContext db, string error, CancellationToken ct)
+    public async Task PauseGenerationAsync(AppDbContext db, string kind, string error, CancellationToken ct)
     {
         var settings = await SingletonAsync(db, ct);
 
         settings.GenerationFailures++;
+        settings.LastGenerationErrorKind = kind;
         var minutes = Math.Max(1, options.Value.GenerationPauseMinutes)
             * Math.Pow(2, Math.Min(10, settings.GenerationFailures - 1));
         var capped = Math.Min(minutes, Math.Max(1, options.Value.MaxGenerationPauseHours) * 60);
@@ -81,6 +82,7 @@ public sealed class WarmupState(IOptions<WarmupOptions> options, ILogger<WarmupS
         settings.GenerationFailures = 0;
         settings.GenerationPausedUntil = null;
         settings.LastGenerationError = null;
+        settings.LastGenerationErrorKind = null;
         settings.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }

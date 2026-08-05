@@ -6,7 +6,7 @@ import { KpiCard } from '../../components/KpiCard'
 import { Button, Card, Dialog, EmptyState, ErrorState, InfoTip, Spinner } from '../../components/ui'
 import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
 import { useIsMobile } from '../../lib/useIsMobile'
-import { fmtDateTime, fmtPercent, fmtPhone } from '../../lib/format'
+import { fmtBrl, fmtDateTime, fmtPercent, fmtPhone } from '../../lib/format'
 import { warmupHelp } from '../../lib/metrics'
 
 const conversationStatus: Record<string, { label: string; className: string }> = {
@@ -167,6 +167,43 @@ export function WarmupPage() {
               <p className="mt-1 text-xs text-danger">
                 Religar é decisão manual: use "Ligar aquecimento" quando entender o que aconteceu.
               </p>
+            </Card>
+          )}
+
+          {data.aiAlert && (
+            <Card
+              className={
+                data.aiAlert.kind === 'content'
+                  ? 'border-edge bg-card'
+                  : 'border-danger/40 bg-danger-soft'
+              }
+              data-testid="warmup-ai-alert"
+            >
+              <p
+                className={`text-sm font-semibold ${
+                  data.aiAlert.kind === 'content' ? '' : 'text-danger'
+                }`}
+              >
+                {data.aiAlert.kind === 'quota'
+                  ? 'A cota do Gemini acabou'
+                  : data.aiAlert.kind === 'budget'
+                    ? 'Sem saldo de IA'
+                    : 'A IA não está gerando conversa'}
+              </p>
+              <p className={`mt-1 text-sm ${data.aiAlert.kind === 'content' ? '' : 'text-danger'}`}>
+                {data.aiAlert.message}
+              </p>
+              {data.aiAlert.retryAt && (
+                <p className="mt-1 text-xs text-ink-muted">
+                  Próxima tentativa a partir de {fmtDateTime(data.aiAlert.retryAt)}.
+                </p>
+              )}
+              {data.aiBudget.enabled && (
+                <p className="mt-1 text-xs text-ink-muted">
+                  Saldo da janela: {fmtBrl(data.aiBudget.available)} de {fmtBrl(data.aiBudget.limit)}
+                  , renova em {fmtDateTime(data.aiBudget.windowEnd)}.
+                </p>
+              )}
             </Card>
           )}
 

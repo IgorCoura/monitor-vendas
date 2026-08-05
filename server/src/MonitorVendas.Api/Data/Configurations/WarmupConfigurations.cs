@@ -78,6 +78,7 @@ public class WarmupSettingsConfiguration : IEntityTypeConfiguration<WarmupSettin
         builder.HasKey(s => s.Id);
         builder.Property(s => s.HaltReason).HasMaxLength(300);
         builder.Property(s => s.LastGenerationError).HasMaxLength(300);
+        builder.Property(s => s.LastGenerationErrorKind).HasMaxLength(20);
 
         // Tabela de linha única: chave fixa, sem identity, para um insert
         // distraído não criar uma segunda verdade sobre o interruptor.

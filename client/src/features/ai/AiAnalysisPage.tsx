@@ -24,7 +24,7 @@ import {
   Spinner,
 } from '../../components/ui'
 import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
-import { dayEndIso, dayStartIso, fmtDateTime, toDayInput } from '../../lib/format'
+import { dayEndIso, dayStartIso, fmtBrl, fmtDateTime, toDayInput } from '../../lib/format'
 import { useIsMobile } from '../../lib/useIsMobile'
 
 const PAGE_SIZE = 50
@@ -37,10 +37,6 @@ type AiRunKind = 'analyses' | 'syntheses'
 const RUN_LABEL: Record<AiRunKind, string> = {
   analyses: 'Analisar conversas',
   syntheses: 'Refazer síntese',
-}
-
-function brl(value: number): string {
-  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 // Nunca rodou é diferente de rodou e não terminou: os dois viram "—", mas só
@@ -437,8 +433,8 @@ export function AiAnalysisPage() {
             {estimate.data && (
               <>
                 <p>
-                  Custo estimado {brl(estimate.data.estimatedBrl)} · saldo{' '}
-                  {brl(estimate.data.available)}
+                  Custo estimado {fmtBrl(estimate.data.estimatedBrl)} · saldo{' '}
+                  {fmtBrl(estimate.data.available)}
                   {!estimate.data.budgetEnabled && ' (controle de saldo desligado)'}
                 </p>
                 {/* Só o que mudou custa: dizer quanto foi reaproveitado é o que

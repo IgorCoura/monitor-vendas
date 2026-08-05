@@ -11,6 +11,8 @@ function overview(overrides: Record<string, unknown> = {}) {
     haltedAt: null,
     haltReason: null,
     idleReason: null,
+    aiAlert: null,
+    aiBudget: { enabled: true, limit: 20, available: 12.5, windowEnd: '2026-08-06T03:00:00Z' },
     peersInPool: 2,
     messagesToday: 12,
     conversationsToday: 3,
@@ -246,6 +248,54 @@ describe('WarmupPage', () => {
     expect(await screen.findByTestId('warmup-idle')).toHaveTextContent(
       'Todos os números já cobriram a meta de hoje.',
     )
+  })
+
+  // Cota do Google estourada: a tela diz que o saldo em reais NÃO tem relação,
+  // senão quem opera vai mexer na config errada.
+  it('avisa quando a cota do Gemini acabou', async () => {
+    stub({
+      aiAlert: {
+        kind: 'quota',
+        message: 'A cota do Gemini acabou: o Google recusou as chamadas (429).',
+        retryAt: '2026-08-05T22:00:00Z',
+      },
+    })
+
+    renderWithProviders(<WarmupPage />)
+
+    const alert = await screen.findByTestId('warmup-ai-alert')
+    expect(alert).toHaveTextContent('A cota do Gemini acabou')
+    expect(alert).toHaveTextContent('429')
+    // E mostra o saldo, para deixar claro que não é ele que travou.
+    expect(alert).toHaveTextContent('R$ 12,50')
+  })
+
+  // Saldo em reais zerado é o outro caso, com ação oposta.
+  it('avisa quando o saldo de IA acabou', async () => {
+    stub({
+      aiAlert: {
+        kind: 'budget',
+        message: 'O saldo de IA da janela acabou.',
+        retryAt: null,
+      },
+      aiBudget: { enabled: true, limit: 20, available: 0, windowEnd: '2026-08-06T03:00:00Z' },
+    })
+
+    renderWithProviders(<WarmupPage />)
+
+    const alert = await screen.findByTestId('warmup-ai-alert')
+    expect(alert).toHaveTextContent('Sem saldo de IA')
+    expect(alert).toHaveTextContent('R$ 0,00 de R$ 20,00')
+  })
+
+  // Sem problema nenhum na IA, o aviso não aparece.
+  it('não mostra aviso de IA quando está tudo certo', async () => {
+    stub()
+
+    renderWithProviders(<WarmupPage />)
+
+    await screen.findByText('Números no pool')
+    expect(screen.queryByTestId('warmup-ai-alert')).not.toBeInTheDocument()
   })
 
   // Desligado, a tela diz em texto que nada é gerado nem enviado.
