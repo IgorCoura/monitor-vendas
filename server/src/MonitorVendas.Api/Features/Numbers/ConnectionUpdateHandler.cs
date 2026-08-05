@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
@@ -7,11 +8,14 @@ using MonitorVendas.Api.Features.Webhooks;
 
 namespace MonitorVendas.Api.Features.Numbers;
 
-// statusReason 403 = conta banida pelo WhatsApp (Baileys). Ban começa como temporário;
-// a promoção a permanente é decisão manual (POST /numbers/{id}/ban-permanent).
+// statusReason do Baileys: 401 = logout (aparelho desvinculado, QR novo, sem
+// punição) · 403 = ban · 428 = conexão fechada (reconectar é normal) · 515 =
+// pede restart. Ban começa como temporário; a promoção a permanente é decisão
+// manual (POST /numbers/{id}/ban-permanent).
 public sealed class ConnectionUpdateHandler(
     IDirtyDayTracker dirtyDays,
     PairingService pairing,
+    IOptions<AntiBanOptions> antiBan,
     ILogger<ConnectionUpdateHandler> logger) : IWebhookEventHandler
 {
     public string EventType => "CONNECTION_UPDATE";
@@ -80,6 +84,15 @@ public sealed class ConnectionUpdateHandler(
         number.Status = newStatus;
 
         var occurredAt = WebhookPayload.GetEnvelopeTime(doc, evt.ReceivedAt);
+
+        // O 403 abre o cooldown de reconexão: reconectar durante a punição é o
+        // que promove ban temporário a permanente (escalada 24h → 48h →
+        // vitalício). 401/428/515 não são punição e não travam nada. Conectar
+        // de novo encerra o cooldown — se o WhatsApp aceitou, o ban acabou.
+        if (statusReason == 403)
+            number.BannedUntil = occurredAt.AddHours(Math.Max(1, antiBan.Value.BanCooldownHours));
+        else if (state == "open")
+            number.BannedUntil = null;
         db.Add(new NumberStatusEvent
         {
             WhatsappNumberId = number.Id,

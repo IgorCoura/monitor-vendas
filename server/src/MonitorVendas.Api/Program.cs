@@ -44,6 +44,8 @@ builder.Services.Configure<AiJobOptions>(builder.Configuration.GetSection(AiJobO
 if (builder.Configuration.GetValue("AiJob:Enabled", true))
     builder.Services.AddHostedService<AiJobBackgroundService>();
 builder.Services.AddScoped<ReportExportBuilder>();
+builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(AntiBanOptions.Section));
+builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
 builder.Services.Configure<PairingOptions>(builder.Configuration.GetSection(PairingOptions.Section));
 builder.Services.AddScoped<PairingService>();
 if (builder.Configuration.GetValue("Pairing:CleanupEnabled", true))

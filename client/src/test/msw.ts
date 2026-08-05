@@ -74,6 +74,7 @@ export const mswServer = setupServer(
   http.get('/api/v1/reports/ranking', () => HttpResponse.json([])),
   http.get('/api/v1/holidays', () => HttpResponse.json([])),
   http.get('/api/v1/numbers', () => HttpResponse.json([])),
+  http.get('/api/v1/numbers/health', () => HttpResponse.json([])),
   http.get('/api/v1/contacts', () =>
     HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
   ),

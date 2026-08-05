@@ -8,6 +8,9 @@ namespace MonitorVendas.Api.Features.Contacts;
 
 public record CreateContactShareRequest(Guid SenderNumberId, string Destination);
 
+// Aviso de risco: o envio pode prosseguir, mas quem opera precisa ver isto antes.
+public record ShareRiskWarning(string Code, string Message);
+
 public record ContactShareDto(
     Guid Id,
     Guid SenderNumberId,
@@ -33,9 +36,12 @@ public static class ContactShareEndpoints
             Guid? sellerId,
             string? outcomeTypes,
             bool? banned,
+            bool? confirmRisk,
             CreateContactShareRequest request,
             AppDbContext db,
             ContactQueries queries,
+            ReportQueries reports,
+            Numbers.Health.NumberHealthQueries health,
             IOptions<ContactShareOptions> shareOptions,
             IOptions<MetricsOptions> metrics,
             CancellationToken ct) =>
@@ -77,6 +83,18 @@ public static class ContactShareEndpoints
                           + "Aperte o filtro para não sobrecarregar o número.",
                 });
 
+            // As proteções anti-ban AVISAM, não impedem: o operador vê o risco e
+            // decide. Sem o "sim" explícito o envio não é criado, para ninguém
+            // disparar por engano num número que o WhatsApp já restringiu.
+            var warnings = await RiskWarningsAsync(sender, options, reports, health, ct);
+            if (warnings.Count > 0 && confirmRisk != true)
+                return Results.Conflict(new
+                {
+                    error = "Enviar por este número agora tem risco de banimento. Confirme para enviar mesmo assim.",
+                    requiresConfirmation = true,
+                    warnings,
+                });
+
             var share = new ContactShare
             {
                 Id = Guid.NewGuid(),
@@ -85,6 +103,7 @@ public static class ContactShareEndpoints
                 TotalContacts = rows.Count,
                 Status = ContactShareStatus.Pending,
                 CreatedAt = DateTime.UtcNow,
+                RiskAcknowledged = confirmRisk == true,
             };
 
             db.Add(share);
@@ -110,6 +129,42 @@ public static class ContactShareEndpoints
         });
 
         return group;
+    }
+
+    // Os riscos conhecidos de enviar por este número AGORA. Lista vazia = pode
+    // enviar sem perguntar nada.
+    private static async Task<List<ShareRiskWarning>> RiskWarningsAsync(
+        WhatsappNumber sender,
+        ContactShareOptions options,
+        ReportQueries reports,
+        Numbers.Health.NumberHealthQueries health,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var warnings = new List<ShareRiskWarning>();
+
+        // O próprio WhatsApp já disse para parar (erro 463) — é o aviso mais forte.
+        if (sender.SendingPausedUntil is { } paused && paused > now)
+            warnings.Add(new("sendingPaused",
+                $"O WhatsApp restringiu o envio por este número há pouco (erro 463). "
+                + $"O recomendado é esperar até {paused:dd/MM HH:mm} UTC."));
+
+        if (options.BusinessHoursOnly)
+        {
+            var calendar = await reports.BuildCalendarAsync(ct);
+            if (calendar.BusinessTimeBetween(now, now.AddMinutes(1)) <= TimeSpan.Zero)
+                warnings.Add(new("outsideBusinessHours",
+                    "Agora está fora do horário comercial. Mensagem em massa de madrugada ou "
+                    + "em feriado é padrão de robô, não de vendedor."));
+        }
+
+        var rows = await health.ListAsync(now.AddDays(-7), now, ct);
+        if (rows.FirstOrDefault(r => r.NumberId == sender.Id) is { Level: "High" or "Critical" } risky)
+            warnings.Add(new("health",
+                $"Este número está com saúde {(risky.Level == "Critical" ? "crítica" : "em risco")} "
+                + $"({risky.Score}/100) nos últimos 7 dias. Ver o detalhe em Cadastros."));
+
+        return warnings;
     }
 
     private static async Task<ContactShareDto?> LoadAsync(AppDbContext db, Guid id, CancellationToken ct)

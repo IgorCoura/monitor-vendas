@@ -123,7 +123,9 @@ client/src/
 │   └── mobile/     #   BottomNav (5 rotas), PeriodBar (período + atualização),
 │                   #   MetricList/ExpandableMetricCard (as tabelas viram cards)
 ├── features/
-│   ├── dashboard/  # KPIs do time + gráficos de ranking empilháveis (métrica EXCLUSIVA
+│   ├── dashboard/  # Faixa HealthAlert no topo quando algum número está em risco/
+│   │               #   crítico no semáforo de saúde (some quando está tudo bem).
+│   │               #   KPIs do time + gráficos de ranking empilháveis (métrica EXCLUSIVA
 │   │               #   por gráfico: escolher uma usada em outro faz swap; "+ Adicionar
 │   │               #   gráfico" pega a próxima métrica livre de lib/metrics.ts).
 │   │               #   Personalização em 3 botões contextuais, cada um com seu dialog:
@@ -138,7 +140,11 @@ client/src/
 │   │               #   `api.contacts.exportUrl(filters)` — o navegador baixa e o
 │   │               #   nome do arquivo vem do Content-Disposition. Filtros são
 │   │               #   efêmeros de propósito (data salva envelhece mal).
-│   │               #   ShareDialog: envia a mesma lista por WhatsApp ("Nome - número");
+│   │               #   ShareDialog: avisos anti-ban NÃO impedem o envio — o 409 com
+│   │               #   `requiresConfirmation` vira o painel "share-warnings" e o
+│   │               #   botão troca para "Enviar mesmo assim" (confirmRisk=true).
+│   │               #   ApiError carrega `requiresConfirmation`/`warnings` do corpo.
+│   │               #   Envia a mesma lista por WhatsApp ("Nome - número");
 │   │               #   escolhe o número remetente entre os ATIVOS (useAllNumbers) e
 │   │               #   acompanha o progresso por polling enquanto o status é Pending.
 │   ├── ai/         # AiAnalysisPage (rota /ai): lista das leituras da IA já feitas,
@@ -157,7 +163,14 @@ client/src/
 │   │               #   Sem IA e sem job: o botão é um <a> para
 │   │               #   `api.reports.exportUrl(filters)` e o navegador baixa.
 │   ├── sellers/    # relatório do vendedor: KPIs, comparativo por número, cards por número
-│   ├── registry/   # CRUD vendedores + conexão de WhatsApp. NÃO existe campo de
+│   ├── registry/   # CRUD vendedores + conexão de WhatsApp. Cada número mostra o
+│   │               #   semáforo de saúde anti-ban (HealthBadge: rótulo textual +
+│   │               #   InfoTip com os sinais; dados de GET /numbers/health, textos
+│   │               #   em lib/metrics.ts#healthLevelLabel/healthSignalLabel).
+│   │               #   Cooldown pós-ban: a linha avisa o prazo e "Reconectar"
+│   │               #   pede confirmação extra (confirmCooldown=true na API);
+│   │               #   pausa de envio (erro 463) também aparece na linha.
+│   │               #   NÃO existe campo de
 │   │               #   telefone: "Conectar WhatsApp" abre uma sessão de pareamento
 │   │               #   (PairingDialog) e o número vem do aparelho que leu o QR.
 │   │               #   O dialog conduz as confirmações (transferir de vendedor,

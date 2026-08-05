@@ -29,7 +29,10 @@ services:
         condition: service_healthy
 
   evolution:
-    image: evoapicloud/evolution-api:latest
+    # Tag fixa de propósito: `latest` pode regredir sozinho num pull (a 2.3.4
+    # quebrou o testProxy que funcionava na 2.3.0). Atualização de versão é
+    # decisão explícita, testada em dev antes.
+    image: evoapicloud/evolution-api:v2.3.7
     ports:
       - "8201:8080"
     environment:
@@ -41,7 +44,11 @@ services:
       DATABASE_CONNECTION_CLIENT_NAME: evolution
       CACHE_LOCAL_ENABLED: "true"
       CACHE_REDIS_ENABLED: "false"
+      # O par CLIENT+NAME é o fingerprint que o WhatsApp mostra na lista de
+      # aparelhos. Fixo nos dois: mudança de default da Evolution numa
+      # atualização não pode trocar o "dispositivo" de todas as sessões.
       CONFIG_SESSION_PHONE_CLIENT: MonitorVendas
+      CONFIG_SESSION_PHONE_NAME: Chrome
       LOG_LEVEL: ERROR
     volumes:
       - evolution_instances:/evolution/instances

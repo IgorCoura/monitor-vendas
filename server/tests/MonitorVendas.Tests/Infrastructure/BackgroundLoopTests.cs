@@ -156,7 +156,7 @@ public class BackgroundLoopTests(IntegrationTestWebAppFactory factory) : BaseInt
 
         var service = new ContactShareBackgroundService(
             Factory.Services.GetRequiredService<IContactShareSender>(),
-            Options.Create(new ContactShareOptions { Enabled = true, IntervalSeconds = 1, DelayBetweenMessagesSeconds = 0 }),
+            Options.Create(new ContactShareOptions { Enabled = true, IntervalSeconds = 1, MinDelaySeconds = 0, MaxDelaySeconds = 0 }),
             Factory.Services.GetRequiredService<ILogger<ContactShareBackgroundService>>());
 
         await RunUntilAsync(service, async () =>

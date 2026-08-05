@@ -13,6 +13,12 @@ public class ContactShare
     public string? Error { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+
+    // O operador viu os avisos de risco (número pausado/em risco, fora do
+    // expediente) e mandou enviar assim mesmo. As proteções são conselho, não
+    // trava: quem decide é quem opera, e a decisão viaja junto com o envio para
+    // o serviço em background saber que já foi tomada.
+    public bool RiskAcknowledged { get; set; }
 }
 
 public enum ContactShareStatus

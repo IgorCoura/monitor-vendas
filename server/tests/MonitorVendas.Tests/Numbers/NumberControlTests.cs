@@ -21,7 +21,7 @@ public class NumberControlTests(IntegrationTestWebAppFactory factory) : BaseInte
 
     // `paired` distingue "nunca conectou" de "já esteve no ar": é o evento Active
     // no histórico que diz se existe sessão para reiniciar.
-    private async Task SeedAsync(NumberStatus status = NumberStatus.Active, bool paired = true)
+    private async Task SeedAsync(NumberStatus status = NumberStatus.Active, bool paired = true, DateTime? bannedUntil = null)
     {
         await SeedAsync(db =>
         {
@@ -34,6 +34,7 @@ public class NumberControlTests(IntegrationTestWebAppFactory factory) : BaseInte
                 InstanceName = Instance,
                 Status = status,
                 CreatedAt = Start,
+                BannedUntil = bannedUntil,
             });
 
             if (paired)
@@ -59,6 +60,83 @@ public class NumberControlTests(IntegrationTestWebAppFactory factory) : BaseInte
             .Where(e => e.WhatsappNumberId == NumberId)
             .OrderBy(e => e.OccurredAt)
             .ToListAsync());
+
+    // Reconectar dentro do cooldown pós-ban é recusado com a data de liberação:
+    // a reconexão insistente é o que promove ban temporário a permanente.
+    [Fact]
+    public async Task Connect_DuringBanCooldown_Returns409WithTheDate()
+    {
+        var bannedUntil = DateTime.UtcNow.AddHours(20);
+        await SeedAsync(NumberStatus.BannedTemporary, bannedUntil: bannedUntil);
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/connect", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.True(body.GetProperty("requiresConfirmation").GetBoolean());
+        Assert.Equal(bannedUntil, body.GetProperty("bannedUntil").GetDateTime().ToUniversalTime(), TimeSpan.FromSeconds(1));
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Path.StartsWith("/instance/connect/"));
+    }
+
+    // "Reconectar mesmo assim": o operador pode furar o cooldown, mas só dizendo
+    // explicitamente que sabe o risco.
+    [Fact]
+    public async Task Connect_DuringCooldownWithConfirmation_Proceeds()
+    {
+        await SeedAsync(NumberStatus.BannedTemporary, bannedUntil: DateTime.UtcNow.AddHours(20));
+        FakeEvolution.When(HttpMethod.Get, "/instance/connect/", """{"code":"QR-NOVO"}""");
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/connect?confirmCooldown=true", null);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Contains(FakeEvolution.Requests, r => r.Path.StartsWith($"/instance/connect/{Instance}", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Cooldown vencido não trava nada: o prazo existe para segurar a pressa, não
+    // para exigir confirmação para sempre.
+    [Fact]
+    public async Task Connect_AfterCooldownExpired_Proceeds()
+    {
+        await SeedAsync(NumberStatus.BannedTemporary, bannedUntil: DateTime.UtcNow.AddHours(-1));
+        FakeEvolution.When(HttpMethod.Get, "/instance/connect/", """{"code":"QR-NOVO"}""");
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/connect", null);
+
+        response.EnsureSuccessStatusCode();
+    }
+
+    // Reiniciar sobe o socket de novo: durante um ban é mais uma tentativa de
+    // voltar ao ar. Sem este aviso, o cooldown do "Reconectar" seria contornável
+    // pelo botão ao lado — e confirmando, o reinício acontece.
+    [Fact]
+    public async Task Restart_DuringBanCooldown_WarnsAndProceedsWhenConfirmed()
+    {
+        await SeedAsync(NumberStatus.BannedTemporary, bannedUntil: DateTime.UtcNow.AddHours(20));
+        FakeEvolution.When(HttpMethod.Post, "/instance/restart/", "{}");
+
+        var warned = await Client.PostAsync($"/api/v1/numbers/{NumberId}/restart", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, warned.StatusCode);
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Path.StartsWith("/instance/restart/"));
+
+        var confirmed = await Client.PostAsync($"/api/v1/numbers/{NumberId}/restart?confirmCooldown=true", null);
+
+        confirmed.EnsureSuccessStatusCode();
+        Assert.Contains(FakeEvolution.Requests, r => r.Path.StartsWith("/instance/restart/"));
+    }
+
+    // O código de pareamento recria a instância — furar o cooldown por ele seria
+    // o mesmo erro que pelo QR. O mesmo aviso vale para os dois caminhos.
+    [Fact]
+    public async Task PairingCode_DuringBanCooldown_Returns409()
+    {
+        await SeedAsync(NumberStatus.BannedTemporary, bannedUntil: DateTime.UtcNow.AddHours(20));
+
+        var response = await Client.PostAsync($"/api/v1/numbers/{NumberId}/pairing-code", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.DoesNotContain(FakeEvolution.Requests, r => r.Path.StartsWith("/instance/create"));
+    }
 
     // Desconectar desvincula o aparelho na Evolution e registra o estado na hora,
     // sem esperar o webhook — é o que faz o downtime começar a contar certo.

@@ -9,6 +9,7 @@ import type {
   ContactFilters,
   ContactPageDto,
   ContactShareDto,
+  NumberHealthDto,
   NumberWithSellerResponse,
   PairingSessionDto,
   HolidayResponse,
@@ -20,6 +21,7 @@ import type {
   RankingEntryDto,
   ReportExportFilters,
   ReportMetricOption,
+  RiskWarning,
   SellerReportDto,
   SellerResponse,
 } from './types'
@@ -43,9 +45,16 @@ const BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 export class ApiError extends Error {
   readonly status: number
 
-  constructor(status: number, message: string) {
+  // Alguns 409 não são erro, são pergunta: o servidor descreve o risco e espera
+  // um "sim". A tela precisa dos avisos para mostrar ANTES de reperguntar.
+  readonly requiresConfirmation: boolean
+  readonly warnings: RiskWarning[]
+
+  constructor(status: number, message: string, requiresConfirmation = false, warnings: RiskWarning[] = []) {
     super(message)
     this.status = status
+    this.requiresConfirmation = requiresConfirmation
+    this.warnings = warnings
   }
 }
 
@@ -63,13 +72,17 @@ async function request<T>(path: string, init?: RequestInit & { fresh?: boolean }
 
   if (!res.ok) {
     let message = `Erro ${res.status}`
+    let requiresConfirmation = false
+    let warnings: RiskWarning[] = []
     try {
       const body = await res.json()
       message = body.error ?? body.title ?? message
+      requiresConfirmation = body.requiresConfirmation === true
+      warnings = Array.isArray(body.warnings) ? body.warnings : []
     } catch {
       // corpo não-JSON: mantém a mensagem genérica
     }
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, message, requiresConfirmation, warnings)
   }
 
   if (res.status === 204) return undefined as T
@@ -83,6 +96,15 @@ export interface DateRange {
 
 // Os mesmos filtros alimentam a prévia e o arquivo — a planilha é sempre o que
 // está na tela.
+// Flags de confirmação da reconexão (ban permanente e cooldown pós-ban).
+function confirmFlags(confirmBanned: boolean, confirmCooldown: boolean): string {
+  const flags = [
+    ...(confirmBanned ? ['confirmBanned=true'] : []),
+    ...(confirmCooldown ? ['confirmCooldown=true'] : []),
+  ]
+  return flags.length > 0 ? `?${flags.join('&')}` : ''
+}
+
 function contactQuery(filters: ContactFilters): URLSearchParams {
   const params = new URLSearchParams({ from: filters.from, to: filters.to })
   if (filters.sellerId) params.set('sellerId', filters.sellerId)
@@ -132,22 +154,27 @@ export const api = {
   numbers: {
     list: (sellerId: string) => request<NumberResponse[]>(`/sellers/${sellerId}/numbers`),
     listAll: () => request<NumberWithSellerResponse[]>('/numbers'),
-    // Reconectar um número que já existe. Ban permanente é decisão manual: só
-    // volta com confirmação explícita de quem opera.
-    connect: (id: string, confirmBanned = false) =>
-      request<QrCodeDto>(`/numbers/${id}/connect${confirmBanned ? '?confirmBanned=true' : ''}`, {
+    // Semáforo de saúde (últimos 7 dias por default do servidor).
+    health: () => request<NumberHealthDto[]>('/numbers/health'),
+    // Reconectar um número que já existe. Ban permanente é decisão manual e o
+    // cooldown pós-ban segura a pressa: os dois só passam com confirmação.
+    connect: (id: string, confirmBanned = false, confirmCooldown = false) =>
+      request<QrCodeDto>(`/numbers/${id}/connect${confirmFlags(confirmBanned, confirmCooldown)}`, {
         method: 'POST',
       }),
     // Só sob pedido: recria a instância com o número para o código nascer válido.
-    pairingCode: (id: string, confirmBanned = false) =>
-      request<QrCodeDto>(`/numbers/${id}/pairing-code${confirmBanned ? '?confirmBanned=true' : ''}`, {
+    pairingCode: (id: string, confirmBanned = false, confirmCooldown = false) =>
+      request<QrCodeDto>(`/numbers/${id}/pairing-code${confirmFlags(confirmBanned, confirmCooldown)}`, {
         method: 'POST',
       }),
     // Desvincula o aparelho: só volta com QR ou código novo.
     disconnect: (id: string) =>
       request<NumberResponse>(`/numbers/${id}/disconnect`, { method: 'POST' }),
     // Chacoalha o socket sem desvincular — para instância travada.
-    restart: (id: string) => request<NumberResponse>(`/numbers/${id}/restart`, { method: 'POST' }),
+    restart: (id: string, confirmCooldown = false) =>
+      request<NumberResponse>(`/numbers/${id}/restart${confirmCooldown ? '?confirmCooldown=true' : ''}`, {
+        method: 'POST',
+      }),
     transfer: (id: string, sellerId: string) =>
       request<NumberResponse>(`/numbers/${id}/transfer`, {
         method: 'POST',
@@ -233,11 +260,20 @@ export const api = {
     // O download é feito pelo navegador: assim o nome do arquivo vem do
     // Content-Disposition do servidor.
     exportUrl: (filters: ContactFilters) => `${BASE}/contacts/export?${contactQuery(filters)}`,
-    share: (filters: ContactFilters, senderNumberId: string, destination: string) =>
-      request<ContactShareDto>(`/contacts/share?${contactQuery(filters)}`, {
-        method: 'POST',
-        body: JSON.stringify({ senderNumberId, destination }),
-      }),
+    // `confirmRisk` = o operador viu os avisos anti-ban e mandou enviar assim mesmo.
+    share: (
+      filters: ContactFilters,
+      senderNumberId: string,
+      destination: string,
+      confirmRisk = false,
+    ) =>
+      request<ContactShareDto>(
+        `/contacts/share?${contactQuery(filters)}${confirmRisk ? '&confirmRisk=true' : ''}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ senderNumberId, destination }),
+        },
+      ),
     shareStatus: (id: string) => request<ContactShareDto>(`/contacts/share/${id}`),
   },
   holidays: {

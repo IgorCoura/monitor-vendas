@@ -22,6 +22,38 @@ export interface NumberResponse {
   instanceName: string
   status: NumberStatus
   createdAt: string
+  // Cooldown pós-ban: reconectar antes disso exige confirmação explícita.
+  bannedUntil: string | null
+  // Pausa de envio após restrição do WhatsApp (erro 463).
+  sendingPausedUntil: string | null
+  sendingPauseReason: string | null
+}
+
+// Aviso de risco anti-ban: a ação pode prosseguir, mas quem opera vê isto antes.
+export interface RiskWarning {
+  code: string
+  message: string
+}
+
+// Semáforo de saúde do número: sinais que preveem ban antes de ele acontecer.
+// NoData = número sem tráfego (não é alarme).
+export type HealthLevel = 'NoData' | 'Low' | 'Medium' | 'High' | 'Critical'
+
+export interface HealthSignalDto {
+  key: string
+  value: string
+  points: number
+}
+
+export interface NumberHealthDto {
+  numberId: string
+  phone: string
+  sellerId: string
+  sellerName: string
+  status: NumberStatus
+  score: number
+  level: HealthLevel
+  signals: HealthSignalDto[]
 }
 
 export type PairingStatus = 'AwaitingScan' | 'AwaitingConfirmation' | 'Completed' | 'Rejected'

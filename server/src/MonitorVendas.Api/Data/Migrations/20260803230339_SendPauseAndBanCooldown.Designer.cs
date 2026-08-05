@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MonitorVendas.Api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MonitorVendas.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260803230339_SendPauseAndBanCooldown")]
+    partial class SendPauseAndBanCooldown
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -315,9 +318,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
-                    b.Property<bool>("RiskAcknowledged")
-                        .HasColumnType("boolean");
-
                     b.Property<Guid>("SenderNumberId")
                         .HasColumnType("uuid");
 
@@ -606,9 +606,6 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.Property<int>("ConversationsStarted")
                         .HasColumnType("integer");
 
-                    b.Property<double>("CoveredSeconds")
-                        .HasColumnType("double precision");
-
                     b.Property<double>("DowntimeSeconds")
                         .HasColumnType("double precision");
 
@@ -825,12 +822,6 @@ namespace MonitorVendas.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(24)
                         .HasColumnType("character varying(24)");
-
-                    b.Property<uint>("xmin")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 

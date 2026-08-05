@@ -32,6 +32,32 @@ export const metricHelp = {
   taxaLeitura: 'Percentual das mensagens enviadas que o cliente leu.',
 } as const
 
+// Semáforo de saúde do número — espelha o NumberHealth do server.
+export const healthLevelLabel = {
+  NoData: 'Saúde: sem dados',
+  Low: 'Saúde: ok',
+  Medium: 'Saúde: atenção',
+  High: 'Saúde: risco',
+  Critical: 'Saúde: crítico',
+} as const
+
+// Rótulo curto de cada sinal que pesou no score (o valor vem do servidor).
+export const healthSignalLabel: Record<string, string> = {
+  delivery: 'Taxa de entrega',
+  response: 'Taxa de resposta',
+  outboundShare: 'Conversas iniciadas por nós',
+  disconnections: 'Desconexões nas últimas 24h',
+  newContactsPerDay: 'Novos contatos por dia',
+  sendRestriction: 'Restrição de envio do WhatsApp',
+  ban: 'Bans no período',
+}
+
+export const healthHelp =
+  'Score de risco de banimento (0–100) dos últimos 7 dias, montado com sinais medidos: ' +
+  'taxa de entrega (mensagem enviada que nunca chega é o aviso clássico de restrição), ' +
+  'taxa de resposta, proporção de conversas iniciadas por nós, desconexões, restrição de ' +
+  'envio (erro 463) e bans. "Sem dados" = número sem tráfego no período.'
+
 // Ajuda dos tipos de desfecho: o texto é montado a partir do nome do tipo, já que
 // o catálogo é configurável na tela de Etiquetas.
 export function outcomeHelp(name: string): string {
