@@ -189,6 +189,84 @@ public class WarmupIsolationTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal(1, await InDbAsync(db => db.Set<Message>().CountAsync()));
     }
 
+    // REGRESSÃO (encontrada rodando contra o WhatsApp de verdade em 2026-08-05):
+    // o WhatsApp entregou o tráfego do pool endereçado por LID
+    // (`222904574804050@lid`), que não contém telefone nenhum. O filtro comparava
+    // só telefone, nada casou, e as mensagens do aquecimento viraram conversa de
+    // aluno no relatório. O id da mensagem é o mesmo nos dois lados e é ele que
+    // fecha esse buraco.
+    [Fact]
+    public async Task PoolTrafficAddressedByLid_IsStillKeptOutOfTheMetrics()
+    {
+        await SeedAsync(bothInPool: true);
+
+        var peerA = await InDbAsync(db => db.Set<WarmupPeer>().AsNoTracking()
+            .FirstAsync(p => p.WhatsappNumberId == _numberA));
+        var peerB = await InDbAsync(db => db.Set<WarmupPeer>().AsNoTracking()
+            .FirstAsync(p => p.WhatsappNumberId == _numberB));
+        var conversationId = Guid.NewGuid();
+
+        await SeedAsync(db =>
+        {
+            db.Add(new WarmupConversation
+            {
+                Id = conversationId, PeerAId = peerA.Id, PeerBId = peerB.Id,
+                Theme = "combinar o almoço", Status = WarmupConversationStatus.Running,
+                CreatedAt = DateTime.UtcNow,
+            });
+            db.Add(new WarmupTurn
+            {
+                Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = 1, FromPeerId = peerA.Id,
+                Text = "bora almoçar?", ScheduledAt = DateTime.UtcNow, SentAt = DateTime.UtcNow,
+                WaMessageId = "LID-1",
+            });
+            return Task.CompletedTask;
+        });
+
+        // A cópia que chega no destinatário: mesmo id, endereçada por LID.
+        await PostWebhookAsync($$"""
+            {
+              "event": "messages.upsert", "instance": "{{InstanceB}}",
+              "data": {
+                "key": { "remoteJid": "222904574804050@lid", "fromMe": false, "id": "LID-1",
+                         "addressingMode": "lid" },
+                "message": { "conversation": "bora almoçar?" },
+                "messageType": "conversation", "messageTimestamp": {{Ts(5, 15)}}
+              }
+            }
+            """);
+        await ProcessAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<Message>().CountAsync()));
+        Assert.Equal(0, await InDbAsync(db => db.Set<Contact>().CountAsync()));
+    }
+
+    // REGRESSÃO: no modo LID o `remoteJid` não tem telefone e o `remoteJidAlt`
+    // tem. Gravar o contato pelo LID cria um segundo cadastro da mesma pessoa,
+    // sem número — e a exportação de contatos, que existe para produzir
+    // "Nome - 5511999998888", sai sem o número.
+    [Fact]
+    public async Task WhenAddressedByLid_TheContactKeepsThePhone()
+    {
+        await SeedAsync(bothInPool: true);
+
+        await PostWebhookAsync($$"""
+            {
+              "event": "messages.upsert", "instance": "{{InstanceA}}",
+              "data": {
+                "key": { "remoteJid": "42309773226234@lid", "fromMe": false, "id": "ALT-1",
+                         "remoteJidAlt": "5511777770000@s.whatsapp.net", "addressingMode": "lid" },
+                "message": { "conversation": "queria saber da pos em gestao" },
+                "messageType": "conversation", "pushName": "Aluno", "messageTimestamp": {{Ts(5, 16)}}
+              }
+            }
+            """);
+        await ProcessAsync();
+
+        var contact = await InDbAsync(db => db.Set<Contact>().AsNoTracking().SingleAsync());
+        Assert.Equal("5511777770000@s.whatsapp.net", contact.RemoteJid);
+    }
+
     // O ack de uma mensagem do aquecimento não acha `Message` nenhuma (ela nunca
     // entrou), mas atualiza o turno — é dele que sai a taxa de entrega do pool,
     // que alimenta o kill switch.

@@ -6,7 +6,8 @@ namespace MonitorVendas.Api.Features.Warmup;
 
 public interface IWarmupPool
 {
-    Task<bool> IsInternalTrafficAsync(Guid numberId, string counterpartJid, AppDbContext db, CancellationToken ct);
+    Task<bool> IsInternalTrafficAsync(
+        Guid numberId, string counterpartJid, string waMessageId, AppDbContext db, CancellationToken ct);
 }
 
 // Responde a única pergunta que o pipeline do produto precisa fazer: "esta
@@ -19,8 +20,18 @@ public interface IWarmupPool
 public sealed class WarmupPool : IWarmupPool
 {
     public async Task<bool> IsInternalTrafficAsync(
-        Guid numberId, string counterpartJid, AppDbContext db, CancellationToken ct)
+        Guid numberId, string counterpartJid, string waMessageId, AppDbContext db, CancellationToken ct)
     {
+        // O id da mensagem é o MESMO nos dois lados de uma conversa 1:1, então
+        // este teste pega o eco do remetente e a cópia do destinatário de uma vez
+        // — e não depende do formato do JID. É a defesa que faltava: o WhatsApp
+        // entregou o tráfego do pool endereçado por LID, o telefone não casou com
+        // nada, e seis mensagens de aquecimento viraram conversa de aluno no
+        // relatório (encontrado rodando o sistema de verdade em 2026-08-05).
+        if (!string.IsNullOrEmpty(waMessageId)
+            && await db.Set<WarmupTurn>().AsNoTracking().AnyAsync(t => t.WaMessageId == waMessageId, ct))
+            return true;
+
         // Barato e indexado: quase toda mensagem do sistema é de número que nem
         // está no pool, e para essas a checagem para aqui.
         var isPeer = await db.Set<WarmupPeer>().AsNoTracking()

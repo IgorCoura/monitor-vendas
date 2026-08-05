@@ -211,6 +211,21 @@ fatia minoritária de um grafo que já é legítimo. Cada decisão abaixo existe
 porque um dos cinco sinais de simulação (grafo fechado, correlação temporal,
 reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
 
+- **O filtro casa pelo ID DA MENSAGEM antes do telefone.** O WhatsApp passou a
+  endereçar por LID (`222904574804050@lid`, `addressingMode: "lid"`), e nesse
+  modo o `remoteJid` não tem telefone nenhum: a comparação por número não casava
+  e o tráfego do pool entrava no pipeline como conversa de aluno. O `key.id` é o
+  mesmo NOS DOIS LADOS de uma conversa 1:1, então casar por ele pega o eco do
+  remetente e a cópia do destinatário sem depender do formato do JID. Encontrado
+  rodando contra o WhatsApp de verdade em 2026-08-05; regressão em
+  `PoolTrafficAddressedByLid_IsStillKeptOutOfTheMetrics`.
+- **`key.remoteJidAlt` tem precedência sobre `key.remoteJid`** no
+  `MessageUpsertHandler`: no modo LID é ele que traz o JID de telefone. Sem isso
+  o mesmo cliente vira dois contatos — um por telefone, outro por LID, este sem
+  número —, e a exportação de contatos, que existe para produzir
+  "Nome - 5511999998888", sai sem o número. **Pendente**: os contatos LID já
+  gravados antes desta correção continuam duplicados no banco; consolidá-los
+  precisa de um passo próprio.
 - **UM filtro, na ingestão** (`WarmupPool.IsInternalTrafficAsync`, chamado pelo
   `MessageUpsertHandler` antes de qualquer escrita): mensagem entre dois números
   do pool **não vira `Message`, `Conversation` nem `Contact`**. Flags espalhadas
@@ -956,7 +971,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 584 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 586 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

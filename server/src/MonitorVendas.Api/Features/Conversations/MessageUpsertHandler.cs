@@ -27,7 +27,14 @@ public sealed class MessageUpsertHandler(
             return;
         }
 
-        var remoteJid = WebhookPayload.GetString(key, "remoteJid");
+        // O WhatsApp passou a endereçar por LID (`42309773226234@lid`,
+        // `addressingMode: "lid"`), e nesse modo o `remoteJid` NÃO tem telefone
+        // nenhum. Gravar o contato por ele cria um segundo cadastro da mesma
+        // pessoa, sem número — e a exportação de contatos, que existe para
+        // produzir "Nome - 5511999998888", sai sem o número. O `remoteJidAlt`
+        // traz o JID de telefone quando o modo é LID; é ele que vale.
+        var remoteJid = WebhookPayload.GetString(key, "remoteJidAlt")
+            ?? WebhookPayload.GetString(key, "remoteJid");
         var waMessageId = WebhookPayload.GetString(key, "id");
         if (remoteJid is null || waMessageId is null)
             return;
@@ -61,7 +68,7 @@ public sealed class MessageUpsertHandler(
         //
         // Consequência aceita: mensagem de trabalho REAL entre dois vendedores
         // também fica de fora. É o comportamento correto — não é venda.
-        if (await warmupPool.IsInternalTrafficAsync(number.Id, remoteJid, db, ct))
+        if (await warmupPool.IsInternalTrafficAsync(number.Id, remoteJid, waMessageId, db, ct))
         {
             logger.LogDebug("Mensagem interna do pool de aquecimento ({Instance}); fora das métricas.", evt.InstanceName);
             return;
