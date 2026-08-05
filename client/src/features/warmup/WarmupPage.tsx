@@ -9,6 +9,14 @@ import { useIsMobile } from '../../lib/useIsMobile'
 import { fmtBrl, fmtDateTime, fmtPercent, fmtPhone } from '../../lib/format'
 import { warmupHelp } from '../../lib/metrics'
 
+// As finalidades vêm do servidor como slug (AiUsage.Purpose); slug desconhecido
+// aparece cru em vez de sumir.
+const purposeLabel: Record<string, string> = {
+  warmup: 'Aquecimento',
+  'conversation-analysis': 'Análise de conversas',
+  'seller-synthesis': 'Síntese por vendedor',
+}
+
 const conversationStatus: Record<string, { label: string; className: string }> = {
   Scheduled: { label: 'Agendada', className: 'bg-surface text-ink-muted' },
   Running: { label: 'Em andamento', className: 'bg-ok-soft text-ok' },
@@ -198,12 +206,32 @@ export function WarmupPage() {
                   Próxima tentativa a partir de {fmtDateTime(data.aiAlert.retryAt)}.
                 </p>
               )}
-              {data.aiBudget.enabled && (
-                <p className="mt-1 text-xs text-ink-muted">
-                  Saldo da janela: {fmtBrl(data.aiBudget.available)} de {fmtBrl(data.aiBudget.limit)}
-                  , renova em {fmtDateTime(data.aiBudget.windowEnd)}.
-                </p>
+            </Card>
+          )}
+
+          {data.aiBudget.enabled && (
+            <Card data-testid="warmup-ai-budget">
+              <p className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                <span className="font-semibold">Saldo de IA da janela</span>
+                <span>
+                  {fmtBrl(data.aiBudget.available)} de {fmtBrl(data.aiBudget.limit)} · renova em{' '}
+                  {fmtDateTime(data.aiBudget.windowEnd)}
+                </span>
+              </p>
+              {data.aiBudget.byPurpose.length > 0 && (
+                <ul className="mt-2 space-y-0.5 text-xs text-ink-muted">
+                  {data.aiBudget.byPurpose.map((p) => (
+                    <li key={p.purpose} className="flex justify-between gap-2">
+                      <span>{purposeLabel[p.purpose] ?? p.purpose}</span>
+                      <span>{fmtBrl(p.committed)}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
+              <p className="mt-2 text-xs text-ink-muted">
+                O teto é único para todas as finalidades: o que o aquecimento gastar sai do mesmo
+                saldo da análise de conversas.
+              </p>
             </Card>
           )}
 

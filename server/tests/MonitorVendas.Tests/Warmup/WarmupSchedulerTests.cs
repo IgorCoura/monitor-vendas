@@ -186,6 +186,25 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
             return Task.CompletedTask;
         });
 
+    // Mensagens enviadas há uma hora e nunca entregues: a amostra que o kill
+    // switch olha.
+    private Task SeedUndeliveredAsync(Guid conversationId, int count) =>
+        SeedAsync(db =>
+        {
+            for (var i = 0; i < count; i++)
+            {
+                db.Add(new WarmupTurn
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = 100 + i,
+                    FromPeerId = _peerA, Text = "oi",
+                    ScheduledAt = DateTime.UtcNow.AddHours(-1),
+                    SentAt = DateTime.UtcNow.AddHours(-1),
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
     private Task<WarmupSettings> SettingsAsync() =>
         InDbAsync(db => db.Set<WarmupSettings>().AsNoTracking().SingleAsync());
 
@@ -552,22 +571,7 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         await SeedPoolAsync();
         var conversationId = await SeedDueConversationAsync(turns: 1);
 
-        await SeedAsync(db =>
-        {
-            // 20 mensagens enviadas há uma hora e nenhuma entregue.
-            for (var i = 0; i < 20; i++)
-            {
-                db.Add(new WarmupTurn
-                {
-                    Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = 100 + i,
-                    FromPeerId = _peerA, Text = "oi",
-                    ScheduledAt = DateTime.UtcNow.AddHours(-1),
-                    SentAt = DateTime.UtcNow.AddHours(-1),
-                });
-            }
-
-            return Task.CompletedTask;
-        });
+        await SeedUndeliveredAsync(conversationId, 20);
 
         var sent = await Executor.ProcessPendingAsync();
 
@@ -575,6 +579,51 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         var settings = await SettingsAsync();
         Assert.NotNull(settings.HaltedAt);
         Assert.Contains("entrega", settings.HaltReason);
+    }
+
+    // 0% de entrega SEM nenhum ack chegando é cano quebrado, não banimento — foi
+    // exatamente o que aconteceu no teste real (webhook apontando para um host
+    // que não existia). Acusar restrição do WhatsApp aqui manda o operador caçar
+    // um ban que não existe.
+    [Fact]
+    public async Task WhenNoAckEverArrives_TheHaltBlamesThePipeNotWhatsapp()
+    {
+        await SeedPoolAsync();
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+        await SeedUndeliveredAsync(conversationId, 20);
+
+        await Executor.ProcessPendingAsync();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("webhook", settings.HaltReason);
+    }
+
+    // Com acks chegando (de qualquer conversa), 0% de entrega é o WhatsApp
+    // mesmo, e a mensagem tem que dizer isso.
+    [Fact]
+    public async Task WhenAcksAreArriving_TheHaltBlamesWhatsapp()
+    {
+        await SeedPoolAsync();
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+        await SeedUndeliveredAsync(conversationId, 20);
+
+        await SeedAsync(db =>
+        {
+            db.Add(new MonitorVendas.Api.Features.Webhooks.WebhookEvent
+            {
+                InstanceName = InstanceA, EventType = "MESSAGES_UPDATE",
+                DedupeKey = $"{InstanceA}:MESSAGES_UPDATE:ACK-VIVO",
+                ReceivedAt = DateTime.UtcNow, Payload = "{}",
+            });
+            return Task.CompletedTask;
+        });
+
+        await Executor.ProcessPendingAsync();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("WhatsApp que não está entregando", settings.HaltReason);
     }
 
     // Amostra pequena não dispara o kill switch: dois envios sem ack ainda não

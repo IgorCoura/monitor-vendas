@@ -42,6 +42,23 @@ public static class WebhookPayload
         return fallback;
     }
 
+    // A IDENTIDADE DO CONTATO, num lugar só.
+    //
+    // O WhatsApp passou a endereçar por LID (`42309773226234@lid`, com
+    // `addressingMode: "lid"`), e nesse modo o `remoteJid` não contém telefone
+    // nenhum: guardar o contato por ele cria um segundo cadastro da mesma pessoa,
+    // sem número, e a exportação — que existe para produzir
+    // "Nome - 5511999998888" — sai sem o número. O `remoteJidAlt` traz o JID de
+    // telefone quando o modo é LID, e é ele que vale.
+    //
+    // Toda leitura de JID passa por aqui de propósito: quatro handlers com quatro
+    // regras próprias é garantia de que um dia divergem, e foi assim que o
+    // aquecimento vazou para as métricas.
+    public static string? ResolveJid(JsonElement element) =>
+        GetString(element, "remoteJidAlt") ?? GetString(element, "remoteJid");
+
+    public static bool IsLid(string jid) => jid.EndsWith("@lid", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsGroupOrBroadcast(string remoteJid) =>
         remoteJid.EndsWith("@g.us", StringComparison.OrdinalIgnoreCase) ||
         remoteJid.Contains("@broadcast", StringComparison.OrdinalIgnoreCase);

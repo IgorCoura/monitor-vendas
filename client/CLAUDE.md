@@ -221,7 +221,11 @@ client/src/
 │   │               #   travada: "cota do Gemini" (429, do Google) e "sem saldo"
 │   │               #   (nosso AiBudget) são avisos DIFERENTES, com o saldo da
 │   │               #   janela ao lado — as ações são opostas e confundi-las faz
-│   │               #   mexer na config errada. `useWarmup` refaz a busca a cada 30s — é busca em
+│   │               #   mexer na config errada. Card do saldo de IA sempre visível,
+│   │               #   com o gasto da janela QUEBRADO POR FINALIDADE (aquecimento,
+│   │               #   análise, síntese) — só visibilidade: o teto é único e global,
+│   │               #   e a tela diz isso em texto para não sugerir cota separada.
+│   │               #   `useWarmup` refaz a busca a cada 30s — é busca em
 │   │               #   segundo plano, então sem círculo de progresso.
 │   ├── labels/     # tipos de desfecho + etiquetas aceitas + sugestões vindas do WhatsApp
 │   └── holidays/   # cadastro de feriados

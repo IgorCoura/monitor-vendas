@@ -67,7 +67,9 @@ public sealed class LabelsAssociationHandler(
             data = nested;
 
         var labelId = WebhookPayload.GetString(data, "labelId");
-        var chatId = WebhookPayload.GetString(data, "chatId") ?? WebhookPayload.GetString(data, "remoteJid");
+        // `chatId` primeiro (é o campo próprio deste evento); o resto da
+        // identidade sai da mesma regra de todo mundo, LID incluído.
+        var chatId = WebhookPayload.GetString(data, "chatId") ?? WebhookPayload.ResolveJid(data);
         var type = WebhookPayload.GetString(data, "type")?.ToLowerInvariant();
         if (labelId is null || chatId is null || type is not ("add" or "remove"))
             return;

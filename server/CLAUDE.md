@@ -219,13 +219,23 @@ reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
   remetente e a cópia do destinatário sem depender do formato do JID. Encontrado
   rodando contra o WhatsApp de verdade em 2026-08-05; regressão em
   `PoolTrafficAddressedByLid_IsStillKeptOutOfTheMetrics`.
-- **`key.remoteJidAlt` tem precedência sobre `key.remoteJid`** no
+- **Toda leitura de JID passa por `WebhookPayload.ResolveJid(key)`** — quatro
+  handlers com quatro regras próprias é garantia de que um dia divergem, e foi
+  assim que o aquecimento vazou. `key.remoteJidAlt` tem precedência sobre
+  `key.remoteJid` no
   `MessageUpsertHandler`: no modo LID é ele que traz o JID de telefone. Sem isso
   o mesmo cliente vira dois contatos — um por telefone, outro por LID, este sem
   número —, e a exportação de contatos, que existe para produzir
-  "Nome - 5511999998888", sai sem o número. **Pendente**: os contatos LID já
-  gravados antes desta correção continuam duplicados no banco; consolidá-los
-  precisa de um passo próprio.
+  "Nome - 5511999998888", sai sem o número. Os contatos LID já gravados são consolidados por
+  `GET/POST /contacts/lid-consolidation` (prévia obrigatória, no idioma do
+  `/proxies/allocation/preview`): o `LidConsolidationPlanner` é puro e decide
+  entre **renomear** (não há gêmeo por telefone — o próprio contato vira o de
+  telefone, preservando o histórico sem mover nada) e **fundir** (já existe o
+  cadastro por telefone: as conversas do LID passam para ele e o LID some;
+  mensagens penduram na conversa, então o histórico vai junto). **O LID não é
+  reversível**: o mapa LID→telefone sai dos payloads CRUS de `webhook_events`, e
+  LID sem par visto fica como está e é reportado — inventar telefone é pior que
+  dado incompleto. É por casos assim que guardar o webhook bruto se paga.
 - **UM filtro, na ingestão** (`WarmupPool.IsInternalTrafficAsync`, chamado pelo
   `MessageUpsertHandler` antes de qualquer escrita): mensagem entre dois números
   do pool **não vira `Message`, `Conversation` nem `Contact`**. Flags espalhadas
@@ -307,12 +317,14 @@ reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
   qual é qual, e no caso da cota diz explicitamente que o saldo não tem relação.
   O alerta de saldo zerado aparece **antes** da primeira falha, e mesmo com o
   aquecimento desligado: quem for ligar precisa saber que não vai sair nada.
-- **O saldo de IA é compartilhado com a análise de conversas**, sem cota
-  separada por finalidade. O aquecimento roda sozinho em background e a análise
-  é disparada por gente, então na prática o background chega primeiro: uma
-  janela consumida pelo aquecimento faz o botão "Analisar conversas" responder
-  422. `AiUsage.Purpose` já distingue os gastos (`warmup`), mas não há teto por
-  finalidade nem quebra por finalidade na tela de saldo — **pendente**.
+- **O saldo de IA é compartilhado e o teto é ÚNICO e global** (decisão
+  explícita). `AiBudgetStatus.ByPurpose` quebra o gasto da janela por finalidade
+  (`warmup`, `conversation-analysis`, `seller-synthesis`) — **só visibilidade**,
+  para responder "quem comeu o saldo" sem abrir o banco. A tela de aquecimento
+  mostra a quebra e diz em texto que o teto é único, para não sugerir cota
+  separada. Consequência aceita: o aquecimento roda sozinho em background e a
+  análise é disparada por gente, então o background chega primeiro e pode fazer
+  o "Analisar conversas" responder 422.
 - **`GET /warmup` devolve `IdleReason`**: por que NENHUMA conversa está sendo
   agendada agora, mesmo com tudo ligado (pool com menos de dois elegíveis, fora
   da janela de envio, círculo ainda não montado, meta do dia já coberta pelo
@@ -926,6 +938,7 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 `GET /ai/status`, `POST /ai/estimate`,
 `POST /ai/analyses/run`, `POST /ai/syntheses/run`, `GET /ai/jobs/{id}`,
 `GET /reports/sellers/{id}?from&to`, `GET /reports/ranking?from&to`,
+`GET/POST /contacts/lid-consolidation` (prévia e aplicação),
 `GET /warmup`, `PUT /warmup/settings`, `POST /warmup/halt`,
 `POST /warmup/peers`, `DELETE /warmup/peers/{numberId}`,
 `GET /health`, `GET /api/v1/ping`.
@@ -985,7 +998,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 588 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 598 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

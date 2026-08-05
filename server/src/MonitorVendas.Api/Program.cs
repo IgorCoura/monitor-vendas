@@ -95,6 +95,7 @@ if (builder.Configuration.GetValue("Webhook:ProcessorEnabled", true))
 
 builder.Services.AddScoped<ReportQueries>();
 builder.Services.AddScoped<ContactQueries>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Contacts.LidConsolidationService>();
 builder.Services.Configure<ContactShareOptions>(builder.Configuration.GetSection(ContactShareOptions.Section));
 builder.Services.AddSingleton<IContactShareSender, ContactShareSender>();
 if (builder.Configuration.GetValue("ContactShare:Enabled", true))

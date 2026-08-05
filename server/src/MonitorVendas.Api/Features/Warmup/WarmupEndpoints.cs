@@ -30,7 +30,11 @@ public record WarmupConversationDto(
 // A tela precisa dizer qual das duas fechou — as ações são opostas.
 public record WarmupAiAlertDto(string Kind, string Message, DateTime? RetryAt);
 
-public record WarmupAiBudgetDto(bool Enabled, decimal Limit, decimal Available, DateTime WindowEnd);
+// `ByPurpose` é só visibilidade: o teto continua ÚNICO e global, por decisão
+// explícita. Serve para responder "quem comeu o saldo" sem abrir o banco.
+public record WarmupAiBudgetDto(
+    bool Enabled, decimal Limit, decimal Available, DateTime WindowEnd,
+    IReadOnlyList<AiPurposeSpendDto> ByPurpose);
 
 public record WarmupOverviewDto(
     bool Enabled, DateTime? HaltedAt, string? HaltReason, string? IdleReason,
@@ -198,7 +202,8 @@ public sealed class WarmupQueries(
             IdleReason: IdleReason(settings, rows, now),
             AiAlert: AiAlert(settings, budgetStatus, now),
             AiBudget: new WarmupAiBudgetDto(
-                budgetStatus.Enabled, budgetStatus.Limit, budgetStatus.Available, budgetStatus.WindowEnd),
+                budgetStatus.Enabled, budgetStatus.Limit, budgetStatus.Available, budgetStatus.WindowEnd,
+                budgetStatus.ByPurpose),
             PeersInPool: peers.Count(p => p.LeftAt == null),
             MessagesToday: warmupToday.Values.Sum(),
             ConversationsToday: conversations.Count(c => c.CreatedAt >= dayStart),

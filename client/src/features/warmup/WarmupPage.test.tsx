@@ -12,7 +12,16 @@ function overview(overrides: Record<string, unknown> = {}) {
     haltReason: null,
     idleReason: null,
     aiAlert: null,
-    aiBudget: { enabled: true, limit: 20, available: 12.5, windowEnd: '2026-08-06T03:00:00Z' },
+    aiBudget: {
+      enabled: true,
+      limit: 20,
+      available: 12.5,
+      windowEnd: '2026-08-06T03:00:00Z',
+      byPurpose: [
+        { purpose: 'warmup', committed: 5 },
+        { purpose: 'conversation-analysis', committed: 2.5 },
+      ],
+    },
     peersInPool: 2,
     messagesToday: 12,
     conversationsToday: 3,
@@ -266,8 +275,8 @@ describe('WarmupPage', () => {
     const alert = await screen.findByTestId('warmup-ai-alert')
     expect(alert).toHaveTextContent('A cota do Gemini acabou')
     expect(alert).toHaveTextContent('429')
-    // E mostra o saldo, para deixar claro que não é ele que travou.
-    expect(alert).toHaveTextContent('R$ 12,50')
+    // E o saldo continua visível ao lado, deixando claro que não é ele que travou.
+    expect(screen.getByTestId('warmup-ai-budget')).toHaveTextContent('R$ 12,50')
   })
 
   // Saldo em reais zerado é o outro caso, com ação oposta.
@@ -278,14 +287,36 @@ describe('WarmupPage', () => {
         message: 'O saldo de IA da janela acabou.',
         retryAt: null,
       },
-      aiBudget: { enabled: true, limit: 20, available: 0, windowEnd: '2026-08-06T03:00:00Z' },
+      aiBudget: {
+        enabled: true,
+        limit: 20,
+        available: 0,
+        windowEnd: '2026-08-06T03:00:00Z',
+        byPurpose: [{ purpose: 'warmup', committed: 20 }],
+      },
     })
 
     renderWithProviders(<WarmupPage />)
 
     const alert = await screen.findByTestId('warmup-ai-alert')
     expect(alert).toHaveTextContent('Sem saldo de IA')
-    expect(alert).toHaveTextContent('R$ 0,00 de R$ 20,00')
+    expect(screen.getByTestId('warmup-ai-budget')).toHaveTextContent('R$ 0,00 de R$ 20,00')
+  })
+
+  // Quem comeu o saldo: a quebra por finalidade responde isso sem abrir o banco.
+  // O teto continua único — a tela diz isso em texto para não sugerir cota
+  // separada por finalidade.
+  it('mostra o gasto de IA por finalidade', async () => {
+    stub()
+
+    renderWithProviders(<WarmupPage />)
+
+    const card = await screen.findByTestId('warmup-ai-budget')
+    expect(card).toHaveTextContent('Aquecimento')
+    expect(card).toHaveTextContent('R$ 5,00')
+    expect(card).toHaveTextContent('Análise de conversas')
+    expect(card).toHaveTextContent('R$ 2,50')
+    expect(card).toHaveTextContent(/teto é único/i)
   })
 
   // Sem problema nenhum na IA, o aviso não aparece.

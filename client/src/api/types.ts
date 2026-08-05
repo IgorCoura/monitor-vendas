@@ -439,11 +439,18 @@ export interface WarmupAiAlertDto {
   retryAt: string | null
 }
 
+// `byPurpose` é só visibilidade: o teto continua único e global.
+export interface AiPurposeSpendDto {
+  purpose: string
+  committed: number
+}
+
 export interface WarmupAiBudgetDto {
   enabled: boolean
   limit: number
   available: number
   windowEnd: string
+  byPurpose: AiPurposeSpendDto[]
 }
 
 export interface WarmupOverviewDto {

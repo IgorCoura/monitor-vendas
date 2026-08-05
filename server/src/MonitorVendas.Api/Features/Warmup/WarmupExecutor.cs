@@ -126,7 +126,22 @@ public sealed class WarmupExecutor(
 
         if (await DeliveryRateTooLowAsync(db, ct) is { } rate)
         {
-            await state.HaltAsync(db, $"Taxa de entrega do pool em {rate:P0}, abaixo do mínimo.", ct);
+            // 0% de entrega tem DUAS causas com remédios opostos: o WhatsApp
+            // bloqueando, ou o nosso cano de acks quebrado (webhook apontando
+            // para o lugar errado, processador parado, Evolution fora). Sem
+            // separar as duas, uma instância mal configurada mata o pool
+            // acusando um ban que não existe, e alguém vai caçar fantasma.
+            var acksChegando = await AcksArrivingAsync(db, ct);
+
+            await state.HaltAsync(
+                db,
+                acksChegando
+                    ? $"Taxa de entrega do pool em {rate:P0}, abaixo do mínimo. Os acks estão chegando, "
+                        + "então é o WhatsApp que não está entregando."
+                    : $"Taxa de entrega do pool em {rate:P0} — mas NENHUM ack chegou na janela. "
+                        + "Provavelmente o webhook não está alcançando a API (verifique a URL do webhook "
+                        + "nas instâncias e o processador de eventos), e não uma restrição do WhatsApp.",
+                ct);
             return 0;
         }
 
@@ -292,6 +307,17 @@ public sealed class WarmupExecutor(
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    // Chegou QUALQUER ack no período? Se nenhum evento de status entrou, o
+    // problema é o cano, não o WhatsApp. Olha os eventos crus e não as mensagens
+    // do pool: um ack de conversa de aluno já prova que o webhook funciona.
+    private static async Task<bool> AcksArrivingAsync(AppDbContext db, CancellationToken ct)
+    {
+        var since = DateTime.UtcNow.AddHours(-6);
+
+        return await db.Set<Webhooks.WebhookEvent>().AsNoTracking()
+            .AnyAsync(e => e.ReceivedAt >= since && e.EventType == "MESSAGES_UPDATE", ct);
     }
 
     // Devolve a taxa quando ela está BAIXA (e há amostra suficiente); null

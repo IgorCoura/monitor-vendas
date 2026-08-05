@@ -10,6 +10,17 @@ public static class ContactsEndpoints
 
     public static RouteGroupBuilder MapContactsEndpoints(this RouteGroupBuilder group)
     {
+        // Prévia obrigatória antes de fundir cadastro, no mesmo idioma do
+        // /proxies/allocation/preview: quem opera vê o que vai ser juntado antes
+        // de juntar, porque fusão de contato não tem desfazer.
+        group.MapGet("/contacts/lid-consolidation", async (
+            LidConsolidationService service, CancellationToken ct) =>
+            Results.Ok(await service.PlanAsync(ct)));
+
+        group.MapPost("/contacts/lid-consolidation", async (
+            LidConsolidationService service, CancellationToken ct) =>
+            Results.Ok(await service.ApplyAsync(ct)));
+
         // Prévia da exportação: os mesmos filtros, paginada para caber na tela.
         group.MapGet("/contacts", async (
             DateTime? from,

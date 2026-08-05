@@ -90,7 +90,7 @@ export const mswServer = setupServer(
       haltReason: null,
       idleReason: null,
       aiAlert: null,
-      aiBudget: { enabled: true, limit: 20, available: 20, windowEnd: '2026-08-06T03:00:00Z' },
+      aiBudget: { enabled: true, limit: 20, available: 20, windowEnd: '2026-08-06T03:00:00Z', byPurpose: [] },
       peersInPool: 0,
       messagesToday: 0,
       conversationsToday: 0,

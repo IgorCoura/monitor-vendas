@@ -267,6 +267,89 @@ public class WarmupIsolationTests(IntegrationTestWebAppFactory factory) : BaseIn
         Assert.Equal("5511777770000@s.whatsapp.net", contact.RemoteJid);
     }
 
+    // Ponta a ponta da consolidação: o contato que entrou por LID volta a ser o
+    // contato de telefone, com o histórico junto.
+    [Fact]
+    public async Task LidConsolidation_TurnsTheLidContactBackIntoAPhoneContact()
+    {
+        await SeedAsync(bothInPool: false);
+
+        // Mesma pessoa, duas vezes: uma pelo telefone e outra pelo LID.
+        await PostWebhookAsync($$"""
+            {
+              "event": "messages.upsert", "instance": "{{InstanceA}}",
+              "data": {
+                "key": { "remoteJid": "5511777770000@s.whatsapp.net", "fromMe": false, "id": "P-1" },
+                "message": { "conversation": "oi, queria saber da pos" },
+                "messageType": "conversation", "pushName": "Aluno", "messageTimestamp": {{Ts(5, 10)}}
+              }
+            }
+            """);
+        // Este chegou antes da correção do LID: o remoteJidAlt existe, mas o
+        // contato foi gravado pelo LID. Simulamos gravando à mão.
+        await ProcessAsync();
+
+        var lidContactId = Guid.NewGuid();
+        await SeedAsync(db =>
+        {
+            db.Add(new Contact
+            {
+                Id = lidContactId, RemoteJid = "222904574804050@lid",
+                PushName = "Aluno", CreatedAt = DateTime.UtcNow,
+            });
+            db.Add(new Conversation
+            {
+                Id = Guid.NewGuid(), WhatsappNumberId = _numberA, ContactId = lidContactId,
+                SellerId = Guid.NewGuid(), StartedAt = DateTime.UtcNow, LastMessageAt = DateTime.UtcNow,
+            });
+            db.Add(new MonitorVendas.Api.Features.Webhooks.WebhookEvent
+            {
+                InstanceName = InstanceA, EventType = "MESSAGES_UPSERT",
+                DedupeKey = $"{InstanceA}:MESSAGES_UPSERT:LIDMAP",
+                ReceivedAt = DateTime.UtcNow,
+                Payload = """
+                    {"event":"messages.upsert","data":{"key":{"remoteJid":"222904574804050@lid",
+                     "remoteJidAlt":"5511777770000@s.whatsapp.net","id":"LIDMAP","fromMe":false}}}
+                    """,
+            });
+            return Task.CompletedTask;
+        });
+
+        var preview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/contacts/lid-consolidation");
+        Assert.Equal(1, preview.GetProperty("merges").GetArrayLength());
+
+        var applied = await Client.PostAsync("/api/v1/contacts/lid-consolidation", null);
+        applied.EnsureSuccessStatusCode();
+
+        // O contato LID sumiu e as conversas dele foram para o de telefone.
+        Assert.False(await InDbAsync(db => db.Set<Contact>().AnyAsync(c => c.Id == lidContactId)));
+        Assert.Equal(0, await InDbAsync(db => db.Set<Contact>().CountAsync(c => c.RemoteJid.EndsWith("@lid"))));
+        Assert.Equal(2, await InDbAsync(db => db.Set<Conversation>().CountAsync()));
+    }
+
+    // LID sem par conhecido não é apagado nem inventado — fica e é reportado.
+    [Fact]
+    public async Task LidConsolidation_LeavesUnknownLidsAlone()
+    {
+        await SeedAsync(bothInPool: false);
+
+        await SeedAsync(db =>
+        {
+            db.Add(new Contact
+            {
+                Id = Guid.NewGuid(), RemoteJid = "999999@lid",
+                PushName = "Desconhecido", CreatedAt = DateTime.UtcNow,
+            });
+            return Task.CompletedTask;
+        });
+
+        var applied = await (await Client.PostAsync("/api/v1/contacts/lid-consolidation", null))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(1, applied.GetProperty("unresolved").GetInt32());
+        Assert.Equal(1, await InDbAsync(db => db.Set<Contact>().CountAsync(c => c.RemoteJid == "999999@lid")));
+    }
+
     // O ack de uma mensagem do aquecimento não acha `Message` nenhuma (ela nunca
     // entrou), mas atualiza o turno — é dele que sai a taxa de entrega do pool,
     // que alimenta o kill switch.
