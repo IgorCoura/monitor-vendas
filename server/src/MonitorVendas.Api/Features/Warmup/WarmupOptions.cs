@@ -62,6 +62,12 @@ public sealed class WarmupOptions
     public double MinDeliveryRate { get; set; } = 0.60;
     public int DeliverySampleMinimum { get; set; } = 20;
 
+    // Recuo depois de a geração falhar, dobrando a cada falha seguida. Quota de
+    // LLM é diária: insistir de 2 em 2 minutos não recupera nada e ainda deixa a
+    // análise de conversas sem cota.
+    public int GenerationPauseMinutes { get; set; } = 15;
+    public int MaxGenerationPauseHours { get; set; } = 6;
+
     public int SchedulerIntervalSeconds { get; set; } = 120;
     public int ExecutorIntervalSeconds { get; set; } = 30;
     public int MaxAttemptsPerTurn { get; set; } = 3;

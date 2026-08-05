@@ -209,6 +209,12 @@ public sealed class WarmupQueries(AppDbContext db, IOptions<WarmupOptions> optio
         if (settings is not { Enabled: true } || settings.HaltedAt is not null)
             return null;
 
+        // A falha de geração vem PRIMEIRO: é a que o silêncio esconde melhor, e
+        // foi ela que fez o aquecimento parecer morto no primeiro teste real.
+        if (settings.GenerationPausedUntil is { } until && until > now)
+            return $"A IA não conseguiu gerar conversa e a geração recuou até {until:HH:mm} (UTC). "
+                + $"Última falha: {settings.LastGenerationError}";
+
         var pool = rows.Where(r => r.InPool && r.IneligibleReason is null).ToList();
         if (pool.Count < 2)
             return "Menos de dois números elegíveis no pool: não há com quem conversar.";

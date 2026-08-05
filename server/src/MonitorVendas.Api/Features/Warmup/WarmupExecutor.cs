@@ -10,11 +10,13 @@ public interface IWarmupState
 {
     Task<bool> IsRunningAsync(AppDbContext db, CancellationToken ct);
     Task HaltAsync(AppDbContext db, string reason, CancellationToken ct);
+    Task PauseGenerationAsync(AppDbContext db, string error, CancellationToken ct);
+    Task ClearGenerationPauseAsync(AppDbContext db, CancellationToken ct);
 }
 
 // Interruptor e kill switch. Nasce desligado: a feature não começa a mandar
 // mensagem sozinha depois de um deploy.
-public sealed class WarmupState(ILogger<WarmupState> logger) : IWarmupState
+public sealed class WarmupState(IOptions<WarmupOptions> options, ILogger<WarmupState> logger) : IWarmupState
 {
     public async Task<bool> IsRunningAsync(AppDbContext db, CancellationToken ct)
     {
@@ -46,6 +48,55 @@ public sealed class WarmupState(ILogger<WarmupState> logger) : IWarmupState
         await db.SaveChangesAsync(ct);
 
         logger.LogError("AQUECIMENTO PARADO: {Reason}", reason);
+    }
+
+    // Falhou a geração: recua, dobrando a cada falha seguida. Quota de LLM é
+    // diária — insistir de 2 em 2 minutos não recupera nada, enche o log e ainda
+    // deixa a análise de conversas sem cota nenhuma.
+    public async Task PauseGenerationAsync(AppDbContext db, string error, CancellationToken ct)
+    {
+        var settings = await SingletonAsync(db, ct);
+
+        settings.GenerationFailures++;
+        var minutes = Math.Max(1, options.Value.GenerationPauseMinutes)
+            * Math.Pow(2, Math.Min(10, settings.GenerationFailures - 1));
+        var capped = Math.Min(minutes, Math.Max(1, options.Value.MaxGenerationPauseHours) * 60);
+
+        settings.GenerationPausedUntil = DateTime.UtcNow.AddMinutes(capped);
+        settings.LastGenerationError = error;
+        settings.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        logger.LogWarning(
+            "Geração do aquecimento pausada por {Minutes:0} min (falha {Count}): {Error}",
+            capped, settings.GenerationFailures, error);
+    }
+
+    public async Task ClearGenerationPauseAsync(AppDbContext db, CancellationToken ct)
+    {
+        var settings = await SingletonAsync(db, ct);
+        if (settings is { GenerationFailures: 0, LastGenerationError: null })
+            return;
+
+        settings.GenerationFailures = 0;
+        settings.GenerationPausedUntil = null;
+        settings.LastGenerationError = null;
+        settings.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task<WarmupSettings> SingletonAsync(AppDbContext db, CancellationToken ct)
+    {
+        var settings = await db.Set<WarmupSettings>()
+            .FirstOrDefaultAsync(s => s.Id == WarmupSettings.SingletonId, ct);
+
+        if (settings is null)
+        {
+            settings = new WarmupSettings { Id = WarmupSettings.SingletonId };
+            db.Add(settings);
+        }
+
+        return settings;
     }
 }
 

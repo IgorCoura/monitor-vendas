@@ -35,6 +35,13 @@ public sealed class WarmupScheduler(
         var settings = options.Value;
         var now = DateTime.UtcNow;
 
+        // Geração em recuo: nem tenta. Insistir contra uma quota diária esgotada
+        // só queima o que a análise de conversas ainda poderia usar.
+        var stored = await db.Set<WarmupSettings>().AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == WarmupSettings.SingletonId, ct);
+        if (stored?.GenerationPausedUntil is { } until && until > now)
+            return 0;
+
         // O grafo cresce antes de agendar: número que entrou hoje já pode ter
         // um colega para conversar amanhã.
         await GrowGraphAsync(db, now, settings, ct);
@@ -88,22 +95,29 @@ public sealed class WarmupScheduler(
             if (turns < settings.MinTurnsPerConversation)
                 continue;
 
-            if (await CreateConversationAsync(db, generator, link, peer, other, turns, now, settings, ct))
-                created++;
+            var outcome = await generator.GenerateAsync(peer.Persona, other.Persona, turns, ct);
+            if (outcome.Conversation is null)
+            {
+                // Uma falha para a passada inteira: se a IA recusou uma conversa,
+                // vai recusar as outras cinco do mesmo ciclo pelo mesmo motivo.
+                await state.PauseGenerationAsync(db, outcome.Error ?? "Falha desconhecida na geração.", ct);
+                return created;
+            }
+
+            await state.ClearGenerationPauseAsync(db, ct);
+            CreateConversation(db, outcome.Conversation, link, peer, other, now, settings);
+            await db.SaveChangesAsync(ct);
+            created++;
         }
 
         await db.SaveChangesAsync(ct);
         return created;
     }
 
-    private async Task<bool> CreateConversationAsync(
-        AppDbContext db, IWarmupContentGenerator generator, WarmupLink link,
-        WarmupPeer a, WarmupPeer b, int turns, DateTime now, WarmupOptions settings, CancellationToken ct)
+    private void CreateConversation(
+        AppDbContext db, GeneratedConversation content, WarmupLink link,
+        WarmupPeer a, WarmupPeer b, DateTime now, WarmupOptions settings)
     {
-        var content = await generator.GenerateAsync(a.Persona, b.Persona, turns, ct);
-        if (content is null)
-            return false;
-
         var conversation = new WarmupConversation
         {
             Id = Guid.NewGuid(),
@@ -138,9 +152,7 @@ public sealed class WarmupScheduler(
             });
         }
 
-        await db.SaveChangesAsync(ct);
         logger.LogInformation("Aquecimento: conversa de {Turns} turnos agendada sobre {Theme}.", keep, content.Theme);
-        return true;
     }
 
     // Prefere o par que está há mais tempo sem falar, ponderado pela intensidade

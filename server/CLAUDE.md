@@ -273,6 +273,17 @@ reciprocidade perfeita, baixa entropia, ritmo não humano) morre nela.
   o pool inteiro sem nenhum aviso. `ReleaseStuckAsync` roda antes de qualquer
   envio e fecha o que não tem como andar (`Failed` se nada saiu, `Abandoned` se
   saiu parte), no mesmo espírito do `ReleaseStuckJobsAsync` da IA.
+- **A geração RECUA quando a IA falha** (`WarmupSettings.GenerationPausedUntil`,
+  dobrando a cada falha seguida até `MaxGenerationPauseHours`). Sem isso o
+  agendador pedia uma conversa nova a cada passada — **720 chamadas por dia
+  contra um free tier do Gemini de 20** —, o aquecimento comia sozinho a cota da
+  análise de conversas e o log enchia de 429. Encontrado rodando o sistema de
+  verdade em 2026-08-05, não pelos testes.
+- **O free tier do Gemini não sustenta esta feature.** A cota é
+  `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, **20 requisições por dia
+  por modelo**, e cada conversa custa uma chamada. Trocar de modelo não resolve:
+  a cota é por projeto e se esgota junto. Aquecimento em produção exige
+  faturamento habilitado no projeto do Google.
 - **`GET /warmup` devolve `IdleReason`**: por que NENHUMA conversa está sendo
   agendada agora, mesmo com tudo ligado (pool com menos de dois elegíveis, fora
   da janela de envio, círculo ainda não montado, meta do dia já coberta pelo
@@ -945,7 +956,7 @@ server/
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 580 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 584 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MonitorVendas.Api.Data;
 using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Warmup;
@@ -269,6 +270,92 @@ public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIn
         await Scheduler.RunOnceAsync();
 
         Assert.Equal(2, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // REGRESSÃO (achada rodando o sistema de verdade): a IA devolveu 429 de
+    // quota e o agendador pedia uma conversa nova a CADA passada — 720 chamadas
+    // por dia contra um free tier de 20. O aquecimento comia sozinho a cota da
+    // análise de conversas e enchia o log, sem nada aparecer na tela.
+    [Fact]
+    public async Task WhenTheAiFails_ItBacksOffInsteadOfHammeringTheQuota()
+    {
+        await SeedPoolAsync();
+        FakeAi.Reset();
+        FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests);
+        FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests);
+
+        await Scheduler.RunOnceAsync();
+
+        var callsAfterFirstPass = FakeAi.CallCount;
+        Assert.True(callsAfterFirstPass >= 1);
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.GenerationPausedUntil);
+        Assert.True(settings.GenerationPausedUntil > DateTime.UtcNow);
+        Assert.Equal(1, settings.GenerationFailures);
+        Assert.NotNull(settings.LastGenerationError);
+
+        // A passada seguinte não gasta NENHUMA chamada nova.
+        await Scheduler.RunOnceAsync();
+        Assert.Equal(callsAfterFirstPass, FakeAi.CallCount);
+    }
+
+    // O recuo dobra a cada falha seguida: quota diária não se recupera em
+    // quinze minutos.
+    [Fact]
+    public async Task EachConsecutiveFailure_DoublesTheBackoff()
+    {
+        await SeedPoolAsync();
+        var state = Factory.Services.GetRequiredService<IWarmupState>();
+
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        await state.PauseGenerationAsync(db, "quota", default);
+        var first = (await SettingsAsync()).GenerationPausedUntil!.Value;
+
+        await state.PauseGenerationAsync(db, "quota", default);
+        var second = (await SettingsAsync()).GenerationPausedUntil!.Value;
+
+        Assert.True(second - DateTime.UtcNow > (first - DateTime.UtcNow) * 1.8);
+    }
+
+    // Geração que volta a funcionar limpa o recuo na hora.
+    [Fact]
+    public async Task AfterASuccess_TheBackoffIsCleared()
+    {
+        await SeedPoolAsync();
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IWarmupState>()
+            .PauseGenerationAsync(db, "quota", default);
+
+        // Passado o recuo, a próxima passada gera normalmente.
+        await SeedAsync(async d => await d.Set<WarmupSettings>()
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.GenerationPausedUntil, DateTime.UtcNow.AddMinutes(-1))));
+
+        await Scheduler.RunOnceAsync();
+
+        var settings = await SettingsAsync();
+        Assert.Null(settings.GenerationPausedUntil);
+        Assert.Equal(0, settings.GenerationFailures);
+        Assert.Null(settings.LastGenerationError);
+    }
+
+    // O motivo da falha da IA aparece na tela: era exatamente esse silêncio que
+    // fazia o aquecimento parecer quebrado.
+    [Fact]
+    public async Task Overview_ShowsWhyTheAiCouldNotGenerate()
+    {
+        await SeedPoolAsync();
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IWarmupState>()
+            .PauseGenerationAsync(db, "Gemini respondeu 429: cota diária esgotada.", default);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        Assert.Contains("429", overview.GetProperty("idleReason").GetString());
     }
 
     // Interruptor desligado: nada é agendado, nem uma chamada de IA é gasta.

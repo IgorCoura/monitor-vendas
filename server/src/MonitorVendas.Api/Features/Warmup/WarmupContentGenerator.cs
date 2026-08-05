@@ -6,9 +6,18 @@ using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Warmup;
 
+// O motivo da falha viaja junto: sem ele o agendador não sabe se deve recuar, e
+// a tela não tem o que mostrar além de silêncio.
+public sealed record GenerationOutcome(GeneratedConversation? Conversation, string? Error)
+{
+    public static GenerationOutcome Ok(GeneratedConversation conversation) => new(conversation, null);
+
+    public static GenerationOutcome Fail(string error) => new(null, error);
+}
+
 public interface IWarmupContentGenerator
 {
-    Task<GeneratedConversation?> GenerateAsync(
+    Task<GenerationOutcome> GenerateAsync(
         WarmupPersona personaA, WarmupPersona personaB, int turns, CancellationToken ct);
 }
 
@@ -47,7 +56,7 @@ public sealed class WarmupContentGenerator(
         }
         """;
 
-    public async Task<GeneratedConversation?> GenerateAsync(
+    public async Task<GenerationOutcome> GenerateAsync(
         WarmupPersona personaA, WarmupPersona personaB, int turns, CancellationToken ct)
     {
         var settings = options.Value;
@@ -92,7 +101,8 @@ public sealed class WarmupContentGenerator(
             // com milhares de mensagens por mês, repetição literal é o caminho
             // mais curto para o padrão ser pego.
             logger.LogWarning("Aquecimento sem saldo de IA: nenhuma conversa gerada.");
-            return null;
+            return GenerationOutcome.Fail(
+                "Sem saldo de IA na janela atual. O aquecimento divide o mesmo saldo com a análise de conversas.");
         }
 
         AiCompletion completion;
@@ -109,7 +119,7 @@ public sealed class WarmupContentGenerator(
                 await budget.ReleaseAsync(reservation.Id, ct);
 
             logger.LogWarning(ex, "Falha ao gerar conversa de aquecimento.");
-            return null;
+            return GenerationOutcome.Fail(ex.Message.Length > 300 ? ex.Message[..300] : ex.Message);
         }
 
         await budget.SettleAsync(
@@ -119,17 +129,17 @@ public sealed class WarmupContentGenerator(
         if (parsed is null)
         {
             logger.LogWarning("Resposta de aquecimento ilegível; conversa descartada.");
-            return null;
+            return GenerationOutcome.Fail("A IA devolveu uma resposta ilegível.");
         }
 
         // Descartar é barato; mandar um link não é.
         if (!WarmupContentValidator.IsAcceptable(parsed, out var reason))
         {
             logger.LogWarning("Conversa de aquecimento descartada ({Reason}).", reason);
-            return null;
+            return GenerationOutcome.Fail($"Conversa gerada foi recusada na validação: {reason}.");
         }
 
-        return parsed;
+        return GenerationOutcome.Ok(parsed);
     }
 
     private static GeneratedConversation? Parse(string theme, string raw)

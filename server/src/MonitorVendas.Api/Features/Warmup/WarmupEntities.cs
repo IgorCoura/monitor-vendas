@@ -140,5 +140,12 @@ public class WarmupSettings
     public DateTime? HaltedAt { get; set; }
     public string? HaltReason { get; set; }
 
+    // Recuo depois de a geração falhar. Sem ele o agendador pede uma conversa
+    // nova a cada passada — 720 chamadas por dia contra um free tier de 20 —, e
+    // o aquecimento come sozinho a cota que a análise de conversas precisa.
+    public DateTime? GenerationPausedUntil { get; set; }
+    public int GenerationFailures { get; set; }
+    public string? LastGenerationError { get; set; }
+
     public DateTime UpdatedAt { get; set; }
 }
