@@ -6,6 +6,15 @@ export function fmtPercent(value: number | null | undefined): string {
   return `${(value * 100).toFixed(0)}%`
 }
 
+// Uptime vem em 0–100 e NUNCA arredonda para cima: 99,6% virando "100%" mente
+// sobre a única coisa que essa métrica existe para dizer. "100%" só sai quando o
+// canal esteve no ar o período inteiro; null (sem número a medir) vira "—".
+export function fmtUptime(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  if (value >= 100) return '100%'
+  return `${(Math.floor(value * 10) / 10).toLocaleString('pt-BR')}%`
+}
+
 export function fmtMinutes(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   const total = Math.round(value)

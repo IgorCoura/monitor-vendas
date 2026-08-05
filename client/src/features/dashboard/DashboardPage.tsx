@@ -16,7 +16,7 @@ import { Button, Card, Dialog, EmptyState, ErrorState, InfoTip, Select, Spinner 
 import { MobilePeriodBar } from '../../components/mobile/PeriodBar'
 import { ExpandableMetricCard, type MetricItem } from '../../components/mobile/MetricList'
 import { useIsMobile } from '../../lib/useIsMobile'
-import { fmtDateTime, fmtMinutes, fmtPercent, fmtPerHour, fmtPhone, periodOptions } from '../../lib/format'
+import { fmtDateTime, fmtMinutes, fmtPercent, fmtPerHour, fmtPhone, fmtUptime, periodOptions } from '../../lib/format'
 import { chartInk, chartSeries } from '../../lib/palette'
 import {
   chartMetricByKey,
@@ -101,7 +101,7 @@ const tableColumns: {
   { key: 'followup', label: 'Follow-up', help: metricHelp.followUp, render: (e) => fmtPercent(e.metrics.followUpRate) },
   { key: 'medenvh', label: 'Méd. env./h', help: metricHelp.mediaEnviadas, render: (e) => fmtPerHour(e.metrics.avgSentPerBusinessHour) },
   { key: 'ultenvio', label: 'Últ. envio', help: metricHelp.ultimoEnvio, nowrap: true, render: (e) => fmtDateTime(e.metrics.lastOutboundMessageAt) },
-  { key: 'uptime', label: 'Uptime', help: metricHelp.uptime, render: (e) => `${e.metrics.uptimePercent.toFixed(0)}%` },
+  { key: 'uptime', label: 'Uptime', help: metricHelp.uptime, render: (e) => fmtUptime(e.metrics.uptimePercent) },
   { key: 'bans', label: 'Bans', help: metricHelp.bans, render: (e) => e.metrics.banCount },
 ]
 

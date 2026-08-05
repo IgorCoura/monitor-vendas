@@ -14,7 +14,7 @@ export const metricHelp = {
   primeiraResposta:
     'Mediana do tempo útil entre a primeira mensagem do cliente e a primeira resposta do vendedor. Em períodos de até 7 dias o valor é exato; em períodos maiores é estimado (o servidor guarda faixas de tempo, não a lista completa).',
   espera:
-    'Tempo útil que o cliente esperou até ser respondido, considerando TODA mensagem do cliente que recebeu resposta (não só a primeira da conversa). O valor grande é a média; mín/máx no detalhe.',
+    'Tempo útil que o cliente esperou até ser respondido. Cada resposta do vendedor fecha a espera aberta pela primeira mensagem do cliente ainda sem resposta; mensagens seguidas do vendedor não contam de novo, e disparo não conta. Tempo fora do expediente não entra. O período combina os dias: mín e máx são o menor e o maior do período, e a média é a média das médias de cada dia.',
   vendas:
     'Conversas marcadas com a etiqueta "venda" no WhatsApp Business dentro do período.',
   conversao: 'Vendas ÷ conversas atendidas.',
@@ -23,7 +23,8 @@ export const metricHelp = {
   mediaEnviadas: 'Mensagens enviadas ÷ horas úteis do período (descontando quedas do número).',
   mediaRecebidas: 'Mensagens recebidas ÷ horas úteis do período (descontando quedas do número).',
   fechamento: 'Tempo útil médio entre o início da conversa e a marcação da venda.',
-  uptime: 'Percentual do tempo do período em que o número esteve conectado.',
+  uptime:
+    'Percentual do tempo em que os números do vendedor estiveram conectados. A conta é sobre o tempo em que cada número existia e era dele: 100% só aparece quando TODOS ficaram no ar o período inteiro, e "—" quando não há número a medir.',
   bans: 'Quantas vezes o número entrou em estado banido (statusReason 403) no período.',
   ultimoEnvio: 'Data e hora da última mensagem enviada pelo vendedor no período.',
   msgsEnviadas: 'Total de mensagens enviadas pelo vendedor no período.',

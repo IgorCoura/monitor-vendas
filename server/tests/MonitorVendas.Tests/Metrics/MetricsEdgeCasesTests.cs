@@ -62,15 +62,16 @@ public class MetricsEdgeCasesTests
         Assert.Null(MetricsResult.Median([]));
     }
 
-    // Agregar lista vazia devolve o resultado neutro — uptime 100%, porque não
-    // houve período nenhum em que o número esteve fora.
+    // Agregar lista vazia devolve o resultado neutro, e o uptime é NULO, não 100%:
+    // sem número nenhum não há canal a medir. Era daqui que saía o vendedor sem
+    // WhatsApp aparecendo com uptime perfeito no ranking.
     [Fact]
-    public void Aggregate_WithNoParts_IsNeutral()
+    public void Aggregate_WithNoParts_HasNoUptimeToReport()
     {
         var result = MetricsResult.Aggregate([]);
 
         Assert.Equal(0, result.ConversationsStarted);
-        Assert.Equal(100, result.UptimePercent);
+        Assert.Null(result.UptimePercent);
         Assert.Empty(result.FirstResponseMinutesSamples);
     }
 
@@ -99,7 +100,7 @@ public class MetricsEdgeCasesTests
         var result = Calculator().Compute(From, To, [], downtimes, 0);
 
         // Três horas fora de quatro: 25% de uptime, não menos.
-        Assert.Equal(25, result.UptimePercent, 1);
+        Assert.Equal(25, result.UptimePercent!.Value, 1);
         Assert.Equal(1, result.EffectiveBusinessHours, 1);
     }
 
@@ -124,12 +125,13 @@ public class MetricsEdgeCasesTests
         Assert.Equal(4, result.EffectiveBusinessHours, 1);
     }
 
-    // Período invertido ou nulo não quebra o cálculo — uptime 100% por definição.
+    // Período invertido ou nulo não quebra o cálculo, e não há uptime a informar:
+    // janela de duração zero não cobre instante nenhum do canal.
     [Fact]
     public void Compute_WithEmptyPeriod_DoesNotDivideByZero()
     {
         var result = Calculator().Compute(From, From, [], [], 0);
 
-        Assert.Equal(100, result.UptimePercent);
+        Assert.Null(result.UptimePercent);
     }
 }

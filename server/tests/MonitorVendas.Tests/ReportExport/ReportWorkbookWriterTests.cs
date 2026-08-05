@@ -18,10 +18,10 @@ public class ReportWorkbookWriterTests
     private static MetricsDto Metrics(int started, int answered, int sales = 0, double? median = null) =>
         new(started, answered, 0, 0, 0,
             started > 0 ? (double)answered / started : null,
-            median, null, null, null, 0,
+            median, null, null, null, 0, [],
             0, 0, null, null, null,
             sales, answered > 0 ? (double)sales / answered : null, null, null, null,
-            8, null, 100, 0,
+            8, null, 100, 86400, 0, 0,
             [new OutcomeMetricDto("sale", "Vendas", sales, null, null),
              new OutcomeMetricDto("lost", "Clientes perdidos", 1, null, null)]);
 

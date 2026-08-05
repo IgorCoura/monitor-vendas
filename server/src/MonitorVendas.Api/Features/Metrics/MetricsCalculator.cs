@@ -11,6 +11,26 @@ public sealed record ConversationData(
     DateTime? OutcomeMarkedAt = null,
     string? OutcomeTypeCode = null);
 
+// Espera de resposta consolidada de UM dia. A amostra pertence ao dia da
+// RESPOSTA — é esse o dia que o pipeline marca como sujo, então resposta que
+// demora dias não some do agregado (atribuindo à pergunta, sumia).
+//
+// O período combina essas consolidações, nunca as amostras cruas: o mínimo é o
+// menor dos mínimos do dia, o máximo o maior dos máximos, e a média é a média
+// das médias diárias — cada dia pesa igual, independentemente do volume.
+public sealed record ResponseDayStats(int Count, double SumMinutes, double MinMinutes, double MaxMinutes)
+{
+    public double AvgMinutes => Count == 0 ? 0 : SumMinutes / Count;
+
+    public static ResponseDayStats Of(double minutes) => new(1, minutes, minutes, minutes);
+
+    public ResponseDayStats Plus(ResponseDayStats other) => new(
+        Count + other.Count,
+        SumMinutes + other.SumMinutes,
+        Math.Min(MinMinutes, other.MinMinutes),
+        Math.Max(MaxMinutes, other.MaxMinutes));
+}
+
 // Totais de um tipo de desfecho (venda, cliente perdido, ...). Somável entre
 // números e entre dias.
 public sealed record OutcomeTotals(int Count, int TimeToCloseCount, double TimeToCloseHoursSum)
@@ -28,6 +48,10 @@ public sealed record OutcomeTotals(int Count, int TimeToCloseCount, double TimeT
 // Resultado por número; os *Samples ficam expostos para agregação por vendedor
 // (mediana não se combina a partir de medianas parciais). EffectiveBusinessHours
 // permite reagregar as médias por hora útil (soma de mensagens ÷ soma de horas).
+//
+// Uptime sai de DOIS somáveis — tempo coberto e tempo fora do ar — em vez de um
+// percentual pronto. Percentual não soma entre números nem entre dias, e era daí
+// que vinha o vendedor de canal derrubado aparecendo com 100%.
 public sealed record MetricsResult(
     int ConversationsStarted,
     int ConversationsAnswered,
@@ -40,23 +64,34 @@ public sealed record MetricsResult(
     int SilenceGapsFollowedUp,
     IReadOnlyDictionary<string, OutcomeTotals> Outcomes,
     int BanCount,
-    double UptimePercent,
+    double CoveredSeconds,
+    double DowntimeSeconds,
     double EffectiveBusinessHours,
     DateTime? LastOutboundMessageAt,
     IReadOnlyList<double> FirstResponseMinutesSamples,
-    IReadOnlyList<double> ResponseMinutesSamples)
+    // Amostras cruas na ordem em que aconteceram — diagnóstico e testes. Quem manda
+    // no número exibido é `ResponseByDay`, a consolidação por dia.
+    IReadOnlyList<double> ResponseMinutesSamples,
+    IReadOnlyDictionary<DateOnly, ResponseDayStats> ResponseByDay)
 {
     public int ConversationsUnanswered => ConversationsStarted - ConversationsAnswered;
     public double? ResponseRate => ConversationsStarted == 0 ? null : (double)ConversationsAnswered / ConversationsStarted;
     public double? MedianFirstResponseMinutes => Median(FirstResponseMinutesSamples);
-    public double? AvgResponseMinutes => ResponseMinutesSamples.Count == 0 ? null : ResponseMinutesSamples.Average();
-    public double? MinResponseMinutes => ResponseMinutesSamples.Count == 0 ? null : ResponseMinutesSamples.Min();
-    public double? MaxResponseMinutes => ResponseMinutesSamples.Count == 0 ? null : ResponseMinutesSamples.Max();
+    public int ResponseSamplesCount => ResponseByDay.Values.Sum(d => d.Count);
+    public double? AvgResponseMinutes => ResponseByDay.Count == 0 ? null : ResponseByDay.Values.Average(d => d.AvgMinutes);
+    public double? MinResponseMinutes => ResponseByDay.Count == 0 ? null : ResponseByDay.Values.Min(d => d.MinMinutes);
+    public double? MaxResponseMinutes => ResponseByDay.Count == 0 ? null : ResponseByDay.Values.Max(d => d.MaxMinutes);
     public double? SentReceivedRatio => MessagesReceived == 0 ? null : (double)MessagesSent / MessagesReceived;
     public double? ReadRate => MessagesSent == 0 ? null : (double)OutboundRead / MessagesSent;
     public double? FollowUpRate => SilenceGaps == 0 ? null : (double)SilenceGapsFollowedUp / SilenceGaps;
     public double? AvgSentPerBusinessHour => EffectiveBusinessHours > 0 ? MessagesSent / EffectiveBusinessHours : null;
     public double? AvgReceivedPerBusinessHour => EffectiveBusinessHours > 0 ? MessagesReceived / EffectiveBusinessHours : null;
+
+    // Sem tempo coberto não há uptime a informar — devolve null ("—"), nunca 100%.
+    // Vendedor sem número no ar não tem canal perfeito: não tem canal.
+    public double? UptimePercent => CoveredSeconds <= 0
+        ? null
+        : Math.Clamp((CoveredSeconds - DowntimeSeconds) / CoveredSeconds * 100, 0, 100);
 
     // Venda continua em destaque (compatibilidade do painel); os demais tipos
     // saem de Outcomes.
@@ -76,7 +111,8 @@ public sealed record MetricsResult(
     }
 
     public static MetricsResult Aggregate(IReadOnlyList<MetricsResult> parts) => parts.Count == 0
-        ? new(0, 0, 0, 0, 0, 0, 0, 0, 0, new Dictionary<string, OutcomeTotals>(), 0, 100, 0, null, [], [])
+        ? new(0, 0, 0, 0, 0, 0, 0, 0, 0, new Dictionary<string, OutcomeTotals>(), 0, 0, 0, 0, null, [], [],
+            new Dictionary<DateOnly, ResponseDayStats>())
         : new(
             parts.Sum(p => p.ConversationsStarted),
             parts.Sum(p => p.ConversationsAnswered),
@@ -89,11 +125,29 @@ public sealed record MetricsResult(
             parts.Sum(p => p.SilenceGapsFollowedUp),
             MergeOutcomes(parts.Select(p => p.Outcomes)),
             parts.Sum(p => p.BanCount),
-            parts.Average(p => p.UptimePercent),
+            parts.Sum(p => p.CoveredSeconds),
+            parts.Sum(p => p.DowntimeSeconds),
             parts.Sum(p => p.EffectiveBusinessHours),
             parts.Max(p => p.LastOutboundMessageAt),
             [.. parts.SelectMany(p => p.FirstResponseMinutesSamples)],
-            [.. parts.SelectMany(p => p.ResponseMinutesSamples)]);
+            [.. parts.SelectMany(p => p.ResponseMinutesSamples)],
+            MergeResponseDays(parts.Select(p => p.ResponseByDay)));
+
+    // Combina POR DIA: dois números do mesmo vendedor no mesmo dia viram um dia só,
+    // senão o dia entraria duas vezes na média das médias.
+    public static Dictionary<DateOnly, ResponseDayStats> MergeResponseDays(
+        IEnumerable<IReadOnlyDictionary<DateOnly, ResponseDayStats>> parts)
+    {
+        var merged = new Dictionary<DateOnly, ResponseDayStats>();
+
+        foreach (var part in parts)
+        {
+            foreach (var (day, stats) in part)
+                merged[day] = merged.TryGetValue(day, out var current) ? current.Plus(stats) : stats;
+        }
+
+        return merged;
+    }
 
     public static Dictionary<string, OutcomeTotals> MergeOutcomes(IEnumerable<IReadOnlyDictionary<string, OutcomeTotals>> parts)
     {
@@ -111,12 +165,16 @@ public sealed record MetricsResult(
 
 public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOptions options)
 {
+    // `coveredSeconds` é o denominador do uptime: quanto tempo da janela este canal
+    // realmente respondia por este vendedor (o número pode ter nascido no meio do
+    // período, ou ter sido de outra pessoa). Nulo = a janela inteira.
     public MetricsResult Compute(
         DateTime fromUtc,
         DateTime toUtc,
         IReadOnlyList<ConversationData> conversations,
         IReadOnlyList<DowntimeInterval> downtimes,
-        int banCount)
+        int banCount,
+        double? coveredSeconds = null)
     {
         var merged = MergeAndClip(downtimes, fromUtc, toUtc);
         var answerWindow = TimeSpan.FromHours(options.AnswerWindowBusinessHours);
@@ -128,6 +186,7 @@ public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOpt
         DateTime? lastOutbound = null;
         var firstResponseSamples = new List<double>();
         var responseSamples = new List<double>();
+        var responseByDay = new Dictionary<DateOnly, ResponseDayStats>();
         var outcomes = new Dictionary<string, OutcomeTotals>(StringComparer.Ordinal);
 
         foreach (var conversation in conversations)
@@ -146,28 +205,51 @@ public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOpt
                     seenOutbound = ordered[i].Timestamp;
             }
 
+            // Espera de resposta: cada mensagem do vendedor fecha a espera aberta
+            // pela PRIMEIRA mensagem do cliente ainda não respondida — é desde ela
+            // que o cliente está esperando, não desde a última que ele mandou.
+            // Mensagem seguinte do vendedor não tem espera para fechar, e só volta
+            // a contar depois que o cliente escrever de novo; disparo (conversa
+            // aberta pelo vendedor) também não fecha nada, porque não há ninguém
+            // esperando. O ponteiro atravessa mensagens fora da janela: quem manda
+            // a amostra para o relatório é o dia da RESPOSTA, não o da pergunta.
+            DateTime? waitingSince = null;
+
             for (var i = 0; i < ordered.Count; i++)
             {
                 var message = ordered[i];
-                if (!InRange(message.Timestamp, fromUtc, toUtc))
-                    continue;
+                var inRange = InRange(message.Timestamp, fromUtc, toUtc);
 
                 if (message.IsInbound)
                 {
-                    received++;
-                    // Espera do cliente: qualquer mensagem dele que teve resposta,
-                    // inclusive quando a resposta cai depois do fim do período.
-                    if (nextOutbound[i] is { } reply)
-                        responseSamples.Add(calendar.BusinessTimeBetween(message.Timestamp, reply, merged).TotalMinutes);
+                    if (inRange)
+                        received++;
+
+                    waitingSince ??= message.Timestamp;
+                    continue;
                 }
-                else
+
+                if (inRange)
                 {
                     sent++;
                     if (message.ReadAt is not null)
                         outboundRead++;
                     if (lastOutbound is null || message.Timestamp > lastOutbound)
                         lastOutbound = message.Timestamp;
+
+                    if (waitingSince is { } since)
+                    {
+                        var minutes = calendar.BusinessTimeBetween(since, message.Timestamp, merged).TotalMinutes;
+                        var day = calendar.LocalDayOf(message.Timestamp);
+
+                        responseSamples.Add(minutes);
+                        responseByDay[day] = responseByDay.TryGetValue(day, out var stats)
+                            ? stats.Plus(ResponseDayStats.Of(minutes))
+                            : ResponseDayStats.Of(minutes);
+                    }
                 }
+
+                waitingSince = null;
             }
 
             if (conversation.StartedByContact && InRange(conversation.StartedAt, fromUtc, toUtc))
@@ -226,27 +308,24 @@ public sealed class MetricsCalculator(BusinessHoursCalendar calendar, MetricsOpt
         return new MetricsResult(
             started, answered, outboundStarted, outboundEngaged, sent, received, outboundRead,
             withGap, followedUp, outcomes, banCount,
-            ComputeUptimePercent(fromUtc, toUtc, merged),
+            coveredSeconds ?? Math.Max(0, (toUtc - fromUtc).TotalSeconds),
+            DowntimeSecondsOf(merged),
             calendar.BusinessTimeBetween(fromUtc, toUtc, merged).TotalHours,
             lastOutbound,
-            firstResponseSamples, responseSamples);
+            firstResponseSamples, responseSamples, responseByDay);
     }
 
     private static bool InRange(DateTime value, DateTime fromUtc, DateTime toUtc) =>
         value >= fromUtc && value < toUtc;
 
-    private static double ComputeUptimePercent(DateTime fromUtc, DateTime toUtc, IReadOnlyList<DowntimeInterval> merged)
+    // Os intervalos já chegam recortados na janela e sem sobreposição.
+    private static double DowntimeSecondsOf(IReadOnlyList<DowntimeInterval> merged)
     {
-        var period = toUtc - fromUtc;
-        if (period <= TimeSpan.Zero)
-            return 100;
-
-        var downtime = TimeSpan.Zero;
+        var total = TimeSpan.Zero;
         foreach (var interval in merged)
-            downtime += interval.End - interval.Start;
+            total += interval.End - interval.Start;
 
-        var uptime = (period - downtime).TotalSeconds / period.TotalSeconds * 100;
-        return Math.Clamp(uptime, 0, 100);
+        return total.TotalSeconds;
     }
 
     private static List<DowntimeInterval> MergeAndClip(IReadOnlyList<DowntimeInterval> downtimes, DateTime fromUtc, DateTime toUtc)
