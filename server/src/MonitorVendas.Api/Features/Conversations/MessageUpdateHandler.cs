@@ -47,8 +47,15 @@ public sealed class MessageUpdateHandler(IDirtyDayTracker dirtyDays) : IWebhookE
 
         var message = await db.Set<Message>()
             .FirstOrDefaultAsync(m => m.WhatsappNumberId == numberId && m.WaMessageId == waMessageId, ct);
+
+        // Mensagem do aquecimento: não existe em `messages` (o filtro da
+        // ingestão a mantém fora das métricas), mas o ack dela importa — é dele
+        // que sai a taxa de entrega do pool, que alimenta o kill switch.
         if (message is null)
+        {
+            await ApplyWarmupAckAsync(waMessageId, status, receivedAt, db, ct);
             return;
+        }
 
         switch (status.ToUpperInvariant())
         {
@@ -60,6 +67,26 @@ public sealed class MessageUpdateHandler(IDirtyDayTracker dirtyDays) : IWebhookE
                 message.ReadAt ??= receivedAt;
                 // A taxa de leitura é atribuída ao dia da MENSAGEM, não do ack.
                 await dirtyDays.MarkAsync(db, numberId, message.Timestamp, ct);
+                break;
+        }
+    }
+
+    private static async Task ApplyWarmupAckAsync(
+        string waMessageId, string status, DateTime receivedAt, AppDbContext db, CancellationToken ct)
+    {
+        var turn = await db.Set<Warmup.WarmupTurn>()
+            .FirstOrDefaultAsync(t => t.WaMessageId == waMessageId, ct);
+        if (turn is null)
+            return;
+
+        switch (status.ToUpperInvariant())
+        {
+            case "DELIVERY_ACK":
+                turn.DeliveredAt ??= receivedAt;
+                break;
+            case "READ":
+                turn.DeliveredAt ??= receivedAt;
+                turn.ReadAt ??= receivedAt;
                 break;
         }
     }

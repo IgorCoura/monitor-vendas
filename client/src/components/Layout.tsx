@@ -1,15 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import clsx from 'clsx'
 import { BottomNav } from './mobile/BottomNav'
-
-const links = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/registry', label: 'Cadastros' },
-  { to: '/contacts', label: 'Contatos' },
-  { to: '/ai', label: 'Análises IA' },
-  { to: '/labels', label: 'Etiquetas' },
-  { to: '/holidays', label: 'Feriados' },
-]
+import { navRoutes } from './navigation'
 
 export function Layout() {
   return (
@@ -21,8 +13,10 @@ export function Layout() {
         <h1 className="mb-8 px-2 text-lg font-bold text-primary">
           Monitor de Vendas
         </h1>
+        {/* No desktop cabem todas: esconder rota atrás de menu aqui seria
+            esconder sem motivo. O "⋯" existe só no celular. */}
         <nav className="flex flex-col gap-1">
-          {links.map((link) => (
+          {navRoutes.map((link) => (
             <NavLink
               key={link.to}
               to={link.to}

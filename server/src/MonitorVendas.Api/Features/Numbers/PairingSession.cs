@@ -68,4 +68,11 @@ public class PairingSession
     // instância são descartados. Confirmada, a reconciliação varre desde aqui e
     // traz de volta o que foi descartado.
     public DateTime QuarantineFrom { get; set; }
+
+    // Proxy escolhido quando a sessão começou. Fica aqui porque a instância pode
+    // ser RECRIADA no meio (pedido de código de pareamento) e precisa nascer no
+    // mesmo proxy — e porque a atribuição definitiva só existe quando a sessão
+    // completa e o número passa a existir. Como só há um pareamento por vez em
+    // todo o sistema, não há corrida possível na escolha.
+    public Guid? ProxyId { get; set; }
 }

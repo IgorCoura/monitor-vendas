@@ -52,6 +52,39 @@ export const healthSignalLabel: Record<string, string> = {
   ban: 'Bans no período',
 }
 
+// Tela de proxies — cada métrica exibida leva o "?" com um destes textos.
+export const proxyHelp = {
+  ativos:
+    'Proxies contratados que estão saudáveis e recebendo números novos. Pausados, suspeitos, vencidos e revogados não entram.',
+  atribuidos: 'Números que hoje saem por um proxy dedicado em vez do IP do servidor.',
+  semProxy:
+    'Números que não couberam em nenhum proxy (capacidade esgotada) ou foram criados com o uso de proxies desligado. Contrate mais proxies no portal do fornecedor e clique em "Distribuir números".',
+  ocupacao:
+    'Números neste proxy sobre a capacidade dele. A capacidade vem do limite de dispositivos do plano, de um ajuste manual, ou do padrão configurado — nessa ordem.',
+  vendedores:
+    'Quantos vendedores distintos têm número neste proxy. O algoritmo evita concentrar os números de um mesmo vendedor num proxy só: se o IP queimar, o vendedor não fica inteiro fora do ar.',
+  bans:
+    'Bans (statusReason 403) ocorridos no período enquanto o número estava neste proxy. O vínculo é histórico: mover um número depois não muda o ban do mês passado.',
+  numerosBanidos: 'Quantos números distintos foram banidos neste proxy no período.',
+} as const
+
+// Tela de aquecimento. Os textos espelham WarmupPlan e WarmupExecutor no server;
+// mudou a regra lá, atualize aqui.
+export const warmupHelp = {
+  pool: 'Números que participam do aquecimento agora. Entrar é decisão de quem opera: nenhum número entra sozinho.',
+  mensagens: 'Mensagens do aquecimento enviadas hoje, somando todos os números do pool.',
+  conversas: 'Conversas do aquecimento criadas hoje. Cada uma tem de 3 a 7 mensagens, espalhadas ao longo de minutos ou horas.',
+  entrega:
+    'Parte das mensagens do pool que o WhatsApp confirmou ter entregue (só as com mais de 15 minutos). Mensagem que não chega é o primeiro sinal de restrição: abaixo de 60%, com pelo menos 20 mensagens na amostra, o aquecimento para sozinho.',
+  meta:
+    'Quantas mensagens este número deveria ter hoje para parecer ativo, sorteada entre 20 e 40 a cada dia. É PISO, não teto: o aquecimento completa só o que a conversa com aluno de verdade não cobriu.',
+  circulo:
+    'Colegas com quem este número conversa. O círculo próximo fala quase todo dia; os ocasionais, a cada uma ou duas semanas. Ele cresce um colega por semana desde a entrada no pool — quatro amizades no primeiro dia é o que denuncia grafo desenhado.',
+  capado:
+    'A meta foi reduzida pela capacidade do grafo: com poucos colegas, atingir 20–40 mensagens exigiria repetir o mesmo par o dia inteiro. O teto sobe sozinho conforme mais números entram no pool.',
+  real: 'Mensagens que este número enviou hoje para clientes de verdade. Elas abatem a meta do aquecimento.',
+} as const
+
 export const healthHelp =
   'Score de risco de banimento (0–100) dos últimos 7 dias, montado com sinais medidos: ' +
   'taxa de entrega (mensagem enviada que nunca chega é o aviso clássico de restrição), ' +

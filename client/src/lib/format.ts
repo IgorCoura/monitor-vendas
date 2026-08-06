@@ -117,3 +117,10 @@ export function fmtPhone(value: string | null | undefined): string {
 
   return `+55 ${area} ${subscriber.slice(0, cut)}-${subscriber.slice(cut)}`
 }
+
+// Dinheiro sempre por aqui, pela mesma razão do fmtPhone: nenhuma tela inventa a
+// própria máscara.
+export function fmtBrl(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}

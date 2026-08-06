@@ -6,13 +6,20 @@ using MonitorVendas.Api.Integrations.Ai;
 
 namespace MonitorVendas.Api.Features.Ai;
 
+// Quanto cada finalidade gastou na janela. É SÓ VISIBILIDADE: o teto continua
+// único e global, decisão explícita. Sem esta quebra, "o saldo acabou" não diz
+// quem o consumiu, e o aquecimento (que roda sozinho) some atrás da análise
+// (que alguém disparou) — ou o contrário.
+public sealed record AiPurposeSpendDto(string Purpose, decimal Committed);
+
 public sealed record AiBudgetStatus(
     bool Enabled,
     decimal Limit,
     decimal Committed,
     decimal Available,
     DateTime WindowStart,
-    DateTime WindowEnd);
+    DateTime WindowEnd,
+    IReadOnlyList<AiPurposeSpendDto> ByPurpose);
 
 public sealed record AiReservation(Guid Id, decimal EstimatedBrl);
 
@@ -54,7 +61,22 @@ public sealed class AiBudget(
         var committed = await CommittedAsync(start, ct);
         var limit = options.Value.AmountPerWindow;
 
-        return new AiBudgetStatus(options.Value.Enabled, limit, committed, Math.Max(0m, limit - committed), start, end);
+        return new AiBudgetStatus(
+            options.Value.Enabled, limit, committed, Math.Max(0m, limit - committed), start, end,
+            await ByPurposeAsync(start, ct));
+    }
+
+    private async Task<IReadOnlyList<AiPurposeSpendDto>> ByPurposeAsync(DateTime windowStart, CancellationToken ct)
+    {
+        var rows = await db.Set<AiUsage>().AsNoTracking()
+            .Where(u => u.WindowStart == windowStart && u.Status != AiUsageStatus.Released)
+            .GroupBy(u => u.Purpose)
+            .Select(g => new AiPurposeSpendDto(
+                g.Key,
+                g.Sum(u => u.Status == AiUsageStatus.Settled ? (u.ActualBrl ?? 0m) : u.EstimatedBrl)))
+            .ToListAsync(ct);
+
+        return [.. rows.OrderByDescending(r => r.Committed).ThenBy(r => r.Purpose, StringComparer.Ordinal)];
     }
 
     // Devolve null quando o saldo não cobre a estimativa — quem chama não deve

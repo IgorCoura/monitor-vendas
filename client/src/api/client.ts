@@ -20,10 +20,13 @@ import type {
   QrCodeDto,
   RankingEntryDto,
   ReportExportFilters,
+  AllocationPreviewDto,
+  ProxyOverviewDto,
   ReportMetricOption,
   RiskWarning,
   SellerReportDto,
   SellerResponse,
+  WarmupOverviewDto,
 } from './types'
 
 // Relativo por default: o navegador chama a própria origem e o nginx encaminha
@@ -275,6 +278,41 @@ export const api = {
         },
       ),
     shareStatus: (id: string) => request<ContactShareDto>(`/contacts/share/${id}`),
+  },
+  proxies: {
+    overview: () => request<ProxyOverviewDto>('/proxies'),
+    settings: (enabled: boolean) =>
+      request<{ enabled: boolean }>('/proxies/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    sync: () => request<{ synced: number }>('/proxies/sync', { method: 'POST' }),
+    test: (id: string) => request<{ tested: boolean | null }>(`/proxies/${id}/test`, { method: 'POST' }),
+    pause: (id: string) => request<{ status: string }>(`/proxies/${id}/pause`, { method: 'POST' }),
+    resume: (id: string) => request<{ status: string }>(`/proxies/${id}/resume`, { method: 'POST' }),
+    // Prévia antes de aplicar: cada número conectado que muda de proxy custa um
+    // restart de socket, então o operador vê o plano primeiro.
+    preview: (rebalance: boolean) =>
+      request<AllocationPreviewDto>(`/proxies/allocation/preview?rebalance=${rebalance}`),
+    apply: (rebalance: boolean) =>
+      request<{ moved: number; withoutProxy: number }>(
+        `/proxies/allocation/apply?rebalance=${rebalance}`,
+        { method: 'POST' },
+      ),
+    detach: (numberId: string) => request<void>(`/numbers/${numberId}/proxy`, { method: 'DELETE' }),
+  },
+  warmup: {
+    overview: () => request<WarmupOverviewDto>('/warmup'),
+    settings: (enabled: boolean) =>
+      request<{ enabled: boolean }>('/warmup/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    // Botão de pânico: para tudo agora, sem desligar o interruptor.
+    halt: () => request<void>('/warmup/halt', { method: 'POST' }),
+    addPeer: (numberId: string) =>
+      request<void>('/warmup/peers', { method: 'POST', body: JSON.stringify({ numberId }) }),
+    removePeer: (numberId: string) => request<void>(`/warmup/peers/${numberId}`, { method: 'DELETE' }),
   },
   holidays: {
     list: () => request<HolidayResponse[]>('/holidays'),

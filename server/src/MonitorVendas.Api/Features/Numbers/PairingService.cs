@@ -17,10 +17,39 @@ public sealed record PairingResult(PairingSession? Session, string? Error, bool 
 public sealed class PairingService(
     AppDbContext db,
     EvolutionApiClient evolution,
+    Proxies.ProxyResolver proxies,
     IOptions<WebhookOptions> webhookOptions,
     IOptions<PairingOptions> options,
     ILogger<PairingService> logger)
 {
+    // Cria a instância no proxy escolhido para a sessão e, se a Evolution
+    // recusar essas credenciais, recria SEM proxy. Pareamento é uma pessoa
+    // parada na frente do celular: falhar por causa de um IP ruim trocaria um
+    // problema silencioso por um barulhento e pior. O proxy fica marcado como
+    // falho e a tela mostra o número como "sem proxy".
+    private async Task<EvolutionApiClient.QrCode?> CreateWithProxyAsync(
+        PairingSession session, string instanceName, string? phone, CancellationToken ct)
+    {
+        var credentials = session.ProxyId is { } proxyId
+            ? await proxies.CredentialsForAsync(proxyId, ct)
+            : null;
+
+        if (credentials is null)
+            return await evolution.CreateInstanceAsync(instanceName, phone, proxy: null, ct);
+
+        try
+        {
+            return await evolution.CreateInstanceAsync(instanceName, phone, credentials, ct);
+        }
+        catch (InvalidProxyException ex)
+        {
+            logger.LogWarning(ex, "Proxy recusado pela Evolution no pareamento: a sessão segue sem proxy.");
+            await proxies.MarkFailedAsync(session.ProxyId!.Value, ex.Message, ct);
+            session.ProxyId = null;
+            return await evolution.CreateInstanceAsync(instanceName, phone, proxy: null, ct);
+        }
+    }
+
     public async Task<PairingResult> StartAsync(Guid sellerId, CancellationToken ct)
     {
         var seller = await db.Set<Seller>().AsNoTracking().FirstOrDefaultAsync(s => s.Id == sellerId, ct);
@@ -43,6 +72,10 @@ public sealed class PairingService(
             CreatedAt = now,
             QuarantineFrom = now,
             ExpiresAt = now.AddSeconds(Math.Max(5, options.Value.ExpirationSeconds)),
+            // Escolhido agora, com o vendedor já conhecido: é o que faz o número
+            // NASCER atrás do proxy, antes do primeiro pareamento, em vez de
+            // entrar nele depois com um restart.
+            ProxyId = await proxies.ChooseForNewNumberAsync(sellerId, ct),
         };
 
         db.Add(session);
@@ -61,8 +94,9 @@ public sealed class PairingService(
 
         try
         {
-            await evolution.CreateInstanceAsync(session.InstanceName, phone: null, ct);
+            await CreateWithProxyAsync(session, session.InstanceName, phone: null, ct);
             await evolution.SetWebhookAsync(session.InstanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+            await evolution.SetSettingsAsync(session.InstanceName, ct);
         }
         catch (HttpRequestException)
         {
@@ -196,7 +230,7 @@ public sealed class PairingService(
 
         try
         {
-            var qr = await evolution.CreateInstanceAsync(instanceName, digits, ct);
+            var qr = await CreateWithProxyAsync(session, instanceName, digits, ct);
             if (qr is null || string.IsNullOrWhiteSpace(qr.PairingCode))
             {
                 await evolution.DeleteInstanceAsync(instanceName, ct);
@@ -204,6 +238,7 @@ public sealed class PairingService(
             }
 
             await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+            await evolution.SetSettingsAsync(instanceName, ct);
 
             session.InstanceName = instanceName;
             session.PairingCode = qr.PairingCode;
@@ -278,6 +313,12 @@ public sealed class PairingService(
         session.Error = null;
         session.ExistingNumberId = number.Id;
         session.CompletedAt = DateTime.UtcNow;
+
+        // Só agora o número existe: a escolha feita no início da sessão vira
+        // atribuição. `applied: true` porque a instância JÁ nasceu com o proxy —
+        // não há proxy/set nem restart a fazer.
+        if (session.ProxyId is { } proxyId)
+            await proxies.AssignAsync(number.Id, proxyId, applied: true, ct);
 
         await db.SaveChangesAsync(ct);
 

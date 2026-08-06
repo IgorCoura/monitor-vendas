@@ -8,6 +8,9 @@ using MonitorVendas.Api.Features.Conversations;
 using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Numbers;
 using MonitorVendas.Api.Features.Outcomes;
+using MonitorVendas.Api.Features.Proxies;
+using MonitorVendas.Api.Features.Warmup;
+using MonitorVendas.Api.Integrations.ProxyBr;
 using MonitorVendas.Api.Features.Reconciliation;
 using MonitorVendas.Api.Features.ReportExport;
 using MonitorVendas.Api.Features.Sellers;
@@ -46,6 +49,32 @@ if (builder.Configuration.GetValue("AiJob:Enabled", true))
 builder.Services.AddScoped<ReportExportBuilder>();
 builder.Services.Configure<AntiBanOptions>(builder.Configuration.GetSection(AntiBanOptions.Section));
 builder.Services.AddScoped<MonitorVendas.Api.Features.Numbers.Health.NumberHealthQueries>();
+
+builder.Services.Configure<MonitorVendas.Api.Features.Warmup.WarmupOptions>(
+    builder.Configuration.GetSection(MonitorVendas.Api.Features.Warmup.WarmupOptions.Section));
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupPool, MonitorVendas.Api.Features.Warmup.WarmupPool>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupState, MonitorVendas.Api.Features.Warmup.WarmupState>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Warmup.IWarmupContentGenerator, MonitorVendas.Api.Features.Warmup.WarmupContentGenerator>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.WarmupClock>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Warmup.WarmupQueries>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupScheduler, MonitorVendas.Api.Features.Warmup.WarmupScheduler>();
+builder.Services.AddSingleton<MonitorVendas.Api.Features.Warmup.IWarmupExecutor, MonitorVendas.Api.Features.Warmup.WarmupExecutor>();
+if (builder.Configuration.GetValue("Warmup:Enabled", true))
+    builder.Services.AddHostedService<MonitorVendas.Api.Features.Warmup.WarmupBackgroundService>();
+
+builder.Services.AddProxyBr(builder.Configuration);
+builder.Services.Configure<ProxyOptions>(builder.Configuration.GetSection(ProxyOptions.Section));
+builder.Services.AddSingleton<IProxySwitch, ProxySwitch>();
+builder.Services.AddScoped<ProxyResolver>();
+builder.Services.AddScoped<ProxyQueries>();
+builder.Services.AddSingleton<IProxySyncService, ProxySyncService>();
+builder.Services.AddSingleton<IProxyApplier, ProxyApplierService>();
+if (builder.Configuration.GetValue("Proxy:Enabled", true))
+{
+    builder.Services.AddHostedService<ProxyApplierBackgroundService>();
+    if (builder.Configuration.GetValue("ProxyBr:Enabled", false))
+        builder.Services.AddHostedService<ProxySyncBackgroundService>();
+}
 builder.Services.Configure<PairingOptions>(builder.Configuration.GetSection(PairingOptions.Section));
 builder.Services.AddScoped<PairingService>();
 if (builder.Configuration.GetValue("Pairing:CleanupEnabled", true))
@@ -66,6 +95,7 @@ if (builder.Configuration.GetValue("Webhook:ProcessorEnabled", true))
 
 builder.Services.AddScoped<ReportQueries>();
 builder.Services.AddScoped<ContactQueries>();
+builder.Services.AddScoped<MonitorVendas.Api.Features.Contacts.LidConsolidationService>();
 builder.Services.Configure<ContactShareOptions>(builder.Configuration.GetSection(ContactShareOptions.Section));
 builder.Services.AddSingleton<IContactShareSender, ContactShareSender>();
 if (builder.Configuration.GetValue("ContactShare:Enabled", true))
@@ -110,6 +140,8 @@ v1.MapContactShareEndpoints();
 v1.MapAiBudgetEndpoints();
 v1.MapReportExportEndpoints();
 v1.MapAiAnalysisEndpoints();
+v1.MapProxiesEndpoints();
+v1.MapWarmupEndpoints();
 
 using (var scope = app.Services.CreateScope())
 {

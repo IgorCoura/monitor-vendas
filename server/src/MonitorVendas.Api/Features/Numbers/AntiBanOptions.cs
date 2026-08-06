@@ -13,4 +13,11 @@ public sealed class AntiBanOptions
     // documentada é 24h → 48h → vitalício, dirigida por reconexão insistente
     // durante a punição.
     public int BanCooldownHours { get; set; } = 24;
+
+    // Cotas por número. A Evolution não tem rate limit nem fila embutidos
+    // (issue #2538, fechada como "not planned"), então ou o controle é nosso ou
+    // não existe. Convivem com a curva de aquecimento: vale sempre o MENOR dos
+    // dois tetos.
+    public int MaxMessagesPerHour { get; set; } = 30;
+    public int MaxMessagesPerDay { get; set; } = 300;
 }

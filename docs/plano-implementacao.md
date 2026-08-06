@@ -265,7 +265,10 @@ reiniciada.
 
 # FASE 3 — Aquecimento de número e limites de comportamento
 
-## 3.1 — Aquecimento como teto sobre o tráfego real
+## 3.1 — Aquecimento como teto sobre o tráfego real ❌ REMOVIDO
+
+> Implementado e removido a pedido do usuário em 2026-08-04 — ele esperava um
+> maturador que gerasse conversas. As cotas por número (3.3) ficaram.
 
 **Sem uma única mensagem sintética** — pool de números conversando entre si está
 descartado ([plano-antiban-sugestoes.md §B1.1](./plano-antiban-sugestoes.md)):

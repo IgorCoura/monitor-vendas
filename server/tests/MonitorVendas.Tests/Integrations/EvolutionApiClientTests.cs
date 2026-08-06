@@ -45,16 +45,70 @@ public class EvolutionApiClientTests
     }
 
     // Criar instância envia instanceName, número e integração Baileys no corpo.
+    // Sem proxy, nenhum campo `proxy*` vai junto.
     [Fact]
     public async Task CreateInstanceAsync_PostsInstancePayload()
     {
         var (client, handler) = Build();
 
-        await client.CreateInstanceAsync("mv-5511999999999", "5511999999999");
+        await client.CreateInstanceAsync("mv-5511999999999", "5511999999999", proxy: null);
 
         Assert.Equal("/instance/create", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Contains("mv-5511999999999", handler.LastBody);
         Assert.Contains("WHATSAPP-BAILEYS", handler.LastBody);
+        Assert.DoesNotContain("proxyHost", handler.LastBody);
+    }
+
+    // Com proxy, os campos vão PLANOS (não aninhados) e a porta como STRING —
+    // é o contrato real da v2.3.7, e é o que faz o número nascer atrás do IP.
+    [Fact]
+    public async Task CreateInstanceAsync_WithProxy_SendsFlatFieldsAndStringPort()
+    {
+        var (client, handler) = Build();
+
+        await client.CreateInstanceAsync("mv-1", phone: null,
+            new ProxyCredentials("191.0.0.1", 8080, "socks5", "u", "p"));
+
+        Assert.Contains("\"proxyHost\":\"191.0.0.1\"", handler.LastBody);
+        Assert.Contains("\"proxyPort\":\"8080\"", handler.LastBody);
+        Assert.Contains("\"proxyProtocol\":\"socks5\"", handler.LastBody);
+    }
+
+    // A Evolution testa o proxy antes de criar e aborta a instância inteira com
+    // 400. Isso precisa chegar como InvalidProxyException, não como falha de
+    // comunicação: é o que permite recriar sem proxy em vez de travar o operador.
+    [Fact]
+    public async Task CreateInstanceAsync_WhenProxyIsRejected_ThrowsInvalidProxy()
+    {
+        var (client, _) = Build(HttpStatusCode.BadRequest, """{"message":"Invalid proxy"}""");
+
+        await Assert.ThrowsAsync<InvalidProxyException>(() =>
+            client.CreateInstanceAsync("mv-1", null, new ProxyCredentials("1.1.1.1", 80, "http", null, null)));
+    }
+
+    // Trocar o proxy de uma instância existente é POST em proxy/set/{instance}.
+    [Fact]
+    public async Task SetProxyAsync_PostsToProxySetRoute()
+    {
+        var (client, handler) = Build();
+
+        Assert.True(await client.SetProxyAsync("mv-1", new ProxyCredentials("191.0.0.1", 8080, "socks5", "u", "p")));
+
+        Assert.Equal("/proxy/set/mv-1", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Contains("\"enabled\":true", handler.LastBody);
+        Assert.Contains("\"port\":\"8080\"", handler.LastBody);
+    }
+
+    // Remover o proxy é `enabled: false` — o schema da Evolution ainda exige
+    // host/port/protocol não vazios, então vão valores de descarte.
+    [Fact]
+    public async Task SetProxyAsync_WithoutCredentials_DisablesTheProxy()
+    {
+        var (client, handler) = Build();
+
+        Assert.True(await client.SetProxyAsync("mv-1", proxy: null));
+
+        Assert.Contains("\"enabled\":false", handler.LastBody);
     }
 
     // Configurar webhook envia url e lista de eventos aninhados no objeto webhook (formato v2).

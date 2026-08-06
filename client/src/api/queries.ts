@@ -70,6 +70,77 @@ export function useNumbersHealth() {
   return useQuery({ queryKey: ['numbers', 'health'], queryFn: api.numbers.health })
 }
 
+export function useProxies() {
+  return useQuery({ queryKey: ['proxies'], queryFn: api.proxies.overview })
+}
+
+// Toda ação de proxy mexe na lista e pode mexer nos números: as duas são
+// invalidadas juntas.
+function useProxyMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['proxies'] })
+      client.invalidateQueries({ queryKey: ['numbers'] })
+    },
+  })
+}
+
+export function useToggleProxies() {
+  return useProxyMutation((enabled: boolean) => api.proxies.settings(enabled))
+}
+
+export function useSyncProxies() {
+  return useProxyMutation<void>(() => api.proxies.sync())
+}
+
+export function useTestProxy() {
+  return useProxyMutation((id: string) => api.proxies.test(id))
+}
+
+export function usePauseProxy() {
+  return useProxyMutation(({ id, paused }: { id: string; paused: boolean }) =>
+    paused ? api.proxies.pause(id) : api.proxies.resume(id),
+  )
+}
+
+export function useApplyAllocation() {
+  return useProxyMutation((rebalance: boolean) => api.proxies.apply(rebalance))
+}
+
+export function useDetachProxy() {
+  return useProxyMutation((numberId: string) => api.proxies.detach(numberId))
+}
+
+// Estado do aquecimento. Busca em segundo plano a cada meio minuto: a conversa
+// anda sozinha, e sem isso a tela envelheceria enquanto o operador a olha.
+export function useWarmup() {
+  return useQuery({ queryKey: ['warmup'], queryFn: api.warmup.overview, refetchInterval: 30_000 })
+}
+
+function useWarmupMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['warmup'] }),
+  })
+}
+
+export function useToggleWarmup() {
+  return useWarmupMutation((enabled: boolean) => api.warmup.settings(enabled))
+}
+
+export function useHaltWarmup() {
+  return useWarmupMutation<void>(() => api.warmup.halt())
+}
+
+export function useWarmupPeer() {
+  return useWarmupMutation(({ numberId, inPool }: { numberId: string; inPool: boolean }) =>
+    inPool ? api.warmup.addPeer(numberId) : api.warmup.removePeer(numberId),
+  )
+}
+
 export function useCreateContactShare() {
   return useMutation({
     mutationFn: ({ filters, senderNumberId, destination, confirmRisk }: {

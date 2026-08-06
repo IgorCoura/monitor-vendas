@@ -27,6 +27,17 @@ public sealed class FakeEvolutionHandler : HttpMessageHandler
                 _ => (status, jsonResponse)));
     }
 
+    // Resposta que MUDA a cada chamada: é o que permite testar "falhou uma vez,
+    // funcionou na seguinte" — o caso de recriar a instância sem proxy depois de
+    // a Evolution recusar as credenciais.
+    public void WhenSequence(HttpMethod method, string pathStartsWith, Func<(HttpStatusCode, string)> next)
+    {
+        lock (_routes)
+            _routes.Add((
+                req => req.Method == method && req.RequestUri!.AbsolutePath.StartsWith(pathStartsWith, StringComparison.OrdinalIgnoreCase),
+                _ => next()));
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);

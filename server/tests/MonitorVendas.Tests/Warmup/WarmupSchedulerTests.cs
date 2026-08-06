@@ -1,0 +1,779 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Ai;
+using MonitorVendas.Api.Features.Conversations;
+using MonitorVendas.Api.Features.Numbers;
+using MonitorVendas.Api.Features.Warmup;
+using MonitorVendas.Tests.Infrastructure;
+
+namespace MonitorVendas.Tests.Warmup;
+
+// Agendador e executor do aquecimento: quem fala com quem, quando sai, e o que
+// faz o pool inteiro parar.
+public class WarmupSchedulerTests(IntegrationTestWebAppFactory factory) : BaseIntegrationTest(factory)
+{
+    private const string InstanceA = "mv-5511900001111";
+    private const string PhoneA = "5511900001111";
+    private const string PhoneB = "5511900002222";
+
+    private Guid _numberA;
+    private Guid _numberB;
+    private Guid _peerA;
+    private Guid _peerB;
+
+    // Diálogo válido: mensagens curtas, os dois lados falam, sem link, telefone
+    // nem cara de anúncio — passa pelo WarmupContentValidator.
+    private const string Dialogue = """
+        {"turnos":[
+          {"de":"A","texto":"bom dia, tudo certo por ai?"},
+          {"de":"B","texto":"tudo, e vc?"},
+          {"de":"A","texto":"o aluno mandou o tcc ontem"},
+          {"de":"B","texto":"ja viu se ta completo?"},
+          {"de":"A","texto":"ainda nao, vou olhar agora"},
+          {"de":"B","texto":"beleza, me avisa"},
+          {"de":"A","texto":"fechou"}
+        ]}
+        """;
+
+    private IWarmupScheduler Scheduler => Factory.Services.GetRequiredService<IWarmupScheduler>();
+
+    private IWarmupExecutor Executor => Factory.Services.GetRequiredService<IWarmupExecutor>();
+
+    private async Task<Guid> AddNumberAsync(Guid sellerId, string phone)
+    {
+        var number = await (await Client.PostAsJsonAsync(
+                $"/api/v1/sellers/{sellerId}/numbers", new { phone }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        return number.GetProperty("number").GetProperty("id").GetGuid();
+    }
+
+    private async Task SeedPoolAsync(bool enabled = true, bool withLink = true, int joinedDaysAgo = 60)
+    {
+        FakeEvolution.When(HttpMethod.Post, "/instance/create", "{}");
+        FakeEvolution.When(HttpMethod.Post, "/webhook/set/", "{}");
+        FakeEvolution.When(HttpMethod.Post, "/settings/set/", "{}");
+        FakeEvolution.When(HttpMethod.Get, "/instance/connect/", """{"code":"QR"}""");
+        FakeAi.Always(Dialogue);
+
+        var seller = await (await Client.PostAsJsonAsync("/api/v1/sellers", new { name = "Ana" }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var sellerId = seller.GetProperty("id").GetGuid();
+
+        _numberA = await AddNumberAsync(sellerId, PhoneA);
+        _numberB = await AddNumberAsync(sellerId, PhoneB);
+
+        foreach (var instance in new[] { InstanceA, "mv-5511900002222" })
+            await PostWebhookAsync($$"""
+                { "event": "connection.update", "instance": "{{instance}}",
+                  "data": { "state": "open", "statusReason": 200 }, "date_time": "2026-06-30T12:00:00Z" }
+                """);
+
+        await Factory.Services.GetRequiredService<MonitorVendas.Api.Features.Webhooks.IWebhookProcessor>()
+            .ProcessPendingAsync();
+
+        _peerA = Guid.NewGuid();
+        _peerB = Guid.NewGuid();
+        // PeerAId é sempre o menor Guid — a mesma normalização do WarmupGraph.
+        var (first, second) = _peerA.CompareTo(_peerB) < 0 ? (_peerA, _peerB) : (_peerB, _peerA);
+
+        await SeedAsync(db =>
+        {
+            db.Add(new WarmupPeer
+            {
+                Id = _peerA, WhatsappNumberId = _numberA,
+                Persona = WarmupPersona.Seco, JoinedAt = DateTime.UtcNow.AddDays(-joinedDaysAgo),
+            });
+            db.Add(new WarmupPeer
+            {
+                Id = _peerB, WhatsappNumberId = _numberB,
+                Persona = WarmupPersona.Falante, JoinedAt = DateTime.UtcNow.AddDays(-joinedDaysAgo),
+            });
+
+            if (withLink)
+            {
+                db.Add(new WarmupLink
+                {
+                    Id = Guid.NewGuid(), PeerAId = first, PeerBId = second,
+                    Kind = WarmupLinkKind.Core, ConversationsPerWeek = 5,
+                    CreatedAt = DateTime.UtcNow.AddDays(-60),
+                });
+            }
+
+            db.Add(new WarmupSettings
+            {
+                Id = WarmupSettings.SingletonId, Enabled = enabled, UpdatedAt = DateTime.UtcNow,
+            });
+
+            return Task.CompletedTask;
+        });
+    }
+
+    private async Task PostWebhookAsync(string body)
+    {
+        var response = await Client.PostAsync(
+            $"/api/v1/webhooks/evolution/{IntegrationTestWebAppFactory.WebhookSecret}",
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        response.EnsureSuccessStatusCode();
+    }
+
+    // Cria uma conversa já vencida, pronta para o executor pegar.
+    private async Task<Guid> SeedDueConversationAsync(int turns = 2)
+    {
+        var conversationId = Guid.NewGuid();
+
+        await SeedAsync(db =>
+        {
+            db.Add(new WarmupConversation
+            {
+                Id = conversationId, PeerAId = _peerA, PeerBId = _peerB,
+                Theme = "combinar o almoço", Status = WarmupConversationStatus.Scheduled,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            });
+
+            for (var i = 0; i < turns; i++)
+            {
+                db.Add(new WarmupTurn
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = i + 1,
+                    FromPeerId = i % 2 == 0 ? _peerA : _peerB,
+                    Text = i % 2 == 0 ? "bora almoçar?" : "bora, meio dia",
+                    ScheduledAt = DateTime.UtcNow.AddMinutes(-5),
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
+        return conversationId;
+    }
+
+    // Mensagens de verdade para cliente, saídas hoje: é o que abate a meta.
+    private Task SeedRealOutboundAsync(Guid numberId, int count) =>
+        SeedAsync(db =>
+        {
+            var number = db.Set<WhatsappNumber>().AsNoTracking().Single(n => n.Id == numberId);
+            var contactId = Guid.NewGuid();
+            var conversationId = Guid.NewGuid();
+
+            db.Add(new Contact
+            {
+                // O contato é global e o JID é único: cada número precisa do seu.
+                Id = contactId, RemoteJid = $"{contactId:N}@s.whatsapp.net",
+                PushName = "Aluno", CreatedAt = DateTime.UtcNow,
+            });
+            db.Add(new Conversation
+            {
+                Id = conversationId, WhatsappNumberId = numberId, ContactId = contactId,
+                SellerId = number.SellerId, StartedAt = DateTime.UtcNow, LastMessageAt = DateTime.UtcNow,
+            });
+
+            for (var i = 0; i < count; i++)
+            {
+                db.Add(new Message
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, WhatsappNumberId = numberId,
+                    SellerId = number.SellerId, WaMessageId = $"REAL-{numberId}-{i}",
+                    Direction = MessageDirection.Outbound, Timestamp = DateTime.UtcNow,
+                    Text = "oi", Type = "conversation",
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
+    // Mensagens enviadas há uma hora e nunca entregues: a amostra que o kill
+    // switch olha.
+    private Task SeedUndeliveredAsync(Guid conversationId, int count) =>
+        SeedAsync(db =>
+        {
+            for (var i = 0; i < count; i++)
+            {
+                db.Add(new WarmupTurn
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = 100 + i,
+                    FromPeerId = _peerA, Text = "oi",
+                    ScheduledAt = DateTime.UtcNow.AddHours(-1),
+                    SentAt = DateTime.UtcNow.AddHours(-1),
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
+    private Task<WarmupSettings> SettingsAsync() =>
+        InDbAsync(db => db.Set<WarmupSettings>().AsNoTracking().SingleAsync());
+
+    // Pool ligado, dois números com aresta: o agendador cria uma conversa com os
+    // turnos já com hora marcada.
+    [Fact]
+    public async Task Scheduler_CreatesAConversationWithScheduledTurns()
+    {
+        await SeedPoolAsync();
+
+        await Scheduler.RunOnceAsync();
+
+        var conversation = await InDbAsync(db => db.Set<WarmupConversation>().AsNoTracking().SingleOrDefaultAsync());
+        Assert.NotNull(conversation);
+        Assert.Equal(WarmupConversationStatus.Scheduled, conversation.Status);
+
+        var turns = await InDbAsync(db => db.Set<WarmupTurn>().AsNoTracking()
+            .Where(t => t.ConversationId == conversation.Id).OrderBy(t => t.Sequence).ToListAsync());
+
+        Assert.True(turns.Count >= 2);
+        Assert.All(turns, t => Assert.Null(t.SentAt));
+        // Os turnos são escalonados: sair tudo no mesmo instante é rajada.
+        Assert.True(turns[1].ScheduledAt > turns[0].ScheduledAt);
+        // E os dois lados falam.
+        Assert.Equal(2, turns.Select(t => t.FromPeerId).Distinct().Count());
+    }
+
+    // O CENÁRIO REAL de quem liga a feature pela primeira vez: dois números
+    // entram hoje, sem aresta nenhuma no banco. O agendador precisa fazer o
+    // grafo nascer e já agendar — se este teste falhar, ligar o aquecimento não
+    // produz mensagem nenhuma e ninguém descobre por quê.
+    [Fact]
+    public async Task BrandNewPool_GrowsTheGraphAndSchedulesOnTheFirstDay()
+    {
+        await SeedPoolAsync(withLink: false, joinedDaysAgo: 0);
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupLink>().CountAsync()));
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Número que já conversou bastante com aluno de verdade hoje NÃO recebe
+    // aquecimento: a meta é piso, e com dois números o piso é a capacidade do
+    // grafo (1 colega × 6 = 6 mensagens/dia).
+    [Fact]
+    public async Task WhenRealTrafficAlreadyCoversTheFloor_NothingIsScheduled()
+    {
+        await SeedPoolAsync();
+        await SeedRealOutboundAsync(_numberA, 6);
+        await SeedRealOutboundAsync(_numberB, 6);
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // REGRESSÃO: conversa cujos turnos esgotaram as tentativas nunca mais era
+    // selecionada pelo executor (o `due` filtra por Attempts), então nunca
+    // chegava a Completed — e o agendador pula quem tem conversa Scheduled ou
+    // Running. O par ficava preso em "ocupado" PARA SEMPRE: bastavam três falhas
+    // de envio para o pool inteiro emudecer sem nenhum aviso.
+    [Fact]
+    public async Task AfterTheTurnsExhaustTheirAttempts_ThePairIsNotStuckForever()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(
+            HttpMethod.Post, "/message/sendText/", """{"message":"boom"}""", HttpStatusCode.InternalServerError);
+        await SeedDueConversationAsync(turns: 1);
+
+        // Três passadas queimam as três tentativas do turno.
+        for (var i = 0; i < 3; i++)
+            await Executor.ProcessPendingAsync();
+
+        // A quarta não tem o que enviar e precisa fechar a conversa.
+        await Executor.ProcessPendingAsync();
+
+        var conversation = await InDbAsync(db => db.Set<WarmupConversation>().AsNoTracking().SingleAsync());
+        Assert.Equal(WarmupConversationStatus.Failed, conversation.Status);
+
+        // E o par volta a poder conversar.
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-9"}}""");
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(2, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // REGRESSÃO (achada rodando o sistema de verdade): a IA devolveu 429 de
+    // quota e o agendador pedia uma conversa nova a CADA passada — 720 chamadas
+    // por dia contra um free tier de 20. O aquecimento comia sozinho a cota da
+    // análise de conversas e enchia o log, sem nada aparecer na tela.
+    [Fact]
+    public async Task WhenTheAiFails_ItBacksOffInsteadOfHammeringTheQuota()
+    {
+        await SeedPoolAsync();
+        FakeAi.Reset();
+        FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests);
+        FakeAi.EnqueueStatus(HttpStatusCode.TooManyRequests);
+
+        await Scheduler.RunOnceAsync();
+
+        var callsAfterFirstPass = FakeAi.CallCount;
+        Assert.True(callsAfterFirstPass >= 1);
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.GenerationPausedUntil);
+        Assert.True(settings.GenerationPausedUntil > DateTime.UtcNow);
+        Assert.Equal(1, settings.GenerationFailures);
+        Assert.NotNull(settings.LastGenerationError);
+
+        // A passada seguinte não gasta NENHUMA chamada nova.
+        await Scheduler.RunOnceAsync();
+        Assert.Equal(callsAfterFirstPass, FakeAi.CallCount);
+    }
+
+    // O recuo dobra a cada falha seguida: quota diária não se recupera em
+    // quinze minutos.
+    [Fact]
+    public async Task EachConsecutiveFailure_DoublesTheBackoff()
+    {
+        await SeedPoolAsync();
+        var state = Factory.Services.GetRequiredService<IWarmupState>();
+
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        await state.PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
+        var first = (await SettingsAsync()).GenerationPausedUntil!.Value;
+
+        await state.PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
+        var second = (await SettingsAsync()).GenerationPausedUntil!.Value;
+
+        Assert.True(second - DateTime.UtcNow > (first - DateTime.UtcNow) * 1.8);
+    }
+
+    // Geração que volta a funcionar limpa o recuo na hora.
+    [Fact]
+    public async Task AfterASuccess_TheBackoffIsCleared()
+    {
+        await SeedPoolAsync();
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IWarmupState>()
+            .PauseGenerationAsync(db, WarmupGenerationError.Quota, "quota do Gemini", default);
+
+        // Passado o recuo, a próxima passada gera normalmente.
+        await SeedAsync(async d => await d.Set<WarmupSettings>()
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.GenerationPausedUntil, DateTime.UtcNow.AddMinutes(-1))));
+
+        await Scheduler.RunOnceAsync();
+
+        var settings = await SettingsAsync();
+        Assert.Null(settings.GenerationPausedUntil);
+        Assert.Equal(0, settings.GenerationFailures);
+        Assert.Null(settings.LastGenerationError);
+    }
+
+    // O motivo da falha da IA aparece na tela: era exatamente esse silêncio que
+    // fazia o aquecimento parecer quebrado.
+    [Fact]
+    public async Task Overview_ShowsWhyTheAiCouldNotGenerate()
+    {
+        await SeedPoolAsync();
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IWarmupState>()
+            .PauseGenerationAsync(db, WarmupGenerationError.Quota, "Gemini respondeu 429: cota diária esgotada.", default);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        Assert.Contains("429", overview.GetProperty("idleReason").GetString());
+
+        // E vem classificado: "acabou a cota do Google" e "acabou o saldo em
+        // reais" pedem ações opostas de quem opera.
+        var alert = overview.GetProperty("aiAlert");
+        Assert.Equal("quota", alert.GetProperty("kind").GetString());
+        Assert.Contains("Gemini", alert.GetProperty("message").GetString());
+    }
+
+    // Saldo em reais zerado é o outro caso, e a tela avisa ANTES de a primeira
+    // conversa falhar — sem depender de já ter havido uma falha.
+    [Fact]
+    public async Task Overview_WarnsWhenTheAiBudgetIsGone()
+    {
+        await SeedPoolAsync();
+
+        // Consome a janela inteira com um gasto liquidado.
+        using var scope = Factory.Services.CreateScope();
+        var budget = scope.ServiceProvider.GetRequiredService<AiBudget>();
+        var reservation = await budget.TryReserveAsync("teste", "fake-model", 1.00m);
+        Assert.NotNull(reservation);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        var alert = overview.GetProperty("aiAlert");
+        Assert.Equal("budget", alert.GetProperty("kind").GetString());
+        Assert.Equal(0, overview.GetProperty("aiBudget").GetProperty("available").GetDecimal());
+    }
+
+    // Tudo certo com a IA: nenhum alerta, e o saldo vem para a tela mostrar.
+    [Fact]
+    public async Task Overview_HasNoAiAlertWhenEverythingIsFine()
+    {
+        await SeedPoolAsync();
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        Assert.Equal(JsonValueKind.Null, overview.GetProperty("aiAlert").ValueKind);
+        Assert.Equal(1.00m, overview.GetProperty("aiBudget").GetProperty("limit").GetDecimal());
+    }
+
+    // Interruptor desligado: nada é agendado, nem uma chamada de IA é gasta.
+    [Fact]
+    public async Task Scheduler_DoesNothingWhileTheSwitchIsOff()
+    {
+        await SeedPoolAsync(enabled: false);
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+        Assert.Equal(0, FakeAi.CallCount);
+    }
+
+    // Kill switch armado: mesmo com o interruptor ligado, nada sai até alguém
+    // religar à mão.
+    [Fact]
+    public async Task Scheduler_DoesNothingWhileHalted()
+    {
+        await SeedPoolAsync();
+        await SeedAsync(async db =>
+        {
+            await db.Set<WarmupSettings>().ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.HaltedAt, DateTime.UtcNow)
+                .SetProperty(x => x.HaltReason, "teste"));
+        });
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Número desconectado sai do pool sozinho: sem os dois lados elegíveis não há
+    // conversa a agendar.
+    [Fact]
+    public async Task Scheduler_SkipsNumbersThatAreNotActive()
+    {
+        await SeedPoolAsync();
+        await SeedAsync(async db =>
+        {
+            await db.Set<WhatsappNumber>().Where(n => n.Id == _numberB)
+                .ExecuteUpdateAsync(s => s.SetProperty(n => n.Status, NumberStatus.Disconnected));
+        });
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Número com envio pausado pelo WhatsApp (463) também fica de fora — insistir
+    // ali é o oposto do que o aquecimento quer.
+    [Fact]
+    public async Task Scheduler_SkipsNumbersWithSendingPaused()
+    {
+        await SeedPoolAsync();
+        await SeedAsync(async db =>
+        {
+            await db.Set<WhatsappNumber>().Where(n => n.Id == _numberB)
+                .ExecuteUpdateAsync(s => s.SetProperty(n => n.SendingPausedUntil, DateTime.UtcNow.AddHours(6)));
+        });
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Uma conversa por vez por número: duas em paralelo, no mesmo minuto, é
+    // padrão de robô.
+    [Fact]
+    public async Task Scheduler_DoesNotStartASecondConversationForABusyPeer()
+    {
+        await SeedPoolAsync();
+        await SeedDueConversationAsync();
+
+        await Scheduler.RunOnceAsync();
+
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // O executor manda os turnos vencidos pela instância do remetente, para o
+    // telefone do outro lado, e grava o id da mensagem.
+    [Fact]
+    public async Task Executor_SendsDueTurnsThroughTheRightInstance()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-1"}}""");
+        await SeedDueConversationAsync(turns: 1);
+
+        var sent = await Executor.ProcessPendingAsync();
+
+        Assert.Equal(1, sent);
+
+        var turn = await InDbAsync(db => db.Set<WarmupTurn>().AsNoTracking().SingleAsync());
+        Assert.NotNull(turn.SentAt);
+        Assert.Equal("WA-1", turn.WaMessageId);
+
+        var request = FakeEvolution.Requests.Last(r => r.Path.StartsWith("/message/sendText/"));
+        Assert.Equal($"/message/sendText/{InstanceA}", request.Path);
+        Assert.Contains(PhoneB, request.Body);
+    }
+
+    // Terminados todos os turnos, a conversa fecha e o chat é arquivado nos DOIS
+    // lados — é isso que impede o celular do vendedor de encher de conversa de
+    // colega.
+    [Fact]
+    public async Task Executor_ArchivesBothSidesWhenTheConversationEnds()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-1"}}""");
+        FakeEvolution.When(HttpMethod.Post, "/chat/archiveChat/", """{"chatId":"ok"}""");
+        var conversationId = await SeedDueConversationAsync(turns: 2);
+
+        await Executor.ProcessPendingAsync();
+
+        var conversation = await InDbAsync(db => db.Set<WarmupConversation>().AsNoTracking()
+            .SingleAsync(c => c.Id == conversationId));
+
+        Assert.Equal(WarmupConversationStatus.Completed, conversation.Status);
+        Assert.True(conversation.ArchivedA);
+        Assert.True(conversation.ArchivedB);
+
+        var archives = FakeEvolution.Requests.Where(r => r.Path.StartsWith("/chat/archiveChat/")).ToList();
+        Assert.Equal(2, archives.Count);
+    }
+
+    // 463 durante o aquecimento é o sinal mais forte que existe: a conta avisou.
+    // Para o POOL INTEIRO, não só o número afetado — se o padrão foi detectado,
+    // ele foi detectado no padrão.
+    [Fact]
+    public async Task Executor_HaltsTheWholePoolWhenWhatsappRestrictsTheSend()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(
+            HttpMethod.Post, "/message/sendText/",
+            """{"status":463,"message":"reachout timelock"}""", HttpStatusCode.BadRequest);
+        await SeedDueConversationAsync(turns: 2);
+
+        await Executor.ProcessPendingAsync();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("restringiu", settings.HaltReason);
+
+        // E para de verdade: nada mais é enviado na passada seguinte.
+        var before = FakeEvolution.Requests.Count(r => r.Path.StartsWith("/message/sendText/"));
+        await Executor.ProcessPendingAsync();
+        Assert.Equal(before, FakeEvolution.Requests.Count(r => r.Path.StartsWith("/message/sendText/")));
+    }
+
+    // Mensagem que não chega é o primeiro sinal de restrição, antes de qualquer
+    // erro explícito: taxa de entrega abaixo do mínimo para o pool.
+    [Fact]
+    public async Task Executor_HaltsWhenTheDeliveryRateCollapses()
+    {
+        await SeedPoolAsync();
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+
+        await SeedUndeliveredAsync(conversationId, 20);
+
+        var sent = await Executor.ProcessPendingAsync();
+
+        Assert.Equal(0, sent);
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("entrega", settings.HaltReason);
+    }
+
+    // 0% de entrega SEM nenhum ack chegando é cano quebrado, não banimento — foi
+    // exatamente o que aconteceu no teste real (webhook apontando para um host
+    // que não existia). Acusar restrição do WhatsApp aqui manda o operador caçar
+    // um ban que não existe.
+    [Fact]
+    public async Task WhenNoAckEverArrives_TheHaltBlamesThePipeNotWhatsapp()
+    {
+        await SeedPoolAsync();
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+        await SeedUndeliveredAsync(conversationId, 20);
+
+        await Executor.ProcessPendingAsync();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("webhook", settings.HaltReason);
+    }
+
+    // Com acks chegando (de qualquer conversa), 0% de entrega é o WhatsApp
+    // mesmo, e a mensagem tem que dizer isso.
+    [Fact]
+    public async Task WhenAcksAreArriving_TheHaltBlamesWhatsapp()
+    {
+        await SeedPoolAsync();
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+        await SeedUndeliveredAsync(conversationId, 20);
+
+        await SeedAsync(db =>
+        {
+            db.Add(new MonitorVendas.Api.Features.Webhooks.WebhookEvent
+            {
+                InstanceName = InstanceA, EventType = "MESSAGES_UPDATE",
+                DedupeKey = $"{InstanceA}:MESSAGES_UPDATE:ACK-VIVO",
+                ReceivedAt = DateTime.UtcNow, Payload = "{}",
+            });
+            return Task.CompletedTask;
+        });
+
+        await Executor.ProcessPendingAsync();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.Contains("WhatsApp que não está entregando", settings.HaltReason);
+    }
+
+    // Amostra pequena não dispara o kill switch: dois envios sem ack ainda não
+    // dizem nada, e parar o pool por isso seria alarme falso.
+    [Fact]
+    public async Task Executor_DoesNotHaltOnASmallSample()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-1"}}""");
+        var conversationId = await SeedDueConversationAsync(turns: 1);
+
+        await SeedAsync(db =>
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                db.Add(new WarmupTurn
+                {
+                    Id = Guid.NewGuid(), ConversationId = conversationId, Sequence = 100 + i,
+                    FromPeerId = _peerA, Text = "oi",
+                    ScheduledAt = DateTime.UtcNow.AddHours(-1),
+                    SentAt = DateTime.UtcNow.AddHours(-1),
+                });
+            }
+
+            return Task.CompletedTask;
+        });
+
+        await Executor.ProcessPendingAsync();
+
+        Assert.Null((await SettingsAsync()).HaltedAt);
+    }
+
+    // Envio que falhou por erro de comunicação gasta UMA tentativa por passada —
+    // repescar na mesma queimaria as três em sequência, sem intervalo. É o mesmo
+    // bug já corrigido no ContactShareSender e no WebhookProcessor.
+    [Fact]
+    public async Task Executor_SpendsOnlyOneAttemptPerPass()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(
+            HttpMethod.Post, "/message/sendText/", """{"message":"boom"}""", HttpStatusCode.InternalServerError);
+        await SeedDueConversationAsync(turns: 1);
+
+        await Executor.ProcessPendingAsync();
+
+        var turn = await InDbAsync(db => db.Set<WarmupTurn>().AsNoTracking().SingleAsync());
+        Assert.Equal(1, turn.Attempts);
+        Assert.Null(turn.SentAt);
+        Assert.NotNull(turn.Error);
+    }
+
+    // O botão de pânico da tela para tudo na hora, sem desligar o interruptor.
+    [Fact]
+    public async Task HaltEndpoint_StopsThePoolImmediately()
+    {
+        await SeedPoolAsync();
+
+        var response = await Client.PostAsync("/api/v1/warmup/halt", null);
+        response.EnsureSuccessStatusCode();
+
+        var settings = await SettingsAsync();
+        Assert.NotNull(settings.HaltedAt);
+        Assert.True(settings.Enabled);
+
+        await Scheduler.RunOnceAsync();
+        Assert.Equal(0, await InDbAsync(db => db.Set<WarmupConversation>().CountAsync()));
+    }
+
+    // Religar pela tela limpa o kill switch: é a decisão manual que ele exige.
+    [Fact]
+    public async Task TurningItBackOn_ClearsTheKillSwitch()
+    {
+        await SeedPoolAsync();
+        await Client.PostAsync("/api/v1/warmup/halt", null);
+
+        var response = await Client.PutAsJsonAsync("/api/v1/warmup/settings", new { enabled = true });
+        response.EnsureSuccessStatusCode();
+
+        var settings = await SettingsAsync();
+        Assert.Null(settings.HaltedAt);
+        Assert.Null(settings.HaltReason);
+    }
+
+    // Entrar e sair do pool pela tela: sair não apaga o histórico, só marca a
+    // saída, e voltar reencontra o mesmo peer (e o mesmo círculo).
+    [Fact]
+    public async Task PeerEndpoints_OptInAndOutWithoutLosingHistory()
+    {
+        await SeedPoolAsync();
+
+        var removed = await Client.DeleteAsync($"/api/v1/warmup/peers/{_numberB}");
+        Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        Assert.NotNull((await InDbAsync(db => db.Set<WarmupPeer>().AsNoTracking().SingleAsync(p => p.Id == _peerB))).LeftAt);
+
+        var back = await Client.PostAsJsonAsync("/api/v1/warmup/peers", new { numberId = _numberB });
+        back.EnsureSuccessStatusCode();
+
+        var peer = await InDbAsync(db => db.Set<WarmupPeer>().AsNoTracking().SingleAsync(p => p.WhatsappNumberId == _numberB));
+        Assert.Equal(_peerB, peer.Id);
+        Assert.Null(peer.LeftAt);
+        // A aresta continua lá: a relação existia antes e não some porque o
+        // número saiu por uns dias.
+        Assert.Equal(1, await InDbAsync(db => db.Set<WarmupLink>().CountAsync()));
+    }
+
+    // A tela mostra o pool: quem participa, o círculo de cada um, a meta do dia e
+    // as conversas com o texto inteiro.
+    [Fact]
+    public async Task Overview_ShowsThePoolTheCirclesAndTheConversations()
+    {
+        await SeedPoolAsync();
+        FakeEvolution.When(HttpMethod.Post, "/message/sendText/", """{"key":{"id":"WA-1"}}""");
+        await SeedDueConversationAsync(turns: 1);
+        await Executor.ProcessPendingAsync();
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        Assert.True(overview.GetProperty("enabled").GetBoolean());
+        Assert.Equal(2, overview.GetProperty("peersInPool").GetInt32());
+        Assert.Equal(1, overview.GetProperty("messagesToday").GetInt32());
+
+        var numbers = overview.GetProperty("numbers").EnumerateArray().ToList();
+        Assert.Equal(2, numbers.Count);
+        Assert.All(numbers, n => Assert.True(n.GetProperty("inPool").GetBoolean()));
+        Assert.All(numbers, n => Assert.Equal(1, n.GetProperty("coreCircle").GetInt32()));
+        Assert.All(numbers, n => Assert.True(n.GetProperty("goal").GetInt32() >= 20));
+        // Pool de 2 números: a meta é capada pela capacidade do grafo.
+        Assert.All(numbers, n => Assert.True(n.GetProperty("cappedByGraph").GetBoolean()));
+
+        var conversation = overview.GetProperty("conversations").EnumerateArray().Single();
+        Assert.Equal("bora almoçar?", conversation.GetProperty("turns")[0].GetProperty("text").GetString());
+    }
+
+    // Número fora do ar aparece na tela com o motivo: "fora do pool" sem
+    // explicação vira chamado de suporte.
+    [Fact]
+    public async Task Overview_ExplainsWhyANumberCannotParticipate()
+    {
+        await SeedPoolAsync();
+        await SeedAsync(async db =>
+        {
+            await db.Set<WhatsappNumber>().Where(n => n.Id == _numberB)
+                .ExecuteUpdateAsync(s => s.SetProperty(n => n.BannedUntil, DateTime.UtcNow.AddHours(20)));
+        });
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>("/api/v1/warmup");
+
+        var blocked = overview.GetProperty("numbers").EnumerateArray()
+            .Single(n => n.GetProperty("numberId").GetGuid() == _numberB);
+
+        Assert.Equal("em cooldown pós-ban", blocked.GetProperty("ineligibleReason").GetString());
+    }
+}

@@ -17,6 +17,7 @@ public static class NumbersEndpoints
             CreateNumberRequest request,
             AppDbContext db,
             EvolutionApiClient evolution,
+            Proxies.ProxyResolver proxies,
             IOptions<WebhookOptions> webhookOptions,
             CancellationToken ct) =>
         {
@@ -36,12 +37,29 @@ public static class NumbersEndpoints
                 return Results.Conflict(new { error = "Este telefone já está cadastrado." });
 
             var instanceName = $"mv-{phone}";
+            var numberId = Guid.NewGuid();
+
+            // Mesmo este caminho legado (o único em que o telefone é digitado)
+            // nasce atrás de um proxy: deixá-lo de fora seria uma porta por onde
+            // apareceria número saindo pelo IP do servidor.
+            var proxyId = await proxies.AssignNewAsync(numberId, sellerId, applied: true, ct);
+            var credentials = proxyId is { } id ? await proxies.CredentialsForAsync(id, ct) : null;
 
             EvolutionApiClient.QrCode qr;
             try
             {
-                await evolution.CreateInstanceAsync(instanceName, phone, ct);
+                try
+                {
+                    await evolution.CreateInstanceAsync(instanceName, phone, credentials, ct);
+                }
+                catch (InvalidProxyException ex) when (proxyId is not null)
+                {
+                    await proxies.MarkFailedAsync(proxyId.Value, ex.Message, ct);
+                    await evolution.CreateInstanceAsync(instanceName, phone, proxy: null, ct);
+                }
+
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
                 qr = await evolution.ConnectAsync(instanceName, phone, ct);
             }
             catch (HttpRequestException)
@@ -51,7 +69,7 @@ public static class NumbersEndpoints
 
             var number = new WhatsappNumber
             {
-                Id = Guid.NewGuid(),
+                Id = numberId,
                 SellerId = sellerId,
                 Phone = phone,
                 InstanceName = instanceName,
@@ -112,6 +130,7 @@ public static class NumbersEndpoints
             bool? confirmCooldown,
             AppDbContext db,
             EvolutionApiClient evolution,
+            Proxies.ProxyResolver proxies,
             IOptions<WebhookOptions> webhookOptions,
             CancellationToken ct) =>
         {
@@ -149,8 +168,13 @@ public static class NumbersEndpoints
                 var instanceName = $"mv-{Guid.NewGuid():N}"[..20];
                 try
                 {
-                    var created = await evolution.CreateInstanceAsync(instanceName, phone: null, ct);
+                    // A instância nova precisa nascer no MESMO proxy do número:
+                    // reparar o fantasma e perder o proxy no caminho trocaria um
+                    // problema por outro, sem ninguém perceber.
+                    var created = await evolution.CreateInstanceAsync(
+                        instanceName, phone: null, await proxies.CredentialsForNumberAsync(id, ct), ct);
                     await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
 
                     await db.Set<WhatsappNumber>()
                         .Where(n => n.Id == id)
@@ -183,6 +207,7 @@ public static class NumbersEndpoints
             bool? confirmCooldown,
             AppDbContext db,
             EvolutionApiClient evolution,
+            Proxies.ProxyResolver proxies,
             IOptions<WebhookOptions> webhookOptions,
             CancellationToken ct) =>
         {
@@ -212,7 +237,9 @@ public static class NumbersEndpoints
 
             try
             {
-                var qr = await evolution.CreateInstanceAsync(instanceName, number.Phone, ct);
+                // Recriar para obter o código não pode custar o proxy do número.
+                var qr = await evolution.CreateInstanceAsync(
+                    instanceName, number.Phone, await proxies.CredentialsForNumberAsync(id, ct), ct);
                 if (qr is null || string.IsNullOrWhiteSpace(qr.PairingCode))
                 {
                     await evolution.DeleteInstanceAsync(instanceName, ct);
@@ -222,6 +249,7 @@ public static class NumbersEndpoints
                 }
 
                 await evolution.SetWebhookAsync(instanceName, webhookOptions.Value.CallbackUrl, WebhookOptions.SubscribedEvents, ct);
+                await evolution.SetSettingsAsync(instanceName, ct);
 
                 // O cadastro passa a apontar para a instância nova: é por ela que os
                 // webhooks deste número vão chegar daqui para frente.

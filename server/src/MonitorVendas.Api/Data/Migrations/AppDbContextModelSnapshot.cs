@@ -404,6 +404,35 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.ToTable("contacts", (string)null);
                 });
 
+            modelBuilder.Entity("MonitorVendas.Api.Features.Conversations.ContactOptOut", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ContactId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Evidence")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ContactId")
+                        .IsUnique();
+
+                    b.ToTable("contact_opt_outs", (string)null);
+                });
+
             modelBuilder.Entity("MonitorVendas.Api.Features.Conversations.Conversation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -809,6 +838,9 @@ namespace MonitorVendas.Api.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<Guid?>("ProxyId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("QrBase64")
                         .HasColumnType("text");
 
@@ -988,6 +1020,145 @@ namespace MonitorVendas.Api.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("MonitorVendas.Api.Features.Proxies.NumberProxyAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("AppliedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("AssignedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("ProxyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<DateTime?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("WhatsappNumberId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WhatsappNumberId")
+                        .IsUnique()
+                        .HasFilter("\"ReleasedAt\" IS NULL");
+
+                    b.HasIndex("ProxyId", "AssignedAt");
+
+                    b.ToTable("number_proxy_assignments", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Proxies.Proxy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("CapacityOverride")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DeviceLimit")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime?>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool?>("LastTestOk")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastTestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Password")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("ShortId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int?>("SocksPort")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Provider", "ShortId")
+                        .IsUnique();
+
+                    b.ToTable("proxies", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Proxies.ProxySettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("proxy_settings", (string)null);
+                });
+
             modelBuilder.Entity("MonitorVendas.Api.Features.Sellers.Seller", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1008,6 +1179,213 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("sellers", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupConversation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("ArchivedA")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ArchivedB")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid?>("LinkId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PeerAId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PeerBId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Theme")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("warmup_conversations", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double>("ConversationsPerWeek")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime?>("LastConversationAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PeerAId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PeerBId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PeerBId");
+
+                    b.HasIndex("PeerAId", "PeerBId")
+                        .IsUnique();
+
+                    b.ToTable("warmup_links", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupPeer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("JoinedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("LeftAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Persona")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("WhatsappNumberId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WhatsappNumberId")
+                        .IsUnique();
+
+                    b.ToTable("warmup_peers", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("GenerationFailures")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("GenerationPausedUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("HaltReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<DateTime?>("HaltedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastGenerationError")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("LastGenerationErrorKind")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("warmup_settings", (string)null);
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupTurn", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("FromPeerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ScheduledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("WaMessageId")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
+
+                    b.HasIndex("WaMessageId");
+
+                    b.HasIndex("SentAt", "ScheduledAt");
+
+                    b.ToTable("warmup_turns", (string)null);
                 });
 
             modelBuilder.Entity("MonitorVendas.Api.Features.Webhooks.WebhookEvent", b =>
@@ -1092,6 +1470,15 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasOne("MonitorVendas.Api.Features.Contacts.ContactShare", null)
                         .WithMany()
                         .HasForeignKey("ContactShareId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Conversations.ContactOptOut", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Conversations.Contact", null)
+                        .WithMany()
+                        .HasForeignKey("ContactId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -1188,6 +1575,54 @@ namespace MonitorVendas.Api.Data.Migrations
                     b.HasOne("MonitorVendas.Api.Features.Outcomes.ConversationOutcomeType", null)
                         .WithMany()
                         .HasForeignKey("OutcomeTypeCode")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Proxies.NumberProxyAssignment", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Proxies.Proxy", null)
+                        .WithMany()
+                        .HasForeignKey("ProxyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("MonitorVendas.Api.Features.Numbers.WhatsappNumber", null)
+                        .WithMany()
+                        .HasForeignKey("WhatsappNumberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupLink", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Warmup.WarmupPeer", null)
+                        .WithMany()
+                        .HasForeignKey("PeerAId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("MonitorVendas.Api.Features.Warmup.WarmupPeer", null)
+                        .WithMany()
+                        .HasForeignKey("PeerBId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupPeer", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Numbers.WhatsappNumber", null)
+                        .WithMany()
+                        .HasForeignKey("WhatsappNumberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MonitorVendas.Api.Features.Warmup.WarmupTurn", b =>
+                {
+                    b.HasOne("MonitorVendas.Api.Features.Warmup.WarmupConversation", null)
+                        .WithMany()
+                        .HasForeignKey("ConversationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -75,6 +75,33 @@ export const mswServer = setupServer(
   http.get('/api/v1/holidays', () => HttpResponse.json([])),
   http.get('/api/v1/numbers', () => HttpResponse.json([])),
   http.get('/api/v1/numbers/health', () => HttpResponse.json([])),
+  http.get('/api/v1/proxies', () =>
+    HttpResponse.json({
+      enabled: true,
+      activeProxies: 0,
+      assignedNumbers: 0,
+      numbersWithoutProxy: 0,
+      bansInPeriod: 0,
+      proxies: [],
+      unassigned: [],
+    }),
+  ),
+  http.get('/api/v1/warmup', () =>
+    HttpResponse.json({
+      enabled: false,
+      haltedAt: null,
+      haltReason: null,
+      idleReason: null,
+      aiAlert: null,
+      aiBudget: { enabled: true, limit: 20, available: 20, windowEnd: '2026-08-06T03:00:00Z', byPurpose: [] },
+      peersInPool: 0,
+      messagesToday: 0,
+      conversationsToday: 0,
+      deliveryRate: null,
+      numbers: [],
+      conversations: [],
+    }),
+  ),
   http.get('/api/v1/contacts', () =>
     HttpResponse.json({ items: [], page: 1, pageSize: 50, total: 0 }),
   ),

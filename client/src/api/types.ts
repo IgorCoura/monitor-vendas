@@ -29,6 +29,59 @@ export interface NumberResponse {
   sendingPauseReason: string | null
 }
 
+// Proxies contratados no fornecedor. A senha nunca vem na resposta.
+export type ProxyStatus = 'Active' | 'Paused' | 'Suspect' | 'Expired' | 'Revoked' | 'Failed'
+
+export interface ProxyNumberDto {
+  numberId: string
+  phone: string
+  sellerName: string
+  status: NumberStatus
+}
+
+export interface ProxyDto {
+  id: string
+  shortId: string
+  label: string
+  kind: string
+  host: string
+  port: number
+  status: ProxyStatus
+  numbersCount: number
+  capacity: number
+  sellersCount: number
+  bansCount: number
+  bannedNumbersCount: number
+  expiresAt: string | null
+  lastTestedAt: string | null
+  lastTestOk: boolean | null
+  numbers: ProxyNumberDto[]
+}
+
+export interface ProxyOverviewDto {
+  enabled: boolean
+  activeProxies: number
+  assignedNumbers: number
+  numbersWithoutProxy: number
+  bansInPeriod: number
+  proxies: ProxyDto[]
+  unassigned: ProxyNumberDto[]
+}
+
+export interface ProxyMoveDto {
+  numberId: string
+  phone: string
+  sellerName: string
+  fromLabel: string | null
+  toLabel: string
+  restartsSocket: boolean
+}
+
+export interface AllocationPreviewDto {
+  moves: ProxyMoveDto[]
+  stillWithoutProxy: string[]
+}
+
 // Aviso de risco anti-ban: a ação pode prosseguir, mas quem opera vê isto antes.
 export interface RiskWarning {
   code: string
@@ -351,4 +404,82 @@ export interface ReportExportFilters {
   metrics: string[]
   charts: string[]
   includeNumbers: boolean
+}
+
+export interface WarmupPeerDto {
+  peerId: string | null
+  numberId: string
+  phone: string
+  sellerName: string
+  numberStatus: string
+  inPool: boolean
+  ineligibleReason: string | null
+  persona: string | null
+  coreCircle: number
+  occasionalCircle: number
+  circle: string[]
+  goal: number
+  effectiveGoal: number
+  cappedByGraph: boolean
+  realMessagesToday: number
+  warmupMessagesToday: number
+}
+
+export interface WarmupTurnDto {
+  sequence: number
+  fromPhone: string
+  text: string
+  scheduledAt: string
+  sentAt: string | null
+  delivered: boolean
+}
+
+export interface WarmupConversationDto {
+  id: string
+  theme: string
+  status: string
+  phoneA: string
+  phoneB: string
+  createdAt: string
+  completedAt: string | null
+  archived: boolean
+  turns: WarmupTurnDto[]
+}
+
+// As duas torneiras da IA fecham por motivos opostos: "budget" é o nosso saldo
+// em reais (config), "quota" é o limite do Google (faturamento no projeto deles).
+export interface WarmupAiAlertDto {
+  kind: 'budget' | 'quota' | 'content' | 'provider'
+  message: string
+  retryAt: string | null
+}
+
+// `byPurpose` é só visibilidade: o teto continua único e global.
+export interface AiPurposeSpendDto {
+  purpose: string
+  committed: number
+}
+
+export interface WarmupAiBudgetDto {
+  enabled: boolean
+  limit: number
+  available: number
+  windowEnd: string
+  byPurpose: AiPurposeSpendDto[]
+}
+
+export interface WarmupOverviewDto {
+  enabled: boolean
+  aiAlert: WarmupAiAlertDto | null
+  aiBudget: WarmupAiBudgetDto
+  haltedAt: string | null
+  haltReason: string | null
+  // Por que nada está sendo agendado agora, mesmo com tudo ligado.
+  idleReason: string | null
+  peersInPool: number
+  messagesToday: number
+  conversationsToday: number
+  deliveryRate: number | null
+  numbers: WarmupPeerDto[]
+  conversations: WarmupConversationDto[]
 }
