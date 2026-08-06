@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtDate, fmtHours, fmtMinutes, fmtPercent, periodRange } from './format'
+import { fmtDate, fmtHours, fmtMinutes, fmtPercent, fmtUptime, periodRange } from './format'
 
 describe('formatadores', () => {
   // Percentual: fração 0–1 vira "NN%"; null vira travessão.
@@ -7,6 +7,17 @@ describe('formatadores', () => {
     expect(fmtPercent(0.5)).toBe('50%')
     expect(fmtPercent(1)).toBe('100%')
     expect(fmtPercent(null)).toBe('—')
+  })
+
+  // Regressão (04/08/2026): 99,53% saía como "100%" por causa do toFixed(0), e um
+  // número banido no dia anterior passava por canal perfeito. "100%" só quando é
+  // 100 mesmo; null (sem número a medir) vira travessão.
+  it('fmtUptime nunca arredonda para cima nem inventa 100%', () => {
+    expect(fmtUptime(100)).toBe('100%')
+    expect(fmtUptime(99.53)).toBe('99,5%')
+    expect(fmtUptime(99.99)).toBe('99,9%')
+    expect(fmtUptime(0)).toBe('0%')
+    expect(fmtUptime(null)).toBe('—')
   })
 
   // Minutos: abaixo de 1h mostra "N min"; acima vira "Xh MM" com zero à esquerda.

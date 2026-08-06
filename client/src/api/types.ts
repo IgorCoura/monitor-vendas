@@ -141,6 +141,9 @@ export interface MetricsDto {
   minResponseMinutes: number | null
   maxResponseMinutes: number | null
   responseSamplesCount: number
+  // Espera consolidada por dia: viaja para que totais sejam recompostos pela mesma
+  // regra do servidor (média das médias diárias), nunca estimados das médias prontas.
+  responseWaitDays: ResponseWaitDayDto[]
   messagesSent: number
   messagesReceived: number
   sentReceivedRatio: number | null
@@ -153,9 +156,21 @@ export interface MetricsDto {
   avgReceivedPerBusinessHour: number | null
   effectiveBusinessHours: number
   lastOutboundMessageAt: string | null
-  uptimePercent: number
+  // Null quando não há canal a medir (sem número, ou número que já não é dele).
+  uptimePercent: number | null
+  // Os dois lados da fração, para totais recompostos por soma.
+  uptimeCoveredSeconds: number
+  uptimeDowntimeSeconds: number
   banCount: number
   outcomes: OutcomeMetricDto[]
+}
+
+export interface ResponseWaitDayDto {
+  day: string
+  count: number
+  sumMinutes: number
+  minMinutes: number
+  maxMinutes: number
 }
 
 // Um desfecho por tipo (venda, cliente perdido, e os que o usuário criar).

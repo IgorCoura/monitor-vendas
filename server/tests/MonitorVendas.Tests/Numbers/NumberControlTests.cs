@@ -213,7 +213,7 @@ public class NumberControlTests(IntegrationTestWebAppFactory factory) : BaseInte
         // O número caiu logo no início da janela: fica quase tudo fora do ar, mas
         // nunca mais de 100% — contar duas vezes daria uptime negativo.
         var uptime = report!.Totals.UptimePercent;
-        Assert.InRange(uptime, 0, 100);
+        Assert.InRange(uptime!.Value, 0, 100);
     }
 
     // Reiniciar chacoalha o socket sem desvincular: o status continua sendo

@@ -13,7 +13,7 @@ import {
 import { useSellerReport } from '../../api/queries'
 import { KpiCard } from '../../components/KpiCard'
 import { Button, Card, EmptyState, ErrorState, Spinner, StatusBadge } from '../../components/ui'
-import { fmtDateTime, fmtHours, fmtMinutes, fmtPercent, fmtPerHour, periodOptions, fmtPhone } from '../../lib/format'
+import { fmtDateTime, fmtHours, fmtMinutes, fmtPercent, fmtPerHour, fmtUptime, periodOptions, fmtPhone } from '../../lib/format'
 import { chartInk, chartPalette } from '../../lib/palette'
 import { metricHelp } from '../../lib/metrics'
 import { usePeriodRange } from '../../lib/usePeriodRange'
@@ -177,7 +177,7 @@ export function SellerPage() {
                 </div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <dt className="text-ink-muted">Uptime</dt>
-                  <dd className="text-right">{n.metrics.uptimePercent.toFixed(0)}%</dd>
+                  <dd className="text-right">{fmtUptime(n.metrics.uptimePercent)}</dd>
                   <dt className="text-ink-muted">Bans</dt>
                   <dd className="text-right">{n.metrics.banCount}</dd>
                   <dt className="text-ink-muted">Conversas</dt>

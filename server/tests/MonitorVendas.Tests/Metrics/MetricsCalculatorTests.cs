@@ -140,22 +140,33 @@ public class MetricsCalculatorTests
 
         var result = NewCalculator().Compute(From, To, [], downtimes, 1);
 
-        Assert.Equal(90, result.UptimePercent, precision: 5);
+        Assert.Equal(90, result.UptimePercent!.Value, precision: 5);
     }
 
     // Agregação por vendedor: somas de contagens, mediana recalculada sobre as amostras
-    // unidas, média/h reagregada por soma de horas úteis e último envio pelo máximo.
+    // unidas, média/h reagregada por soma de horas úteis, último envio pelo máximo,
+    // uptime recomposto dos dois somáveis (200s cobertos, 20s fora = 90%) e a espera
+    // de resposta combinada POR DIA — dois números no mesmo dia viram um dia só.
     [Fact]
     public void Aggregate_MergesCountsAndSamples()
     {
         var lastA = Local(3, 10);
         var lastB = Local(5, 11);
+        var day = new DateOnly(2026, 7, 3);
         var saleOnce = new Dictionary<string, OutcomeTotals> { [OutcomeTypeCodes.Sale] = new(1, 1, 2) };
         var lostOnce = new Dictionary<string, OutcomeTotals> { [OutcomeTypeCodes.Lost] = new(1, 1, 3) };
-        var a = new MetricsResult(2, 1, 1, 0, 10, 8, 5, 1, 1, saleOnce, 0, 100, 10, lastA, [10], [10]);
-        var b = new MetricsResult(2, 2, 0, 0, 6, 4, 3, 1, 0, lostOnce, 2, 80, 10, lastB, [20, 30], [20]);
+        var waitA = new Dictionary<DateOnly, ResponseDayStats> { [day] = ResponseDayStats.Of(10) };
+        var waitB = new Dictionary<DateOnly, ResponseDayStats> { [day] = ResponseDayStats.Of(30) };
+        var a = new MetricsResult(2, 1, 1, 0, 10, 8, 5, 1, 1, saleOnce, 0, 100, 0, 10, lastA, [10], [10], waitA);
+        var b = new MetricsResult(2, 2, 0, 0, 6, 4, 3, 1, 0, lostOnce, 2, 100, 20, 10, lastB, [20, 30], [20], waitB);
 
         var merged = MetricsResult.Aggregate([a, b]);
+
+        // Um dia só, com as duas amostras dentro: 10 e 30 → mín 10, máx 30, média 20.
+        Assert.Equal(2, merged.ResponseSamplesCount);
+        Assert.Equal(10, merged.MinResponseMinutes);
+        Assert.Equal(30, merged.MaxResponseMinutes);
+        Assert.Equal(20, merged.AvgResponseMinutes);
 
         Assert.Equal(4, merged.ConversationsStarted);
         Assert.Equal(3, merged.ConversationsAnswered);
@@ -212,10 +223,10 @@ public class MetricsCalculatorTests
         Assert.Equal(2, result.AvgSentPerBusinessHour!.Value, precision: 5);
     }
 
-    // Espera de resposta cobre TODA mensagem do cliente respondida (não só a primeira
-    // da conversa): mínimo, máximo e média em minutos úteis.
+    // Conversa que alterna pergunta/resposta o tempo todo: uma amostra por resposta,
+    // mínimo, máximo e média em minutos úteis.
     [Fact]
-    public void ResponseWait_MinMaxAvg_OverEveryClientMessage()
+    public void ResponseWait_MinMaxAvg_WhenEveryMessageAlternates()
     {
         var conv = new ConversationData(Local(1, 10), true,
             [
@@ -229,6 +240,124 @@ public class MetricsCalculatorTests
         Assert.Equal(10, result.MinResponseMinutes);
         Assert.Equal(60, result.MaxResponseMinutes);
         Assert.Equal(100.0 / 3, result.AvgResponseMinutes!.Value, precision: 5);
+    }
+
+    // Dia real com 10 mensagens: cliente que insiste antes de ser respondido (a espera
+    // conta da PRIMEIRA mensagem dele) e vendedor que emenda várias seguidas (só a
+    // primeira fecha espera). Três respostas de verdade: 30, 5 e 120 minutos úteis.
+    [Fact]
+    public void ResponseWait_OverATypicalDay_UsesOneSamplePerAnswer()
+    {
+        var conv = new ConversationData(Local(1, 9), true,
+            [
+                In(Local(1, 9)),           // cliente começa a esperar às 9h
+                In(Local(1, 9, 10)),       // insiste: não reinicia a espera
+                Out(Local(1, 9, 30)),      // resposta → 30 min (desde as 9h)
+                Out(Local(1, 9, 35)),      // emenda: não há espera para fechar
+                Out(Local(1, 9, 40)),      // idem
+                In(Local(1, 10)),          // cliente volta: espera nova
+                Out(Local(1, 10, 5)),      // resposta → 5 min
+                In(Local(1, 11)),          // espera nova
+                In(Local(1, 11, 30)),      // insiste
+                Out(Local(1, 13)),         // resposta → 120 min (desde as 11h)
+            ], null);
+
+        var result = NewCalculator().Compute(From, To, [conv], [], 0);
+
+        Assert.Equal([30, 5, 120], result.ResponseMinutesSamples);
+        Assert.Equal(5, result.MinResponseMinutes);
+        Assert.Equal(120, result.MaxResponseMinutes);
+        Assert.Equal(155.0 / 3, result.AvgResponseMinutes!.Value, precision: 5);
+    }
+
+    // Sequência de mensagens do vendedor sem o cliente no meio: só a primeira conta.
+    // A contagem volta quando o cliente escreve, e de novo só para a próxima do
+    // vendedor — a que vem depois dela não conta.
+    [Fact]
+    public void ResponseWait_WithConsecutiveOutbound_CountsOnlyTheFirstOfEachStreak()
+    {
+        var conv = new ConversationData(Local(1, 9), true,
+            [
+                In(Local(1, 9)),
+                Out(Local(1, 9, 20)),      // → 20 min
+                Out(Local(1, 9, 40)),      // não conta
+                Out(Local(1, 10)),         // não conta
+                In(Local(1, 10, 30)),      // cliente escreve: a espera volta a existir
+                Out(Local(1, 11)),         // → 30 min
+                Out(Local(1, 11, 30)),     // não conta
+            ], null);
+
+        var result = NewCalculator().Compute(From, To, [conv], [], 0);
+
+        Assert.Equal([20, 30], result.ResponseMinutesSamples);
+        Assert.Equal(20, result.MinResponseMinutes);
+        Assert.Equal(30, result.MaxResponseMinutes);
+        Assert.Equal(25, result.AvgResponseMinutes);
+    }
+
+    // Disparo não é resposta: conversa aberta pelo vendedor não tem ninguém
+    // esperando, então nem a primeira nem as seguintes contam. A medição começa na
+    // primeira mensagem do vendedor DEPOIS que o cliente responde.
+    [Fact]
+    public void ResponseWait_IgnoresOutboundConversationStarters()
+    {
+        var conv = new ConversationData(Local(1, 9), false,
+            [
+                Out(Local(1, 9)),          // disparo
+                Out(Local(1, 9, 30)),      // insistência do vendedor
+                In(Local(1, 10)),          // cliente responde: agora há espera
+                Out(Local(1, 10, 15)),     // → 15 min
+            ], null);
+
+        var result = NewCalculator().Compute(From, To, [conv], [], 0);
+
+        Assert.Equal([15], result.ResponseMinutesSamples);
+        Assert.Equal(15, result.MinResponseMinutes);
+        Assert.Equal(15, result.MaxResponseMinutes);
+        Assert.Equal(15, result.AvgResponseMinutes);
+    }
+
+    // Cada DIA pesa igual na média do período: um dia com uma resposta de 60 min e
+    // outro com dez de 6 min dão 33 min, não os 10,9 da média ponderada. Um dia ruim
+    // não é diluído por um dia de muitas respostas rápidas.
+    [Fact]
+    public void ResponseWait_AveragesTheDailyAverages_NotTheSamples()
+    {
+        var slowDay = new ConversationData(Local(1, 9), true,
+            [In(Local(1, 9)), Out(Local(1, 10))], null);
+
+        // Dez perguntas de meia em meia hora, das 9h às 13h30, cada uma respondida
+        // em 6 minutos — tudo dentro do expediente.
+        var busyDay = new ConversationData(Local(2, 9), true,
+            [.. Enumerable.Range(0, 10).SelectMany<int, MessageData>(i =>
+            {
+                var asked = Local(2, 9).AddMinutes(i * 30);
+                return [In(asked), Out(asked.AddMinutes(6))];
+            })], null);
+
+        var result = NewCalculator().Compute(From, To, [slowDay, busyDay], [], 0);
+
+        Assert.Equal(11, result.ResponseSamplesCount);
+        Assert.Equal(6, result.MinResponseMinutes);
+        Assert.Equal(60, result.MaxResponseMinutes);
+        Assert.Equal(33, result.AvgResponseMinutes);
+    }
+
+    // A espera pertence ao dia da RESPOSTA, não ao da pergunta: é esse o dia que o
+    // pipeline marca como sujo, e foi por atribuir à pergunta que resposta demorada
+    // sumia do agregado. Cliente pergunta dia 1 às 17h, vendedor responde dia 2 às
+    // 9h30 → 1h30 útil (1h de sobra no dia 1 + 30 min no dia 2), no dia 2.
+    [Fact]
+    public void ResponseWait_BelongsToTheDayOfTheAnswer()
+    {
+        var conv = new ConversationData(Local(1, 17), true,
+            [In(Local(1, 17)), Out(Local(2, 9, 30))], null);
+
+        var result = NewCalculator().Compute(From, To, [conv], [], 0);
+
+        var day = Assert.Single(result.ResponseByDay);
+        Assert.Equal(new DateOnly(2026, 7, 2), day.Key);
+        Assert.Equal(90, day.Value.AvgMinutes);
     }
 
     // A data/hora da última mensagem enviada é o maior timestamp outbound do período.

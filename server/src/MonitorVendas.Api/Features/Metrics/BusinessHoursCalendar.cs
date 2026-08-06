@@ -11,6 +11,11 @@ public sealed class BusinessHoursCalendar(
     int saturdayEndHour = 13,
     IReadOnlySet<DateOnly>? holidays = null)
 {
+    // O dia a que um instante pertence no fuso do relatório. É por ele que a espera
+    // de resposta é consolidada — dia é conceito local, não UTC.
+    public DateOnly LocalDayOf(DateTime utc) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), timeZone));
+
     public TimeSpan BusinessTimeBetween(DateTime fromUtc, DateTime toUtc)
     {
         if (toUtc <= fromUtc)

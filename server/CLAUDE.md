@@ -500,7 +500,10 @@ fechado.
   agrupa os pares por vendedor; `GetSellerReportAsync` inclui os números que já
   foram dele e produziram dado no período.
 - **Downtime, uptime e ban ficam com o dono vigente** — descrevem o canal, não o
-  atendimento. Rateá-los contaria o mesmo ban duas vezes.
+  atendimento. Rateá-los contaria o mesmo ban duas vezes. Para o **dono anterior**
+  o número sai com cobertura zero, e portanto uptime **`null` ("—")**: ele aparece
+  no relatório dele (o histórico é dele) sem afirmar nada sobre um canal que já não
+  é seu. Antes saía **100%**, que é a afirmação oposta.
 - **`POST /numbers/{id}/transfer`** troca o dono a partir de agora (botão
   "Transferir" ao lado do ban, com a lista de vendedores); a contagem de
   bans (`CountBanTransitions`) segue contando as transições **do período**, então
@@ -946,9 +949,9 @@ interpolação. Períodos até 7 dias são calculados ao vivo, com **mediana exa
 **Índices calculados**: conversas iniciadas/atendidas/**não respondidas**,
 taxa de resposta (janela `Metrics:AnswerWindowBusinessHours`), **disparos**
 (conversas iniciadas pelo vendedor) e **captações** (disparos com resposta do
-cliente), mediana da 1ª resposta, **espera de resposta mín/máx/média sobre toda
-mensagem do cliente respondida** (`Min/Max/AvgResponseMinutes` +
-`ResponseSamplesCount` para média ponderada no agregado), enviadas/recebidas
+cliente), mediana da 1ª resposta, **espera de resposta mín/máx/média, uma amostra
+por resposta do vendedor e consolidada por dia** (`Min/Max/AvgResponseMinutes` —
+ver a seção da espera de resposta abaixo), enviadas/recebidas
 + razão + **médias por hora útil** (mensagens ÷ `EffectiveBusinessHours`,
 reagregável por soma), taxa de leitura, follow-up = **silêncios resgatados ÷
 silêncios** (`SilenceGaps`/`SilenceGapsFollowedUp`, gap
@@ -956,6 +959,81 @@ silêncios** (`SilenceGaps`/`SilenceGapsFollowedUp`, gap
 condição para fechar o número por dia), vendas, conversão
 (vendas/atendidas), tempo até fechar, **última mensagem enviada**
 (`LastOutboundMessageAt`, agregado por máximo), uptime % e contagem de bans.
+
+### Espera de resposta: uma amostra por resposta, consolidada por dia
+
+Reescrita em 2026-08-04. Antes a varredura era pelas mensagens do CLIENTE que
+tiveram resposta, o que dava uma amostra por mensagem: cliente que mandava três
+seguidas pesava três vezes, e o mínimo era estruturalmente ~0 (a última mensagem
+antes de uma resposta sempre tem a menor espera).
+
+- A varredura é pelas mensagens do **vendedor**. Cada uma fecha a espera aberta
+  pela **primeira** mensagem do cliente ainda não respondida — é desde ela que o
+  cliente espera. Mensagem seguinte do vendedor não tem espera para fechar, e só
+  volta a contar depois que o cliente escreve de novo; **disparo** (conversa
+  aberta pelo vendedor) não conta, porque não há ninguém esperando.
+- O relógio continua **útil** (`BusinessTimeBetween`): cliente às 7h respondido
+  às 9h30 dá **30 min**, não 2h30.
+- **A amostra pertence ao dia da RESPOSTA**, não ao da pergunta. Além de ser o
+  dia que o usuário reconhece, é o dia que o pipeline marca como sujo — atribuir
+  à pergunta fazia resposta demorada mais de 2 dias (`LOOKBACK_DAYS` do
+  `DirtyDayTracker`) sumir do agregado para sempre.
+- **Consolidação diária** (`ResponseDayStats`): por dia guardamos contagem, soma,
+  mínimo e máximo. No período, mín é o menor dos mínimos, máx o maior dos máximos
+  e **a média é a média das médias diárias** — cada dia pesa igual, então um dia
+  ruim não é diluído por um dia de muitas respostas rápidas. `MergeResponseDays`
+  combina **por dia**: dois números do mesmo vendedor no mesmo dia viram um dia
+  só, senão o dia entraria duas vezes na média.
+- `DailyNumberMetrics` **não mudou de schema** — as colunas `ResponseCount`/
+  `Sum`/`Min`/`Max` já eram por (número, dia) e agora guardam essa consolidação.
+  Mas o **conteúdo** delas mudou de regra: depois de subir, rode
+  `POST /reports/rebuild` sobre o histórico, senão período longo mistura dias das
+  duas regras sem ninguém perceber.
+- **A carga de mensagens começa antes do período** (`Metrics:ResponseLookbackDays`,
+  2): quem responde às 9h fecha a espera de quem escreveu às 23h, e a pergunta
+  está fora da janela. Para a conversa que ficou quieta por mais tempo que isso,
+  quem salva é a mensagem de fronteira — que passou a carregar a **direção real**.
+  Gravá-la sempre como outbound (quando era só marco temporal do follow-up)
+  apagava a espera de quem estava dias sem resposta.
+- **O total do time usa a mesma regra**: o `MetricsDto` leva a série diária
+  (`ResponseWaitDays`) e o `TeamTotals` junta os dias de todos os vendedores
+  **antes** de tirar a média — um dia é um dia, não um dia por vendedor. Ponderar
+  as médias já prontas por quantidade de amostras dava um terceiro número, que não
+  era o de ninguém, e fazia o "Resumo" discordar da aba ao lado na mesma planilha.
+
+### Uptime: canal-horas, nunca "ausência de queda"
+
+Corrigido em 2026-08-04, depois de uma vendedora com **um único número banido**
+aparecer com **100%** no painel. O cálculo antigo era *período menos downtime
+provado*, então **ausência de prova virava canal perfeito**.
+
+- A conta é `(CoveredSeconds − DowntimeSeconds) / CoveredSeconds`. Os dois lados
+  são **somáveis** entre números e entre dias — percentual não soma, e era por isso
+  que `Aggregate` fazia média de percentuais e o time herdava o 100% de quem não
+  tinha número. `MetricsResult`/`MetricsSnapshot`/`DailyNumberMetrics` carregam os
+  dois; o DTO expõe `UptimeCoveredSeconds`/`UptimeDowntimeSeconds` para o
+  `TeamTotals` recompor por soma (mesmo papel de `ResponseSamplesCount`).
+- **Cobertura** = tempo, dentro da janela, em que o número existia **e** era daquele
+  vendedor. Número nascido no meio do período só é cobrado do nascimento em diante;
+  dono anterior tem cobertura zero. **Sem cobertura o uptime é `null`, exibido como
+  "—"** — vendedor sem número não tem canal perfeito, não tem canal.
+- **100% exige TODOS os números no ar o período inteiro**: com dois números e um
+  fora o tempo todo o total é 50%, não 0% (denominador antigo) nem 100%.
+- **`WhatsappNumber.Status` fecha a janela.** O log de `number_status_events` conta
+  o passado, mas o status é fato do presente: se nenhum evento foi gravado depois do
+  `to` e o log termina em `Active` enquanto o cadastro diz banido/desconectado, o
+  histórico está furado e o trecho final **conta como fora do ar** (com
+  `LogWarning`). Só nessa direção — nunca creditamos tempo no ar que o log não
+  prova. É o que impedia badge "Banido" e uptime 100% de conviverem, e por isso a
+  consulta de eventos **não tem teto** (`>= from`, sem `< to`): é a presença de
+  evento posterior que diz se aquele trecho do histórico está completo.
+- **Toda mudança manual de estado marca o dia como sujo** (`ban-permanent`,
+  `disconnect`, `transfer`) — antes só o `ConnectionUpdateHandler` marcava, e a
+  linha já fechada do dia do ban seguia com o uptime de antes dele, fazendo o
+  relatório longo (que soma dias fechados) mostrar o canal como se estivesse no ar.
+- Exibição: `fmtUptime` no front **nunca arredonda para cima** — 99,53% sai como
+  "99,5%", e "100%" só quando é 100 mesmo. O `toFixed(0)` anterior transformava
+  qualquer coisa acima de 99,5% em 100%.
 
 ## Project layout
 
@@ -994,11 +1072,11 @@ server/
 │   │                                      #   ReportCache + ReportCacheVersion, Holiday + HolidaysEndpoints,
 │   │                                      #   DailyNumberMetrics / DirtyMetricsDay / FirstResponseBuckets,
 │   │                                      #   MetricsSnapshot (forma somável), DailyMetricsBuilder (+background), DirtyDayTracker
-│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (27) + DesignTimeDbContextFactory
+│   ├── Data/                              # AppDbContext + Configurations/ + Migrations/ (39) + DesignTimeDbContextFactory
 │   ├── Integrations/Evolution/            # EvolutionApiClient (create/webhook/connect/state/findMessages/sendText) + Options + Setup
 │   ├── Integrations/Ai/                   # IAiProvider + AiOptions + AiCostCalculator + Setup; Gemini/GeminiProvider
 │   └── Common/                            # ApiVersioningSetup (Asp.Versioning, /api/v{n}), UtcDates
-└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 598 testes
+└── tests/MonitorVendas.Tests/             # xUnit; Infrastructure/ (Testcontainers postgres:17 + Respawn + FakeEvolutionHandler + FakeAiHandler + FakeProxyBrHandler + FixedRandomSource), 618 testes
 ```
 
 - Endpoints de feature entram em `Features/<Nome>/<Nome>Endpoints.cs` com
@@ -1028,7 +1106,7 @@ server/
   bloco `Metrics`
   (timezone, horas úteis seg–sex, sábado
   `SaturdayEnabled`/`SaturdayStartHour`/`SaturdayEndHour`, etiqueta de venda,
-  janelas de conversa/resposta/follow-up, `CacheSeconds`,
+  janelas de conversa/resposta/follow-up, `ResponseLookbackDays`, `CacheSeconds`,
   `AggregationEnabled`/`AggregationIntervalSeconds`, `UseDailyAggregates`,
   `LiveCalculationMaxDays`).
 - Todo `DateTime` persistido é UTC (Npgsql timestamptz); horário comercial é
@@ -1066,7 +1144,7 @@ server/
 `dotnet test MonitorVendas.slnx --filter "Category!=benchmark" --collect:"XPlat
 Code Coverage" --settings coverlet.runsettings`.
 
-Estado em 2026-08-01 (429 testes; 443 desde 2026-08-03): **96,1% de linhas / 90,1% de ramos**. Só os
+Estado em 2026-08-01 (429 testes; 488 desde 2026-08-05): **96,1% de linhas / 90,1% de ramos**. Só os
 testes de integração (236) dão 93,0% / 78,6%; só os unitários (173), 23,3% /
 38,7% — ver a nota sobre a estratégia abaixo.
 

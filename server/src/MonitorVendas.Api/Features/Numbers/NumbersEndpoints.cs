@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MonitorVendas.Api.Data;
+using MonitorVendas.Api.Features.Metrics;
 using MonitorVendas.Api.Features.Sellers;
 using MonitorVendas.Api.Features.Webhooks;
 using MonitorVendas.Api.Integrations.Evolution;
@@ -273,6 +274,7 @@ public static class NumbersEndpoints
             Guid id,
             TransferNumberRequest request,
             AppDbContext db,
+            IDirtyDayTracker dirtyDays,
             CancellationToken ct) =>
         {
             var number = await db.Set<WhatsappNumber>().FirstOrDefaultAsync(n => n.Id == id, ct);
@@ -292,6 +294,11 @@ public static class NumbersEndpoints
             number.SellerId = request.SellerId;
             await db.SaveChangesAsync(ct);
 
+            // Downtime, uptime e ban acompanham o dono vigente: trocar de dono muda
+            // a que vendedor o dia pertence, então o agregado do dia precisa ser
+            // refeito com o carimbo novo.
+            await dirtyDays.MarkAsync(db, number.Id, DateTime.UtcNow, ct);
+
             return Results.Ok(NumberResponse.From(number));
         });
 
@@ -304,6 +311,7 @@ public static class NumbersEndpoints
             Guid id,
             AppDbContext db,
             EvolutionApiClient evolution,
+            IDirtyDayTracker dirtyDays,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -324,15 +332,18 @@ public static class NumbersEndpoints
             // O estado vale a partir de agora, sem esperar o `connection.update`:
             // é o que faz o downtime começar a contar na hora certa. O evento do
             // webhook chega depois com o mesmo status e não soma intervalo novo.
+            var occurredAt = DateTime.UtcNow;
             number.Status = NumberStatus.Disconnected;
             db.Add(new NumberStatusEvent
             {
                 WhatsappNumberId = number.Id,
                 State = "manual",
                 ResultingStatus = NumberStatus.Disconnected,
-                OccurredAt = DateTime.UtcNow,
+                OccurredAt = occurredAt,
             });
             await db.SaveChangesAsync(ct);
+
+            await dirtyDays.MarkAsync(db, number.Id, occurredAt, ct);
 
             return Results.Ok(NumberResponse.From(number));
         });
@@ -376,6 +387,7 @@ public static class NumbersEndpoints
             Guid id,
             AppDbContext db,
             EvolutionApiClient evolution,
+            IDirtyDayTracker dirtyDays,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -390,15 +402,21 @@ public static class NumbersEndpoints
             if (!await evolution.LogoutAsync(number.InstanceName, ct))
                 logger.LogWarning("Ban permanente de {Instance}: logout não confirmado pela Evolution.", number.InstanceName);
 
+            var occurredAt = DateTime.UtcNow;
             number.Status = NumberStatus.BannedPermanent;
             db.Add(new NumberStatusEvent
             {
                 WhatsappNumberId = number.Id,
                 State = "manual",
                 ResultingStatus = NumberStatus.BannedPermanent,
-                OccurredAt = DateTime.UtcNow
+                OccurredAt = occurredAt
             });
             await db.SaveChangesAsync(ct);
+
+            // O downtime do dia mudou. Sem esta marca a linha já fechada do dia
+            // seguia com o uptime de antes do ban, e o relatório longo (que soma
+            // dias fechados) continuava mostrando o canal como se estivesse no ar.
+            await dirtyDays.MarkAsync(db, number.Id, occurredAt, ct);
 
             return Results.Ok(NumberResponse.From(number));
         });

@@ -20,6 +20,10 @@ public record MetricsDto(
     double? MinResponseMinutes,
     double? MaxResponseMinutes,
     int ResponseSamplesCount,
+    // A consolidação por dia viaja junto para o total do time ser recomposto pela
+    // MESMA regra (média das médias diárias) em vez de estimado a partir das médias
+    // já prontas de cada vendedor. Mesmo motivo de UptimeCoveredSeconds abaixo.
+    IReadOnlyList<ResponseWaitDayDto> ResponseWaitDays,
     int MessagesSent,
     int MessagesReceived,
     double? SentReceivedRatio,
@@ -32,9 +36,26 @@ public record MetricsDto(
     double? AvgReceivedPerBusinessHour,
     double EffectiveBusinessHours,
     DateTime? LastOutboundMessageAt,
-    double UptimePercent,
+    // Null quando não há canal a medir (vendedor sem número, ou número que já não
+    // é dele) — a tela mostra "—". Nunca 100% por falta de evidência.
+    double? UptimePercent,
+    // Os dois lados da fração vão junto para que totais do time sejam recompostos
+    // por soma, como ResponseSamplesCount faz com a espera média. Média de
+    // percentuais somava vendedor sem número como se fosse 100%.
+    double UptimeCoveredSeconds,
+    double UptimeDowntimeSeconds,
     int BanCount,
     IReadOnlyList<OutcomeMetricDto> Outcomes);
+
+// Espera de resposta de um dia, já consolidada. Os quatro campos são o suficiente
+// para recombinar: somando contagem e soma sai a média do dia, e mín/máx combinam
+// por natureza. A média do período é a média destas médias.
+public record ResponseWaitDayDto(
+    DateOnly Day,
+    int Count,
+    double SumMinutes,
+    double MinMinutes,
+    double MaxMinutes);
 
 // Um desfecho por tipo: venda, cliente perdido e os que o usuário criar.
 // `Rate` usa a mesma base da conversão de venda (sobre conversas atendidas).
@@ -51,7 +72,11 @@ public record SellerReportDto(Guid SellerId, string Name, DateTime From, DateTim
 
 public record RankingEntryDto(Guid SellerId, string Name, MetricsDto Metrics);
 
-public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> options, IDirtyDayTracker dirtyDays)
+public sealed class ReportQueries(
+    AppDbContext db,
+    IOptions<MetricsOptions> options,
+    IDirtyDayTracker dirtyDays,
+    ILogger<ReportQueries> logger)
 {
     // Estratégia de leitura:
     // - período curto (<= Metrics:LiveCalculationMaxDays) → tudo ao vivo (mediana exata);
@@ -64,6 +89,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
     private sealed record ConversationRow(Guid Id, Guid NumberId, Guid SellerId, DateTime StartedAt, bool StartedByContact);
     private sealed record MessageRow(Guid ConversationId, DateTime Timestamp, MessageDirection Direction, DateTime? ReadAt);
+    private sealed record BoundaryRow(DateTime Timestamp, MessageDirection Direction);
     private sealed record PriorStateRow(Guid NumberId, NumberStatus? Status);
 
     // A métrica é sempre de um número SOB um vendedor. Número transferido tem um
@@ -101,17 +127,16 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         var numbers = await NumbersOfSellerAsync(sellerId, fromUtc, toUtc, ct);
 
         var snapshots = await BuildSnapshotsAsync(numbers, calculator, fromUtc, toUtc, ct);
-        var periodSeconds = (toUtc - fromUtc).TotalSeconds;
         var typeNames = await GetOutcomeTypeNamesAsync(ct);
 
         MetricsSnapshot SnapshotOf(WhatsappNumber n) =>
             snapshots.GetValueOrDefault(new NumberSeller(n.Id, sellerId), MetricsSnapshot.Empty);
 
         var perNumber = numbers
-            .Select(n => new NumberReportDto(n.Id, n.Phone, n.Status.ToString(), SnapshotOf(n).ToDto(periodSeconds, typeNames)))
+            .Select(n => new NumberReportDto(n.Id, n.Phone, n.Status.ToString(), SnapshotOf(n).ToDto(typeNames)))
             .ToList();
 
-        var totals = MetricsSnapshot.Merge(numbers.Select(SnapshotOf)).ToDto(periodSeconds, typeNames);
+        var totals = MetricsSnapshot.Merge(numbers.Select(SnapshotOf)).ToDto(typeNames);
 
         return new SellerReportDto(seller.Id, seller.Name, fromUtc, toUtc, totals, perNumber);
     }
@@ -130,14 +155,13 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         var snapshots = await BuildSnapshotsAsync(numbers, calculator, fromUtc, toUtc, ct);
         var bySeller = snapshots.GroupBy(kv => kv.Key.SellerId)
             .ToDictionary(g => g.Key, g => g.Select(kv => kv.Value).ToList());
-        var periodSeconds = (toUtc - fromUtc).TotalSeconds;
         var typeNames = await GetOutcomeTypeNamesAsync(ct);
 
         var entries = sellers
             .Select(s => new RankingEntryDto(
                 s.Id,
                 s.Name,
-                MetricsSnapshot.Merge(bySeller.GetValueOrDefault(s.Id, [])).ToDto(periodSeconds, typeNames)))
+                MetricsSnapshot.Merge(bySeller.GetValueOrDefault(s.Id, [])).ToDto(typeNames)))
             .ToList();
 
         return [.. entries
@@ -228,11 +252,8 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         CancellationToken ct)
     {
         var results = await ComputeForNumbersAsync(numbers, calculator, fromUtc, toUtc, ct);
-        var periodSeconds = (toUtc - fromUtc).TotalSeconds;
 
-        return results.ToDictionary(
-            kv => kv.Key,
-            kv => MetricsSnapshot.FromResult(kv.Value, periodSeconds * (1 - kv.Value.UptimePercent / 100.0)));
+        return results.ToDictionary(kv => kv.Key, kv => MetricsSnapshot.FromResult(kv.Value));
     }
 
     private async Task<Dictionary<NumberSeller, MetricsSnapshot>> AggregatedSnapshotsAsync(
@@ -367,28 +388,38 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
         var conversationIds = conversations.Select(c => c.Id).ToArray();
 
-        // Mensagens a partir do início do período: as posteriores ao `to` continuam
-        // vindo (uma resposta depois do fim do período ainda encerra uma espera).
+        // A carga começa ANTES do período: quem responde às 9h fecha a espera de
+        // quem escreveu às 23h, e sem essas mensagens a resposta da manhã não teria
+        // pergunta a que se referir. Elas entram só como contexto — toda contagem
+        // continua guardada por `InRange`. As posteriores ao `to` também vêm (a
+        // mediana da 1ª resposta ainda as usa).
+        var lookbackStart = fromUtc.AddDays(-Math.Max(0, options.Value.ResponseLookbackDays));
+
         var messages = conversationIds.Length == 0
             ? []
             : await db.Set<Message>().AsNoTracking()
-                .Where(m => conversationIds.Contains(m.ConversationId) && m.Timestamp >= fromUtc)
+                .Where(m => conversationIds.Contains(m.ConversationId) && m.Timestamp >= lookbackStart)
                 .OrderBy(m => m.Timestamp)
                 .Select(m => new MessageRow(m.ConversationId, m.Timestamp, m.Direction, m.ReadAt))
                 .ToListAsync(ct);
 
-        // Última mensagem ANTES do período em cada conversa que já vinha em curso:
-        // preserva o cálculo do gap de follow-up que atravessa a borda.
+        // Última mensagem antes da carga, para a conversa que ficou quieta por mais
+        // tempo que o lookback: preserva o gap de follow-up que atravessa a borda e,
+        // com a DIREÇÃO REAL, também a espera de um cliente que ficou dias sem
+        // resposta. Gravá-la sempre como outbound (o que se fazia quando ela era só
+        // marco temporal) apagava essa espera.
         var boundaries = conversationIds.Length == 0
             ? []
             : await db.Set<Conversation>().AsNoTracking()
-                .Where(c => conversationIds.Contains(c.Id) && c.StartedAt < fromUtc)
+                .Where(c => conversationIds.Contains(c.Id) && c.StartedAt < lookbackStart)
                 .Select(c => new
                 {
                     ConversationId = c.Id,
                     LastBefore = db.Set<Message>()
-                        .Where(m => m.ConversationId == c.Id && m.Timestamp < fromUtc)
-                        .Max(m => (DateTime?)m.Timestamp),
+                        .Where(m => m.ConversationId == c.Id && m.Timestamp < lookbackStart)
+                        .OrderByDescending(m => m.Timestamp)
+                        .Select(m => new BoundaryRow(m.Timestamp, m.Direction))
+                        .FirstOrDefault(),
                 })
                 .ToListAsync(ct);
 
@@ -399,8 +430,11 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
                 .Select(o => new { o.ConversationId, o.MarkedAt, o.OutcomeTypeCode })
                 .ToListAsync(ct);
 
+        // Sem teto: os eventos POSTERIORES à janela também importam. É a presença
+        // deles que diz se o histórico continua depois do `to` — e, na falta dela,
+        // o status atual do número passa a valer para o fim da janela.
         var statusEvents = await db.Set<NumberStatusEvent>().AsNoTracking()
-            .Where(e => numberIds.Contains(e.WhatsappNumberId) && e.OccurredAt >= fromUtc && e.OccurredAt < toUtc)
+            .Where(e => numberIds.Contains(e.WhatsappNumberId) && e.OccurredAt >= fromUtc)
             .OrderBy(e => e.OccurredAt)
             .ToListAsync(ct);
 
@@ -419,7 +453,7 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
         var messagesByConversation = messages.ToLookup(m => m.ConversationId);
         var boundaryByConversation = boundaries
             .Where(b => b.LastBefore is not null)
-            .ToDictionary(b => b.ConversationId, b => b.LastBefore!.Value);
+            .ToDictionary(b => b.ConversationId, b => b.LastBefore!);
         var outcomeByConversation = outcomes
             .GroupBy(o => o.ConversationId)
             .ToDictionary(g => g.Key, g => g.OrderBy(o => o.MarkedAt).Select(o => (o.MarkedAt, o.OutcomeTypeCode)).First());
@@ -446,14 +480,19 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             // Downtime e ban descrevem o CANAL, não o atendimento: ficam com o dono
             // vigente. Rateá-los entre dois donos contaria o mesmo ban duas vezes.
             var isCurrentOwner = pair.SellerId == number.SellerId;
-            var events = isCurrentOwner ? eventsByNumber[number.Id].ToList() : [];
+            var all = isCurrentOwner ? eventsByNumber[number.Id].ToList() : [];
+            var events = all.Where(e => e.OccurredAt < toUtc).ToList();
+            var hasLaterEvents = all.Count > events.Count;
             var priorStatus = isCurrentOwner ? priorByNumber.GetValueOrDefault(number.Id) : null;
-            var downtimes = isCurrentOwner
-                ? BuildDowntimes(number, priorStatus, events, fromUtc, toUtc)
-                : [];
+
+            // Dono anterior fica sem cobertura (uptime "—"): o canal descreve quem o
+            // tem hoje. Antes ele saía com 100%, que é a afirmação oposta.
+            var (covered, downtimes) = isCurrentOwner
+                ? BuildCoverage(number, priorStatus, events, hasLaterEvents, fromUtc, toUtc)
+                : (0d, []);
             var banCount = CountBanTransitions(events, priorStatus);
 
-            results[pair] = calculator.Compute(fromUtc, toUtc, conversationData, downtimes, banCount);
+            results[pair] = calculator.Compute(fromUtc, toUtc, conversationData, downtimes, banCount, covered);
         }
 
         return results;
@@ -462,15 +501,18 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
     private static ConversationData BuildConversationData(
         ConversationRow conversation,
         ILookup<Guid, MessageRow> messagesByConversation,
-        Dictionary<Guid, DateTime> boundaryByConversation,
+        Dictionary<Guid, BoundaryRow> boundaryByConversation,
         Dictionary<Guid, (DateTime MarkedAt, string TypeCode)> outcomeByConversation)
     {
         var messages = new List<MessageData>();
 
-        // A mensagem de fronteira entra apenas como marco temporal (fora do período,
-        // nenhuma contagem a considera) — daí a direção não importar.
+        // Fora do período, nenhuma contagem a considera — mas a DIREÇÃO importa: é
+        // ela que diz se havia um cliente esperando quando a janela começou.
         if (boundaryByConversation.TryGetValue(conversation.Id, out var boundary))
-            messages.Add(new MessageData(boundary, IsInbound: false, ReadAt: null));
+            messages.Add(new MessageData(
+                boundary.Timestamp,
+                boundary.Direction == MessageDirection.Inbound,
+                ReadAt: null));
 
         messages.AddRange(messagesByConversation[conversation.Id]
             .Select(m => new MessageData(m.Timestamp, m.Direction == MessageDirection.Inbound, m.ReadAt)));
@@ -487,12 +529,14 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
             outcome?.Item2);
     }
 
-    // Reconstrói os períodos em que o número NÃO estava Active dentro da janela,
-    // partindo do estado vigente no início dela.
-    private static List<DowntimeInterval> BuildDowntimes(
+    // Reconstrói, dentro da janela, quanto tempo o canal existia para este vendedor
+    // (a cobertura — denominador do uptime) e quanto desse tempo ele passou fora do
+    // ar, partindo do estado vigente no início.
+    private (double CoveredSeconds, List<DowntimeInterval> Downtimes) BuildCoverage(
         WhatsappNumber number,
         NumberStatus? priorStatus,
         IReadOnlyList<NumberStatusEvent> eventsInRange,
+        bool hasLaterEvents,
         DateTime fromUtc,
         DateTime toUtc)
     {
@@ -501,30 +545,56 @@ public sealed class ReportQueries(AppDbContext db, IOptions<MetricsOptions> opti
 
         // Sem histórico anterior, o número "passa a existir" no que for mais antigo
         // entre o cadastro e o primeiro evento (o relógio da Evolution pode estar
-        // atrás do nosso CreatedAt).
-        var segmentStart = fromUtc;
+        // atrás do nosso CreatedAt). Antes disso não há canal a medir — e o que não
+        // existia não entra na cobertura, em vez de contar como 100% no ar.
+        var coverStart = fromUtc;
         if (priorStatus is null)
         {
             var birth = number.CreatedAt;
             if (eventsInRange.Count > 0 && eventsInRange[0].OccurredAt < birth)
                 birth = eventsInRange[0].OccurredAt;
-            if (birth > fromUtc)
-                segmentStart = birth;
+            if (birth > coverStart)
+                coverStart = birth;
         }
 
+        if (coverStart >= toUtc)
+            return (0, intervals);
+
+        var segmentStart = coverStart;
         foreach (var evt in eventsInRange)
         {
-            if (current != NumberStatus.Active && evt.OccurredAt > segmentStart)
-                intervals.Add(new DowntimeInterval(segmentStart, evt.OccurredAt));
+            if (evt.OccurredAt > segmentStart)
+            {
+                if (current != NumberStatus.Active)
+                    intervals.Add(new DowntimeInterval(segmentStart, evt.OccurredAt));
 
-            segmentStart = evt.OccurredAt > segmentStart ? evt.OccurredAt : segmentStart;
+                segmentStart = evt.OccurredAt;
+            }
+
             current = evt.ResultingStatus;
+        }
+
+        // O log conta o passado; `WhatsappNumber.Status` é fato do presente. Sem
+        // nenhum evento gravado depois da janela, o status atual já valia no fim
+        // dela — e, se ele diz que o canal está fora enquanto o log termina em
+        // Active, o histórico está furado. Assumir que seguiu no ar é exatamente a
+        // hipótese que fazia um número banido fechar o período com 100% de uptime.
+        // A correção é só nesta direção: nunca creditamos tempo no ar que o log
+        // não prova.
+        if (!hasLaterEvents && current == NumberStatus.Active && number.Status != NumberStatus.Active)
+        {
+            logger.LogWarning(
+                "Número {Phone} está {Status}, mas o histórico de conexão termina em Active: " +
+                "o trecho final do período conta como fora do ar.",
+                number.Phone, number.Status);
+
+            current = number.Status;
         }
 
         if (current != NumberStatus.Active && toUtc > segmentStart)
             intervals.Add(new DowntimeInterval(segmentStart, toUtc));
 
-        return intervals;
+        return ((toUtc - coverStart).TotalSeconds, intervals);
     }
 
     // Conta transições PARA banido dentro da janela (403 repetido em sequência conta
